@@ -34,7 +34,13 @@ These commands are:
 - `kit_update.py`
 - any `gh` or `git fetch`/`push`
 
-Gating, `next` and `collect` run fine inside the sandbox, and workers never need GitHub.
+Gating, `next` and `collect` run fine inside the sandbox, and workers never need GitHub. Two more
+things only work outside the sandbox:
+- `integrate`: it runs bash, and Git Bash cannot start sandboxed (`NtCreateDirectoryObject`).
+- `frida/colorforce.py` and `frida/schedforce.py`: sandboxed they hang forever. Before you stop,
+  check for leftovers: list `python.exe`/`mwccarm.exe` processes whose command line contains
+  `frida/` or this workspace's path, older than 15 minutes, and stop exactly those PIDs. Never run
+  `fullstop.sh --hard` here: it matches unrelated editors.
 
 ## 0. Start of every session
 
@@ -120,7 +126,7 @@ Before you start:
   `delinks.txt` conflict.
 - Make sure no other integration is running. Two at once destroy each other's staging and branch.
 
-Then, as a background task with a long timeout:
+Then, as a background task with a long timeout and escalated permissions:
 
     python codex/team.py integrate --archive
     python codex/team.py pr                  dry run: title, body file, prready verdict
@@ -154,8 +160,11 @@ When `decomp-matching` moves while a PR is open and it conflicts: rebase the bra
 ## 5. Stop or wrap up
 
     python codex/team.py release            closes the issue with a release comment; unfinished rows -> RELEASED
+    python codex/team.py reclaim --matches-only   later: re-reserve released matches nobody took, re-gated
 
-1. Publish finished matches first (step 4), so `release` only frees what is unfinished.
+1. Publish finished matches first (step 4), so `release` only frees what is unfinished. If
+   integration fails, do NOT release the matches: fix it, or stop and report with the issue still
+   open. Released matches can be taken by anyone.
 2. Before `release`, wait for, or stop, running workers and any `dispatch`.
 3. Record anything a later session needs in `$SP/OPEN_WORK.md`: open PRs, parked residues and why.
 

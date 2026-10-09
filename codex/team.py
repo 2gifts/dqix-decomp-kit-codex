@@ -570,10 +570,18 @@ def integ_clean(state):
     return leftovers
 
 
+def state_dirs():
+    """kit_init.py's STATE_DIRS: finish_wave.sh and ov_recover.py expect every one of them."""
+    import ast
+    src = open(os.path.join(KIT, "kit_init.py"), encoding="utf-8").read()
+    m = re.search(r"^STATE_DIRS = (\[.*?\])", src, re.S | re.M)
+    return ast.literal_eval(m.group(1)) if m else ["wlog", "wlog/gates", "staging", "gated", "quarantine", "attempts"]
+
+
 def cmd_integrate(a):
     cfg = load_config()
     state = cfg["integ_state"]
-    for d in ("staging", "gated", "quarantine", "attempts"):
+    for d in state_dirs():
         os.makedirs(os.path.join(state, d), exist_ok=True)
     lock = os.path.join(state, "team_integrate.lock")
     if os.path.exists(lock) and time.time() - os.path.getmtime(lock) < 4 * 3600:
@@ -632,11 +640,20 @@ def integrate(a, cfg, state):
     for r, v in skipped:
         print(f"SKIP {r['module']} {r['addr']}: {v}")
     env = dict(os.environ, DQIX_STATE=state, DQIX_BRANCH=branch, DQIX_PUBLISH="local", DQIX_INTEG=integ)
+    failed = []
     for m in mods:
         print(f"== finish_wave {m}", flush=True)
         p = run(["bash", os.path.join(KIT, "finish_wave.sh"), m], cwd=KIT, env=env)
-        tail = (p.stdout + p.stderr).strip().splitlines()[-3:]
-        print("\n".join("   " + t for t in tail))
+        out = (p.stdout + p.stderr).strip()
+        print("\n".join("   " + t for t in out.splitlines()[-3:]), flush=True)
+        if "FATAL" in out or "NtCreateDirectoryObject" in out:
+            failed.append(m)
+            log = os.path.join(state, "wlog", f"team_fw_{m}.log")
+            open(log, "w", encoding="utf-8").write(out)
+            print(f"   finish_wave {m} FAILED; full output: {log}")
+    if failed and len(failed) == len(mods):
+        die("every module failed to integrate; read the logs above before retrying (bash scripts need the "
+            "command run outside the Windows sandbox)")
     run(["ninja", "report"], cwd=integ)
     cf = run([PY, os.path.join(KIT, "countfix.py"), f"--since={base}"], cwd=KIT, env=dict(os.environ, DQIX_REPO=integ))
     print("countfix:", (cf.stdout.strip().splitlines() or ["(no output)"])[-1])
@@ -744,6 +761,8 @@ def cmd_pr(a):
                             "--json", "number,headRefName,headRepositoryOwner")):
         if (pr.get("headRepositoryOwner") or {}).get("login") != cfg["fork_owner"]:
             continue
+        if not pr["headRefName"].startswith(cfg["branch_prefix"].split("/")[0] + "/"):
+            continue  # another team pushing from the same fork (e.g. claude/*): not ours to wait for
         theirs = set((gh("pr", "diff", str(pr["number"]), "-R", cfg["decomp_repo"], "--name-only", check=False)
                       or "").split())
         both = sorted(p for p in mine & theirs if p.endswith("delinks.txt"))
@@ -804,6 +823,24 @@ def cmd_release(a):
     print(f"released {len(released)} row(s); wip sources kept in {SP}/wip for later resumption")
 
 
+def cmd_reclaim(a):
+    """Re-reserve released rows whose wip source still gates MATCH and that nobody else took."""
+    cfg, rows = load_config(), load_ledger()
+    blocked = reserved_elsewhere(cfg, max_age=0)
+    keys = []
+    for r in rows:
+        if r["status"] != "RELEASED" or (a.matches_only and "from MATCH" not in r["note"]):
+            continue
+        if r["addr"] in blocked:
+            print(f"{r['module']} {r['addr']}: reserved by someone else now; left released")
+            continue
+        r["status"], r["note"] = "ACTIVE", ""
+        keys.append(key(r))
+    save_ledger(rows)
+    collect([k for k in keys if os.path.exists(wip(*k))])
+    print("re-reserved locally. Publish before doing anything else: python codex/team.py issue --publish")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -847,6 +884,8 @@ def main():
     p.add_argument("--force", action="store_true", help="open despite an open PR touching the same delinks.txt")
     p = sub.add_parser("release")
     p.add_argument("--keep-matches", action="store_true")
+    p = sub.add_parser("reclaim")
+    p.add_argument("--matches-only", action="store_true", help="only rows released while MATCH")
     a = ap.parse_args()
     globals()[f"cmd_{a.cmd}"](a)
 

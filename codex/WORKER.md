@@ -44,6 +44,12 @@ Run Python scripts with the kit as the working directory and absolute source pat
     python pad/decomment.py <in.cpp> <out.cpp>    strips every comment except the // USA: tag
 
 `<mod>` is `main` or the 3-digit overlay (`017`). Addresses are 8 lowercase hex digits.
+
+**Run the two `frida/` tools with escalated permissions (outside the sandbox), never sandboxed,
+and set a 10-minute command timeout.** Inside the Windows sandbox frida cannot attach to the
+compiler, and the process hangs forever while holding a CPU core. Outside the sandbox each run
+takes seconds. Every other command above runs fine inside the sandbox. Never run `.sh` scripts:
+Git Bash cannot start inside the sandbox, and you do not need them.
 `vtry.py` writes shared `SP/_vt_<name>.cpp` paths, so always prefix variant names with your address
 (`0218dd18_a`), never a bare `a`.
 
