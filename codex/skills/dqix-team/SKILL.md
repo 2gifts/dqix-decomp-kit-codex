@@ -120,11 +120,9 @@ Send any of these back to a worker.
 
 ## 4. Integrate and publish (every 40-120 matches, and always before stopping)
 
-Before you start:
-- Check `gh pr list -R ZevyaDev/dqix-decomp --author @me`. If an open PR of yours touches the same
-  modules, wait for it to merge, or integrate only other modules: two PRs appending to the same
-  `delinks.txt` conflict.
-- Make sure no other integration is running. Two at once destroy each other's staging and branch.
+Before you start, make sure no other integration is running. Two at once destroy each other's
+staging and branch. An open PR of yours that touches the same modules is fine: maintainers resolve
+the `delinks.txt` conflicts at landing.
 
 Then, as a background task with a long timeout and escalated permissions:
 
@@ -153,9 +151,9 @@ causes are a reloc that needs a `_dup` symbol alias, or a symbol owned by anothe
 
 Do not edit those lines out.
 
-When `decomp-matching` moves while a PR is open and it conflicts: rebase the branch. In
-`delinks.txt`, keep both sides and keep the two blank lines between entries, or `dsd` fails. Then
-`ninja check`, then force-push.
+Once a PR is open, leave its branch as it is. Do not merge or rebase `decomp-matching` into it:
+that moves the head after the maintainers gate it, and they resolve conflicts at landing. Never
+close an open PR to fold it into a bigger batch. Send the next batch as a new PR.
 
 ## 5. Stop or wrap up
 
