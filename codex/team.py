@@ -359,6 +359,445 @@ def publish_issue(cfg, rows):
         return
     clash = {r["addr"] for r in rows if r["status"] in LIVE} & reserved_elsewhere(cfg, max_age=0)
     if clash:
+        die("these are now reserved by someone else; drop them first (release rows or edit the ledger): "
+            + " ".join(sorted(clash)))
+    os.makedirs(TEAM, exist_ok=True)
+    path = os.path.join(TEAM, "issue.md")
+    open(path, "w", encoding="utf-8").write(body)
+    if cfg.get("issue"):
+        state = gh("issue", "view", str(cfg["issue"]), "-R", cfg["kit_repo"], "--json", "state", "-q", ".state").strip()
+        if state == "OPEN":
+            gh("issue", "edit", str(cfg["issue"]), "-R", cfg["kit_repo"], "--title", title, "--body-file", path)
+            print(f"updated {cfg['kit_repo']}#{cfg['issue']}: {title}")
+            return
+    url = gh("issue", "create", "-R", cfg["kit_repo"], "--title", title, "--body-file", path).strip()
+    cfg["issue"] = int(url.rstrip("/").split("/")[-1])
+    save_config(cfg)
+    print(f"opened {url}")
+
+
+def cmd_issue(a):
+    cfg, rows = load_config(), load_ledger()
+    if a.publish:
+        publish_issue(cfg, rows)
+    else:
+        title, body = issue_body(cfg, rows)
+        print(title or "nothing live to reserve")
+        print(body or "")
+
+
+def take_group(rows, per, module=None):
+    pool = [r for r in rows if r["status"] == "ACTIVE" and (not module or r["module"] == module)]
+    if not pool:
+        return []
+    mod = pool[0]["module"]
+    return [r for r in pool if r["module"] == mod][:per]
+
+
+def worker_prompt(group, report_path=None):
+    brief = os.path.join(KIT, "codex", "WORKER.md").replace("\\", "/")
+    lines = [f"You are a DQIX matching worker. Read {brief} completely before doing anything, then follow it exactly.",
+             "", "Your assignment (module address size):"]
+    lines += [f"{r['module']} {r['addr']} {r['size']}   source: {wip(r['module'], r['addr'])}" for r in group]
+    lines += ["", f"Kit checkout: {KIT.replace(chr(92), '/')}", f"State dir ($SP): {SP.replace(chr(92), '/')}",
+              f"Decomp checkout (read-only for you): {REPO.replace(chr(92), '/')}"]
+    if report_path:
+        lines += ["", "Your final message must be the JSON report described in WORKER.md (it is schema-checked)."]
+    return "\n".join(lines)
+
+
+def cmd_next(a):
+    rows = load_ledger()
+    group = take_group(rows, a.per, a.module)
+    if not group:
+        die("no ACTIVE (reserved, unassigned) rows; reserve more or collect", 3)
+    lbl = a.label or f"sub-{datetime.datetime.now():%H%M%S}"
+    for r in group:
+        r["status"], r["note"] = "ASSIGNED", lbl
+    save_ledger(rows)
+    print(worker_prompt(group))
+
+
+def run_worker(group, lbl, a):
+    os.makedirs(REPORTS, exist_ok=True)
+    os.makedirs(LOGS, exist_ok=True)
+    report = os.path.join(REPORTS, f"{lbl}.json")
+    cmd = ["codex", "exec", "-C", KIT, "--skip-git-repo-check", "--sandbox", a.sandbox,
+           "--add-dir", SP, "--output-schema", os.path.join(HERE, "report.schema.json"), "-o", report, "--json"]
+    if a.model:
+        cmd += ["-m", a.model]
+    if a.effort:
+        cmd += ["-c", f'model_reasoning_effort="{a.effort}"']
+    for r in group:
+        os.makedirs(os.path.dirname(wip(r["module"], r["addr"])), exist_ok=True)
+    with open(os.path.join(LOGS, f"{lbl}.jsonl"), "w", encoding="utf-8") as log:
+        p = subprocess.run(cmd + ["-"], input=worker_prompt(group, report), stdout=log, stderr=subprocess.STDOUT,
+                           text=True, encoding="utf-8", errors="replace", timeout=a.timeout * 60)
+    return p.returncode, report
+
+
+def cmd_dispatch(a):
+    if not shutil.which("codex"):
+        die("codex CLI not on PATH")
+    rows = load_ledger()
+    jobs, n = [], 0
+    while len(jobs) < a.groups:
+        group = take_group(rows, a.per, a.module)
+        if not group:
+            break
+        n += 1
+        lbl = f"w{datetime.datetime.now():%m%d%H%M}-{n}"
+        for r in group:
+            r["status"], r["note"] = "ASSIGNED", lbl
+        jobs.append((lbl, group))
+    save_ledger(rows)
+    if not jobs:
+        die("no ACTIVE rows to dispatch; reserve and publish first", 3)
+    print(f"dispatching {len(jobs)} group(s), {a.workers} at a time")
+    with ThreadPoolExecutor(max_workers=a.workers) as pool:
+        futs = {pool.submit(run_worker, g, lbl, a): (lbl, g) for lbl, g in jobs}
+        for fut in as_completed(futs):
+            lbl, group = futs[fut]
+            try:
+                code, report = fut.result()
+            except subprocess.TimeoutExpired:
+                code, report = "timeout", None
+            print(f"[{lbl}] exit {code}; collecting {' '.join(r['addr'] for r in group)}", flush=True)
+            collect([key(r) for r in group], report_files=[report] if report else [])
+
+
+def report_index(files=None):
+    """addr -> report entry from worker JSON reports (newest wins)."""
+    idx = {}
+    paths = files if files else sorted(glob.glob(os.path.join(REPORTS, "*.json")), key=os.path.getmtime)
+    for p in paths:
+        try:
+            data = json.load(open(p, encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for f in data.get("functions", []):
+            idx[str(f.get("addr", "")).lower().removeprefix("0x")] = f
+    return idx
+
+
+COMMENT = re.compile(r"//(?!\s*USA:)|/\*")
+MMIO = re.compile(r"volatile[^;\n]*\*\s*\)\s*0x0[45][0-9a-fA-F]{6}")
+
+
+def quality(path):
+    """Problems a reviewer would reject, beyond the byte match."""
+    src = open(path, encoding="utf-8", errors="replace").read()
+    probs = []
+    code = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
+    if COMMENT.search(code):
+        probs.append("comment other than the // USA: tag (run pad/decomment.py)")
+    if re.search(r"\b(asm|__asm)\b", code):
+        probs.append("inline asm")
+    for m in re.finditer(r"#pragma\s+(\w+)", code):
+        if m.group(1) not in ("once", "define_section", "section"):
+            probs.append(f"#pragma {m.group(1)}")
+    vol = [l for l in code.splitlines() if "volatile" in l and not MMIO.search(l)]
+    if vol:
+        probs.append(f"volatile outside an MMIO register define: {vol[0].strip()[:80]}")
+    if "// USA:" not in src:
+        probs.append("missing the // USA: tag line")
+    if not src.lstrip().startswith("#include <globaldefs.h>"):
+        probs.append("first line is not #include <globaldefs.h>")
+    return probs
+
+
+def collect(keys, report_files=None):
+    rows = load_ledger()
+    by = {key(r): r for r in rows}
+    reps = report_index()
+    if report_files:
+        reps.update(report_index([p for p in report_files if p and os.path.exists(p)]))
+    for k in keys:
+        r = by.get(k)
+        if not r:
+            print(f"{k[0]} {k[1]}: not in the ledger, skipped")
+            continue
+        f = wip(*k)
+        rep = reps.get(k[1], {})
+        if rep.get("description") and not r["desc"]:
+            r["desc"] = rep["description"].strip().rstrip(".")
+        if not os.path.exists(f):
+            r["status"], r["note"] = "ACTIVE", "worker left no source"
+            print(f"{k[0]} {k[1]}: no source; back to the queue")
+            continue
+        g = run([PY, os.path.join(KIT, "wgate.py"), k[0], k[1], f], cwd=KIT)
+        verdict = (g.stdout.strip().splitlines() or [g.stderr.strip()[:200]])[0]
+        if "ALREADY-COMMITTED" in verdict:
+            r["status"], r["note"] = "DROPPED", "already landed on decomp-matching"
+        elif verdict == "MATCH":
+            probs = quality(f)
+            if probs:
+                r["status"], r["note"] = "RESIDUE", "QUALITY: " + "; ".join(probs)
+            else:
+                r["status"], r["note"] = "MATCH", ""
+        else:
+            r["status"], r["note"] = "RESIDUE", verdict[:200]
+        print(f"{k[0]} {k[1]}: {r['status']} {r['note']}".rstrip())
+    save_ledger(rows)
+
+
+def cmd_collect(a):
+    rows = load_ledger()
+    if a.addrs:
+        want = {x.lower().removeprefix("0x") for x in a.addrs}
+        keys = [key(r) for r in rows if r["addr"] in want]
+    else:
+        keys = [key(r) for r in rows if r["status"] in ("ASSIGNED", "RESIDUE", "MATCH", "ACTIVE")
+                and os.path.exists(wip(*key(r)))]
+    collect(keys)
+
+
+def cmd_describe(a):
+    rows = load_ledger()
+    addr = a.addr.lower().removeprefix("0x")
+    hit = [r for r in rows if r["addr"] == addr]
+    if not hit:
+        die(f"{addr} not in the ledger")
+    for r in hit:
+        r["desc"] = a.text.strip().rstrip(".")
+    save_ledger(rows)
+
+
+def integ_clean(state):
+    leftovers = glob.glob(os.path.join(state, "hold_*")) + glob.glob(os.path.join(state, "*_stage"))
+    for d in ("staging", "gated", "quarantine"):
+        leftovers += glob.glob(os.path.join(state, d, "**", "*.cpp"), recursive=True)
+    return leftovers
+
+
+def state_dirs():
+    """kit_init.py's STATE_DIRS: finish_wave.sh and ov_recover.py expect every one of them."""
+    import ast
+    src = open(os.path.join(KIT, "kit_init.py"), encoding="utf-8").read()
+    m = re.search(r"^STATE_DIRS = (\[.*?\])", src, re.S | re.M)
+    return ast.literal_eval(m.group(1)) if m else ["wlog", "wlog/gates", "staging", "gated", "quarantine", "attempts"]
+
+
+def provision_integ(integ):
+    """A fresh worktree has none of the tools the build downloads (the compiler, dsd, objdiff). Fetch them
+    into the worktree through the build's own download edges; a junction to the main checkout's
+    compiler would let the tree's first ninja rewrite the main checkout's compiler."""
+    import buildcfg
+    cc = os.path.join(integ, "tools", "mwccarm", *buildcfg.MWCC_VERSION.split("/"), "mwccarm.exe")
+    if os.path.exists(cc):
+        return
+    if not os.path.exists(os.path.join(integ, "build.ninja")):
+        c = run([PY, "tools/configure.py", "usa"], cwd=integ)
+        if c.returncode != 0:
+            die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
+    target = "/".join(("tools", "mwccarm", buildcfg.MWCC_VERSION, "mwccarm.exe"))
+    print(f"fetching the compiler and tools into {integ}", flush=True)
+    n = run(["ninja", target, "dsd.exe", "objdiff-cli.exe"], cwd=integ)
+    if n.returncode != 0 or not os.path.exists(cc):
+        die(f"could not fetch the compiler into {integ}: {(n.stdout + n.stderr).strip()[-400:]}")
+
+
+def cmd_integrate(a):
+    cfg = load_config()
+    state = cfg["integ_state"]
+    for d in state_dirs():
+        os.makedirs(os.path.join(state, d), exist_ok=True)
+    lock = os.path.join(state, "team_integrate.lock")
+    if os.path.exists(lock) and time.time() - os.path.getmtime(lock) < 4 * 3600:
+        die(f"another integration started {time.ctime(os.path.getmtime(lock))} ({lock}); two at once "
+            "destroy each other's staging and branch. Wait for it; delete the lock only if that run is dead", 2)
+    open(lock, "w").write(f"{os.getpid()} {datetime.datetime.now().isoformat()}\n")
+    try:
+        integrate(a, cfg, state)
+    finally:
+        os.remove(lock)
+
+
+def integrate(a, cfg, state):
+    rows = load_ledger()
+    if os.path.exists(os.path.join(state, "wave.lock")) or os.path.exists(os.path.join(SP, "wave.lock")):
+        die("an integration is running (wave.lock present); never start a second one", 2)
+    left = integ_clean(state)
+    if left:
+        if not a.archive:
+            die(f"integration state {state} holds {len(left)} leftover file(s) from an earlier run; "
+                "rerun with --archive to move them to attempts/ first")
+        dest = os.path.join(state, "attempts", f"leftover-{datetime.datetime.now():%Y%m%d-%H%M%S}")
+        os.makedirs(dest)
+        for p in glob.glob(os.path.join(state, "hold_*")) + glob.glob(os.path.join(state, "*_stage")):
+            shutil.move(p, dest)
+        for d in ("staging", "gated", "quarantine"):
+            shutil.move(os.path.join(state, d), os.path.join(dest, d))
+            os.makedirs(os.path.join(state, d))
+    todo = [r for r in rows if r["status"] == "MATCH"]
+    if not todo:
+        die("no unsubmitted MATCH rows")
+    missing = [r["addr"] for r in todo if not r["desc"]]
+    if missing:
+        die("describe these first (python codex/team.py describe ADDR \"...\"): " + " ".join(missing))
+    branch = f"{cfg['branch_prefix']}{cfg['batch']}"
+    base = decomp_tip()
+    integ = run([PY, os.path.join(KIT, "integ_tree.py"), "path"], cwd=KIT, check=True).stdout.strip()
+    run([PY, os.path.join(KIT, "integ_tree.py"), "sync"], cwd=KIT, check=True)
+    run(["git", "-C", integ, "checkout", "-q", "-f", "--detach", base], check=True)
+    run(["git", "-C", integ, "clean", "-fdq", "src/"], check=True)
+    provision_integ(integ)
+    run(["git", "-C", REPO, "branch", "-f", branch, base], check=True)
+    mods, staged, skipped = [], [], []
+    for r in todo:
+        f = wip(r["module"], r["addr"])
+        g = run([PY, os.path.join(KIT, "wgate.py"), r["module"], r["addr"], f], cwd=KIT)
+        v = (g.stdout.strip().splitlines() or ["?"])[0]
+        if v != "MATCH" or quality(f):
+            skipped.append((r, v))
+            continue
+        dst = os.path.join(state, "staging", label(r["module"]))
+        os.makedirs(dst, exist_ok=True)
+        shutil.copy2(f, dst)
+        staged.append(r)
+        if r["module"] not in mods:
+            mods.append(r["module"])
+    for r, v in skipped:
+        print(f"SKIP {r['module']} {r['addr']}: {v}")
+    env = dict(os.environ, DQIX_STATE=state, DQIX_BRANCH=branch, DQIX_PUBLISH="local", DQIX_INTEG=integ)
+    failed = []
+    for m in mods:
+        print(f"== finish_wave {m}", flush=True)
+        p = run(["bash", os.path.join(KIT, "finish_wave.sh"), m], cwd=KIT, env=env)
+        out = (p.stdout + p.stderr).strip()
+        print("\n".join("   " + t for t in out.splitlines()[-3:]), flush=True)
+        if "FATAL" in out or "NtCreateDirectoryObject" in out:
+            failed.append(m)
+            log = os.path.join(state, "wlog", f"team_fw_{m}.log")
+            open(log, "w", encoding="utf-8").write(out)
+            print(f"   finish_wave {m} FAILED; full output: {log}")
+    if failed and len(failed) == len(mods):
+        die("every module failed to integrate; read the logs above before retrying (bash scripts need the "
+            "command run outside the Windows sandbox)")
+    run(["ninja", "report"], cwd=integ)
+    cf = run([PY, os.path.join(KIT, "countfix.py"), f"--since={base}"], cwd=KIT, env=dict(os.environ, DQIX_REPO=integ))
+    print("countfix:", (cf.stdout.strip().splitlines() or ["(no output)"])[-1])
+    dirty = run(["git", "-C", integ, "status", "--porcelain", "--", "config", "src"]).stdout.strip()
+    if dirty:
+        print(f"WARN: integration tree dirty after countfix:\n{dirty}")
+    if cfg.get("commit_trailer"):
+        t = cfg["commit_trailer"].replace("'", "")
+        run(["git", "-C", integ, "filter-branch", "-f", "--msg-filter", f"cat; printf '\\n{t}\\n'", f"{base}..HEAD"],
+            env=dict(os.environ, FILTER_BRANCH_SQUELCH_WARNING="1"))
+    head = run(["git", "-C", integ, "rev-parse", "HEAD"], check=True).stdout.strip()
+    run(["git", "-C", REPO, "branch", "-f", branch, head], check=True)
+    added = run(["git", "-C", integ, "diff", "--name-only", "--diff-filter=A", f"{base}..HEAD", "--", "src"]).stdout.split()
+    other = [p for p in run(["git", "-C", integ, "diff", "--name-only", f"{base}..HEAD"]).stdout.split()
+             if not p.startswith("src/")]
+    print(f"\nbranch {branch} = {head[:10]} on {base[:10]}: {len(added)} new source files "
+          f"({len(staged)} staged, {len(skipped)} skipped)")
+    print("non-src files changed: " + (", ".join(sorted(set(other))) or "none"))
+    if len(added) != len(staged):
+        print("WARN: committed count differs from staged count; look for deferred functions in the "
+              "finish_wave output above (they stay MATCH in the ledger and go into the next batch)")
+    cfg["last_integration"] = {"branch": branch, "base": base, "head": head, "added": len(added)}
+    save_config(cfg)
+
+
+def delink_owners(integ):
+    """source path -> (module, .text start) from every delinks.txt in the integration tree."""
+    owners = {}
+    base = os.path.join(integ, "config", "usa", "arm9")
+    for p in [os.path.join(base, "delinks.txt")] + glob.glob(os.path.join(base, "overlays", "ov*", "delinks.txt")):
+        mod = "main" if os.path.dirname(p) == base else os.path.basename(os.path.dirname(p))[2:]
+        cur = None
+        for line in open(p, encoding="utf-8"):
+            if line.rstrip().endswith(":") and not line.startswith((" ", "\t")):
+                cur = line.strip()[:-1]
+                continue
+            m = RANGE.match(line)
+            if m and cur and cur not in owners:
+                owners[cur] = (mod, m.group(1).lower().zfill(8))
+    return owners
+
+
+def pr_body(cfg, integ, base, rows):
+    by = {key(r): r for r in rows}
+    files = run(["git", "-C", integ, "diff", "--name-only", "--diff-filter=A", f"{base}..HEAD", "--", "src"]).stdout.split()
+    owners = delink_owners(integ)
+    table, keys = [], []
+    for f in files:
+        k = owners.get(f)
+        if not k or k not in by:
+            die(f"cannot map {f} to a ledger row")
+        table.append(by[k])
+        keys.append(k)
+    table.sort(key=key)
+    total = sum(int(r["size"]) for r in table)
+    mods = [r["module"] for r in table]
+    where = "USA main and overlay" if "main" in mods else "USA overlay"
+    added_syms = [l[1:].split()[0] for l in run(["git", "-C", integ, "diff", f"{base}..HEAD", "--", "config/**/symbols.txt",
+                                                  "config/*/arm9/symbols.txt"]).stdout.splitlines()
+                  if l.startswith("+") and not l.startswith("+++") and l[1:].strip()]
+    other = [p for p in run(["git", "-C", integ, "diff", "--name-only", f"{base}..HEAD"]).stdout.split()
+             if not p.startswith("src/") and not p.endswith(("delinks.txt", "symbols.txt"))]
+    tail = "existing symbol names are kept"
+    if added_syms:
+        tail += (f"; `symbols.txt` gains {len(added_syms)} alias line(s) for data a function references under a "
+                 f"second name ({', '.join(f'`{s}`' for s in added_syms[:6])})")
+    tail += "; no other source or header is changed" if not other else f"; also changed: {', '.join(other)}"
+    out = ["## What this changes", "",
+           f"Matches {len(table)} {where} {modtext(mods)} functions ({total:,} bytes). Each is a new source file in "
+           f"its module's `src/` directory, wired into that module's `delinks.txt`; {tail}.", "",
+           "| Module | Address | Bytes | Function |", "| --- | --- | ---: | --- |"]
+    out += [f"| {label(r['module'])} | `0x{r['addr']}` | {r['size']} | {r['desc']} |" for r in table]
+    out += ["", "Validation: every function passed the kit gate (`wgate.py` MATCH: byte-exact with relocations "
+            "masked, exact exported symbol, every call and data relocation resolving to the ROM's target) with the "
+            "default compiler and flags, no pragmas, asm or overrides. The batch was integrated through the kit's "
+            "`finish_wave.sh` from a clean `decomp-matching` worktree (`ninja check` green per module), followed by "
+            "`ninja report`; `countfix.py` reports every new unit counted. `prready.py decomp` reports READY "
+            "against the current `decomp-matching`.", ""]
+    if cfg.get("issue"):
+        out += [f"Reservation: {cfg['kit_repo']}#{cfg['issue']}.", ""]
+    out += ["## Checklist", "",
+            "- [x] `ninja` passes and every module still matches the original ROM",
+            "- [x] Symbols in `symbols.txt` match the names used in the decompiled code"]
+    if cfg.get("pr_footer"):
+        out += ["", cfg["pr_footer"]]
+    title = f"{cfg['tag']} Match {len(table)} overlay {modtext(mods)} functions ({total:,} bytes)"
+    if "main" in mods:
+        title = f"{cfg['tag']} Match {len(table)} {modtext(mods)} functions ({total:,} bytes)"
+    return title, "\n".join(out) + "\n", keys
+
+
+def cmd_pr(a):
+    cfg, rows = load_config(), load_ledger()
+    li = cfg.get("last_integration")
+    if not li:
+        die("run integrate first")
+    integ = run([PY, os.path.join(KIT, "integ_tree.py"), "path"], cwd=KIT, check=True).stdout.strip()
+    head = run(["git", "-C", integ, "rev-parse", "HEAD"], check=True).stdout.strip()
+    if head != li["head"]:
+        die(f"integration tree moved since integrate ({head[:10]} != {li['head'][:10]}); rerun integrate")
+    title, body, keys = pr_body(cfg, integ, li["base"], rows)
+    os.makedirs(PRS, exist_ok=True)
+    path = os.path.join(PRS, f"{li['branch'].replace('/', '_')}.md")
+    open(path, "w", encoding="utf-8").write(body)
+    print(title)
+    print(f"body: {path}")
+    ready = run([PY, os.path.join(KIT, "prready.py"), "decomp"], cwd=KIT, env=dict(os.environ, DQIX_REPO=integ))
+    print((ready.stdout + ready.stderr).strip())
+    if ready.returncode != 0:
+        die("prready is not READY; fix every line above (usually: decomp-matching moved, rerun integrate)")
+    mine = set(run(["git", "-C", integ, "diff", "--name-only", f"{li['base']}..HEAD"]).stdout.split())
+    clash = []
+    for pr in json.loads(gh("pr", "list", "-R", cfg["decomp_repo"], "--state", "open", "--limit", "100",
+                            "--json", "number,headRefName,headRepositoryOwner")):
+        if (pr.get("headRepositoryOwner") or {}).get("login") != cfg["fork_owner"]:
+            continue
+        if not pr["headRefName"].startswith(cfg["branch_prefix"].split("/")[0] + "/"):
+            continue  # another team pushing from the same fork (e.g. claude/*): not ours to wait for
+        theirs = set((gh("pr", "diff", str(pr["number"]), "-R", cfg["decomp_repo"], "--name-only", check=False)
+                      or "").split())
+        both = sorted(p for p in mine & theirs if p.endswith("delinks.txt"))
+        if both:
+            clash.append(f"#{pr['number']} ({pr['headRefName']}): {', '.join(both)}")
+    if clash:
         print("note: your open PRs also change these delinks.txt files; maintainers resolve the conflict at "
               "landing, so leave those branches as they are:\n  " + "\n  ".join(clash))
     if not a.open:
