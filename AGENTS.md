@@ -11,7 +11,11 @@ The job is matched functions landing upstream in large, clean pull requests. Not
 no kit pull requests, no kit edits, no tooling projects. If a kit tool is broken, tell the user the
 command and the output line, and work on something else.
 
-1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`. If
+1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`. Run
+   anything that talks to GitHub (`kit_update.py`, `team.py sync`/`candidates`/`reserve`/`issue`/
+   `integrate`/`pr`/`release`, `gh`, `git fetch`/`push`) with escalated permissions from the first
+   attempt: the Windows sandbox cannot see the GitHub login, so sandboxed it fails with
+   `FETCH FAILED` or an invalid gh token. If
    `python` cannot import `capstone`, the workspace is not set up (`docs/CODEX_FORK.md`, Setup):
    tell the user instead of installing packages yourself.
 2. Load the `dqix-team` skill (`.agents/skills/dqix-team/SKILL.md`) and follow it. It is the whole
