@@ -578,6 +578,28 @@ def state_dirs():
     return ast.literal_eval(m.group(1)) if m else ["wlog", "wlog/gates", "staging", "gated", "quarantine", "attempts"]
 
 
+def provision_integ(integ):
+    """A fresh worktree lacks the untracked tools the main checkout's build downloaded (the compiler,
+    dsd, objdiff). Link the compiler directory and copy the tool binaries from the main checkout."""
+    src_cc, dst_cc = os.path.join(REPO, "tools", "mwccarm"), os.path.join(integ, "tools", "mwccarm")
+    if not os.path.exists(dst_cc):
+        if not os.path.isdir(src_cc):
+            die(f"{src_cc} is missing: build the main decomp checkout once (configure.py usa, ninja check rom)")
+        if os.name == "nt":
+            run(["cmd", "/c", "mklink", "/J", dst_cc.replace("/", "\\"), src_cc.replace("/", "\\")], check=True)
+        else:
+            os.symlink(src_cc, dst_cc)
+        print(f"linked {dst_cc} -> {src_cc}", flush=True)
+    for name in ("dsd.exe", "dsd", "objdiff-cli.exe", "objdiff-cli", "wibo"):
+        s, d = os.path.join(REPO, name), os.path.join(integ, name)
+        if os.path.isfile(s) and not os.path.exists(d):
+            shutil.copy2(s, d)
+    if not os.path.exists(os.path.join(integ, "build.ninja")):
+        c = run([PY, "tools/configure.py", "usa"], cwd=integ)
+        if c.returncode != 0:
+            die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
+
+
 def cmd_integrate(a):
     cfg = load_config()
     state = cfg["integ_state"]
@@ -622,12 +644,7 @@ def integrate(a, cfg, state):
     run([PY, os.path.join(KIT, "integ_tree.py"), "sync"], cwd=KIT, check=True)
     run(["git", "-C", integ, "checkout", "-q", "-f", "--detach", base], check=True)
     run(["git", "-C", integ, "clean", "-fdq", "src/"], check=True)
-    if not (os.path.exists(os.path.join(integ, "tools", "mwccarm")) and os.path.exists(os.path.join(integ, "build.ninja"))):
-        # A fresh worktree has none of the downloaded tools (mwccarm, dsd, objdiff); configure fetches them.
-        print("configuring the integration worktree (first use: downloads the compiler and tools)", flush=True)
-        c = run([PY, "tools/configure.py", "usa"], cwd=integ)
-        if c.returncode != 0 or not os.path.exists(os.path.join(integ, "tools", "mwccarm")):
-            die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
+    provision_integ(integ)
     run(["git", "-C", REPO, "branch", "-f", branch, base], check=True)
     mods, staged, skipped = [], [], []
     for r in todo:
