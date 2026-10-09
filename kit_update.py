@@ -12,7 +12,7 @@ Unpublished commits of your own (a recipe or a fix waiting in a kit pull request
 the update. Every changed agent instruction file is printed as `RE-READ <path>`: a running session
 loaded the old one. With --hook the exit is always 0, and a JSON block decision asks the agent to
 re-read those files before it stops. $DQIX_KIT_URL and $DQIX_KIT_BRANCH override the source
-(default ZevyaDev/dqix-decomp-kit, main).
+(default 2gifts/dqix-decomp-kit-codex, main: this Codex fork).
 """
 import json
 import os

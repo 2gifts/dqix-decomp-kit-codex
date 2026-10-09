@@ -2,6 +2,8 @@
 !/.gitignore
 !/.gitattributes
 !/.claude/
+!/.codex/
+!/codex/
 !/README.md
 !/CLAUDE.md
 !/AGENTS.md

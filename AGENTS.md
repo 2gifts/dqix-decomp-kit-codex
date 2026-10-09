@@ -1,4 +1,46 @@
-# DQIX decomp kit
+# DQIX decomp kit, Codex fork
+
+This is `2gifts/dqix-decomp-kit-codex`, a fork of `ZevyaDev/dqix-decomp-kit` tuned for Codex. It is
+maintained by its owner, who merges upstream into it. Matched functions still go to
+`ZevyaDev/dqix-decomp` (branch `decomp-matching`), and reservations still go to issues on
+`ZevyaDev/dqix-decomp-kit`, exactly as for every other contributor.
+
+## Start here (every Codex session)
+
+The job is matched functions landing upstream in large, clean pull requests. Nothing else counts:
+no kit pull requests, no kit edits, no tooling projects. If a kit tool is broken, tell the user the
+command and the output line, and work on something else.
+
+1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`.
+2. Load the `dqix-team` skill (`.agents/skills/dqix-team/SKILL.md`) and follow it. It is the whole
+   loop:
+   - reserve with ONE issue, published before any work
+   - match in groups of 4 per worker (`dqix-matcher` subagents, or `team.py dispatch` for a
+     `codex exec` fleet)
+   - `team.py collect` re-gates every reported MATCH and applies the quality bar
+   - integrate and publish every 40-120 matches with `team.py integrate` and `team.py pr --open`,
+     which also closes the issue with the PR link
+   - `team.py release` when stopping
+3. A worker (a spawned subagent, or a session asked to match specific addresses) reads
+   `codex/WORKER.md` and follows only that.
+
+What a reviewer accepts, and what this fork enforces:
+- byte-exact through `wgate.py` with the default compiler
+- no asm, no codegen pragma, no `volatile` except hardware-register defines
+- no comments except the `// USA:` tag
+- typed structs with named fields, in the style of the neighbouring matched files
+- the PR template's two checklist lines ticked
+- the reservation issue linked
+- `prready.py decomp` READY
+
+Write files with your edit tool (`apply_patch`), never through the shell. On Windows,
+PowerShell 5's `>`, `Set-Content` and `Out-File` write ANSI or UTF-16 and corrupt sources.
+Kit scripts are Python; run them as `python <script>` from this directory in any shell. Only the
+`.sh` scripts need Git Bash, and `team.py` calls those itself.
+
+---
+
+# Reference (shared with the upstream kit)
 
 This directory is `$KIT`, the kit checkout: scripts, docs and skills only. Everything the pipeline
 produces (attempts, logs, claims, staging, worker docs, knobs, `OPEN_WORK.md`, `STATE.md`) lives in
@@ -34,24 +76,10 @@ new work (exit 3) until you update. Your own unpublished kit commits are kept on
 
 ## Changing the kit
 
-The kit has been tested and refined over months of matching. Use it as it is. Do not change it for
-your own purposes: no local tweaks, private copies of a script, notes or rewordings. Change it only
-when you are certain a change is needed, and then only as one of these:
-
-- a recipe: a `worker_src/core.md` rule that closed a function now landed on `decomp-matching`,
-  citing its address, in a few lines
-- a script: a `colorsweep.py` rule, a repair, or a fix to a kit script or skill, with the
-  `regress.py` case that fails without it (rule 14)
-- a tool fault you cannot fix with a `regress.py` case: an issue in the kit repository, not a pull
-  request, giving the address, the exact command and the output line that shows the fault
-
-Each of these can be checked: a landed address proves a recipe, a failing test proves a fix, and a
-maintainer reproduces a fault before acting on it. Nothing that cannot be checked is accepted: dead ends, residue notes, trial logs, docs and wording, refactors, comments,
-hardening against a fault that never happened. A dead end is a claim that nothing worked, and every
-later worker on that address is handed it as settled. Record a miss in `$SP` with `blocker.py` and
-the function's handoff. Opening no kit pull request is the normal outcome of a session. The kit's
-maintainers push to `main` directly.
-[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) says what an accepted pull request needs.
+Codex sessions never change this kit and never open kit pull requests, upstream or here. The
+fork's owner changes it and merges upstream into it (`docs/CODEX_FORK.md`). If a script fails, or a
+rule here contradicts what the tools do, stop that line of work and report the exact command and
+output to the user.
 
 **Pull both before every pull request** (rule 21). A pull request built on a stale kit or a stale
 decomp silently reverts what landed since you started, re-adds files for addresses someone else
@@ -76,26 +104,26 @@ It is sent back, and the review it cost is wasted.
 
 ## Skills
 
-`.claude/skills/` is the source of every skill. `python kit_init.py` copies the agent-neutral ones
-into `.agents/skills/`, where Codex and other Agent Skills readers load them; edit the source, never
+`python kit_init.py` copies skills into `.agents/skills/`, where Codex loads them. The sources are
+`codex/skills/` for the Codex ones and `.claude/skills/` for the shared ones. Edit the source, never
 the copy.
 
-| skill | use | agents |
-|---|---|---|
-| `dqix-hand-match <addr>` | close one function in this session | all |
-| `dqix-status` | where things are: fleet, coverage, what moved, what needs a decision | all |
-| `dqix-stop` | stop everything now and verify nothing survived | all |
-| `dqix-coordinate` | coordinate native agents, bounded crack/evolve experiments, and shared findings | native-agent hosts |
-| `dqix-plan` | run the standing plan: one function at a time, gate it, land it or record why | Claude Code |
-| `dqix-continue` | a fresh session after a limit, a crash or a long session | Claude Code |
+| skill | use |
+|---|---|
+| `dqix-team` | the coordinator loop: reserve, dispatch, collect, integrate, publish, release |
+| `dqix-worker` | match an assigned group as a worker (`codex/WORKER.md`) |
+| `dqix-hand-match <addr>` | close one stubborn function in this session |
+| `dqix-status` | where things are: coverage, what moved, what needs a decision |
+| `dqix-stop` | stop everything now and verify nothing survived |
+| `dqix-coordinate` | upstream's native-agent crack/evolve experiments (bounded, only when asked) |
 
-The fleet's workers are Claude Code sessions (`claude -p`), so running the fleet needs the Claude Code
-CLI whichever agent operates the kit. Do not start the fleet, a workflow or any paid worker unless
-the user asks.
+Project config in `.codex/`:
+- `agents/dqix-matcher.toml` is the worker subagent.
+- `hooks.json` runs `kit_update.py` at session start, and refuses `gh pr create` until
+  `prready.py` is READY. Review and trust it once with `/hooks`.
 
-For a coordinator-operated adaptation using Codex or another host's native agents, see
-[docs/NATIVE_AGENTS.md](docs/NATIVE_AGENTS.md). It does not run the Claude workflow JavaScript or
-start a background fleet. Keep the same reservation, gate, integration and promotion rules.
+Upstream's Claude fleet (`pull_all.sh`, `claude -p` workers) and the `.claude/workflows/` need the
+Claude Code CLI. Codex does not use them; `codex/team.py dispatch` is the Codex fleet.
 
 ## Hard rules
 

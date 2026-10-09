@@ -37,7 +37,7 @@ def _state():
 SP = _state()
 REPO = _norm(os.environ.get("DQIX_REPO", os.path.join(os.path.dirname(KIT), "dqix-decomp")))
 CLAUDE_PROJECTS = _norm(os.environ.get("CLAUDE_PROJECTS", os.path.expanduser("~/.claude/projects")))
-KIT_URL = os.environ.get("DQIX_KIT_URL", "https://github.com/ZevyaDev/dqix-decomp-kit.git")
+KIT_URL = os.environ.get("DQIX_KIT_URL", "https://github.com/2gifts/dqix-decomp-kit-codex.git")
 KIT_BRANCH = os.environ.get("DQIX_KIT_BRANCH", "main")
 DECOMP_URL = os.environ.get("DQIX_DECOMP_URL", "https://github.com/ZevyaDev/dqix-decomp.git")
 DECOMP_BRANCH = os.environ.get("DQIX_DECOMP_BRANCH", "decomp-matching")

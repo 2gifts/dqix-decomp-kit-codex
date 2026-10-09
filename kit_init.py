@@ -89,7 +89,11 @@ def mirror_skills():
     for name in PORTABLE_SKILLS:
         shutil.copytree(os.path.join(KIT, ".claude", "skills", name),
                         os.path.join(KIT, ".agents", "skills", name), dirs_exist_ok=True)
-    print(f"ok    {len(PORTABLE_SKILLS)} skills copied to .agents/skills/")
+    codex = sorted(os.listdir(os.path.join(KIT, "codex", "skills")))
+    for name in codex:
+        shutil.copytree(os.path.join(KIT, "codex", "skills", name),
+                        os.path.join(KIT, ".agents", "skills", name), dirs_exist_ok=True)
+    print(f"ok    {len(PORTABLE_SKILLS) + len(codex)} skills copied to .agents/skills/")
 
 
 def run(argv):
