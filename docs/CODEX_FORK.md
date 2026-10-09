@@ -17,29 +17,37 @@ does the real work. This fork changes how Codex drives it.
 | `.codex/hooks.json` | `kit_update.py` on session start; `prready.py --hook` refuses `gh pr create` until READY |
 | `kitpaths.py`, `kit_update.py` | the kit updates from this fork (`DQIX_KIT_URL` overrides) instead of upstream |
 | `kit_init.py` | also copies `codex/skills/*` into `.agents/skills/` |
+| `codex/setup_workspace.py` | writes the machine-local `.codex/config.toml` (environment, sandbox, subagent cap) |
 
-## Setup (once)
+## Setup (once per machine)
 
-Clone the decomp and this fork side by side, as the upstream README describes. Name the fork's
-directory `dqix-decomp-kit`, or set `DQIX_KIT`.
+Put the workspace in one folder. Use the names below, or set `DQIX_KIT`, `DQIX_REPO` and
+`DQIX_STATE`.
 
-    git clone https://github.com/2gifts/dqix-decomp-kit-codex.git dqix-decomp-kit
-    cd dqix-decomp-kit && python kit_init.py --slow && python selfcheck.py
+    <workspace>\dqix-decomp        your clone of decomp-matching (origin = your fork, zevya = ZevyaDev), built
+    <workspace>\dqix-decomp-kit    this fork
+    <workspace>\dqix-kit-state     created by kit_init.py
 
-Then, in Codex:
+1. Create a Python 3.10+ environment at a path without spaces, and install the kit's dependencies
+   and the decomp's `tools/requirements.txt`: `capstone pyelftools frida ninja`.
+2. Build the decomp: `python tools/configure.py usa`, then `ninja check rom`.
+3. From PowerShell, in the kit:
 
-1. Open Codex in the kit directory, so `AGENTS.md`, `.codex/` and `.agents/skills/` load.
-2. Trust the project when asked, and review and trust the two hooks once with `/hooks`.
-3. Subagents are on by default. To cap concurrency, add this to `~/.codex/config.toml`:
+       <venv>\Scripts\python.exe kit_init.py --slow
+       <venv>\Scripts\python.exe selfcheck.py
+       <venv>\Scripts\python.exe codex\setup_workspace.py
 
-       [agents]
-       max_concurrent_threads_per_session = 6
+   `setup_workspace.py` writes `.codex/config.toml` (untracked). It puts the environment first on
+   PATH for every Codex command and subagent, trusts the workspace for git, makes the workspace
+   writable and allows network for git and gh, and caps subagents at 6.
+4. Mark the kit folder trusted in Codex: accept the prompt, or add
+   `[projects.'<kit path, lower-case>'] trust_level = "trusted"` to `~/.codex/config.toml`.
+   Project config and hooks load only for trusted projects.
+5. Optionally, review the two hooks with `/hooks`. They are a convenience: `AGENTS.md` already
+   runs `kit_update.py`, and `team.py pr` already runs `prready.py`.
 
-4. Workers inherit the session's model and effort. `xhigh` works but is slow. `high` is the better
-   trade for 4-function groups. Set it per run with `team.py dispatch --effort high`, or with
-   `model_reasoning_effort` in the agent TOML.
-5. `team.py` keeps its state in `$SP/team/`. It integrates in a private state directory beside
-   `$SP` (`<state>-integ`), so in-progress worker files are never swept into a PR.
+Open Codex in the kit folder, so `AGENTS.md`, `.codex/` and `.agents/skills/` all load. Do not open
+it in the workspace root.
 
 ## Running it
 

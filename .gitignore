@@ -35,6 +35,8 @@ __pycache__/
 *.o
 *.pyc
 
+/.codex/config.toml
+
 /.claude/*
 !/.claude/skills/
 !/.claude/workflows/

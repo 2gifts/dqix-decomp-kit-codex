@@ -11,7 +11,9 @@ The job is matched functions landing upstream in large, clean pull requests. Not
 no kit pull requests, no kit edits, no tooling projects. If a kit tool is broken, tell the user the
 command and the output line, and work on something else.
 
-1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`.
+1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`. If
+   `python` cannot import `capstone`, the workspace is not set up (`docs/CODEX_FORK.md`, Setup):
+   tell the user instead of installing packages yourself.
 2. Load the `dqix-team` skill (`.agents/skills/dqix-team/SKILL.md`) and follow it. It is the whole
    loop:
    - reserve with ONE issue, published before any work
