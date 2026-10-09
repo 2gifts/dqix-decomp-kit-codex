@@ -521,7 +521,9 @@ def collect(keys, report_files=None):
             continue
         g = run([PY, os.path.join(KIT, "wgate.py"), k[0], k[1], f], cwd=KIT)
         verdict = (g.stdout.strip().splitlines() or [g.stderr.strip()[:200]])[0]
-        if verdict == "MATCH":
+        if "ALREADY-COMMITTED" in verdict:
+            r["status"], r["note"] = "DROPPED", "already landed on decomp-matching"
+        elif verdict == "MATCH":
             probs = quality(f)
             if probs:
                 r["status"], r["note"] = "RESIDUE", "QUALITY: " + "; ".join(probs)
