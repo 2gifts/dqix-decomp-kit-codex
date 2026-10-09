@@ -734,10 +734,19 @@ def pr_body(cfg, integ, base, rows):
     total = sum(int(r["size"]) for r in table)
     mods = [r["module"] for r in table]
     where = "USA main and overlay" if "main" in mods else "USA overlay"
+    added_syms = [l[1:].split()[0] for l in run(["git", "-C", integ, "diff", f"{base}..HEAD", "--", "config/**/symbols.txt",
+                                                  "config/*/arm9/symbols.txt"]).stdout.splitlines()
+                  if l.startswith("+") and not l.startswith("+++") and l[1:].strip()]
+    other = [p for p in run(["git", "-C", integ, "diff", "--name-only", f"{base}..HEAD"]).stdout.split()
+             if not p.startswith("src/") and not p.endswith(("delinks.txt", "symbols.txt"))]
+    tail = "existing symbol names are kept"
+    if added_syms:
+        tail += (f"; `symbols.txt` gains {len(added_syms)} alias line(s) for data a function references under a "
+                 f"second name ({', '.join(f'`{s}`' for s in added_syms[:6])})")
+    tail += "; no other source or header is changed" if not other else f"; also changed: {', '.join(other)}"
     out = ["## What this changes", "",
            f"Matches {len(table)} {where} {modtext(mods)} functions ({total:,} bytes). Each is a new source file in "
-           "its module's `src/` directory, wired into that module's `delinks.txt`; existing symbol names are kept "
-           "and no other source, header or config is changed.", "",
+           f"its module's `src/` directory, wired into that module's `delinks.txt`; {tail}.", "",
            "| Module | Address | Bytes | Function |", "| --- | --- | ---: | --- |"]
     out += [f"| {label(r['module'])} | `0x{r['addr']}` | {r['size']} | {r['desc']} |" for r in table]
     out += ["", "Validation: every function passed the kit gate (`wgate.py` MATCH: byte-exact with relocations "
