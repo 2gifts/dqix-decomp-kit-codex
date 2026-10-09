@@ -804,7 +804,10 @@ def cmd_pr(a):
         print("dry run: add --open to push, open the PR and close the reservation issue")
         return
     fork = f"https://github.com/{cfg['fork_owner']}/{cfg['decomp_repo'].split('/')[1]}.git"
-    run(["git", "-C", integ, "push", "-f", fork, f"HEAD:refs/heads/{li['branch']}"], check=True)
+    push = run(["git", "-C", integ, "push", fork, f"HEAD:refs/heads/{li['branch']}"])
+    if push.returncode != 0:
+        die(f"push of {li['branch']} refused (the branch exists on the fork?). Never move an open pull "
+            f"request's branch; bump `batch` in {CONFIG} and rerun integrate. {push.stderr.strip()[-300:]}")
     url = gh("pr", "create", "-R", cfg["decomp_repo"], "--base", cfg["base"], "--head",
              f"{cfg['fork_owner']}:{li['branch']}", "--title", title, "--body-file", path).strip()
     num = url.rstrip("/").split("/")[-1]
