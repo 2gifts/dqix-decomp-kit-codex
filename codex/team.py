@@ -622,6 +622,12 @@ def integrate(a, cfg, state):
     run([PY, os.path.join(KIT, "integ_tree.py"), "sync"], cwd=KIT, check=True)
     run(["git", "-C", integ, "checkout", "-q", "-f", "--detach", base], check=True)
     run(["git", "-C", integ, "clean", "-fdq", "src/"], check=True)
+    if not (os.path.exists(os.path.join(integ, "tools", "mwccarm")) and os.path.exists(os.path.join(integ, "build.ninja"))):
+        # A fresh worktree has none of the downloaded tools (mwccarm, dsd, objdiff); configure fetches them.
+        print("configuring the integration worktree (first use: downloads the compiler and tools)", flush=True)
+        c = run([PY, "tools/configure.py", "usa"], cwd=integ)
+        if c.returncode != 0 or not os.path.exists(os.path.join(integ, "tools", "mwccarm")):
+            die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
     run(["git", "-C", REPO, "branch", "-f", branch, base], check=True)
     mods, staged, skipped = [], [], []
     for r in todo:
