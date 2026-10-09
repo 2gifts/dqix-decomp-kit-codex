@@ -276,8 +276,14 @@ def candidate_rows(cfg, module=None, lo=None, hi=None):
                 continue
             near = min([ai - body[i][1] if i >= 0 else 1 << 30, body[i + 1][0] - ai if i + 1 < len(body) else 1 << 30])
             out.append({"module": mod, "addr": addr, "size": size, "name": name, "near": near, "matched": len(body)})
-    # modules with many matched siblings first, then functions close to matched code, then size
-    out.sort(key=lambda c: (-min(c["matched"], 200) // 20, c["near"], c["size"]))
+    # Game code before library modules (any module with skiplisted, flag-pinned functions), then
+    # functions right next to matched code (siblings to copy), then the 300-600 byte sweet spot.
+    lib = set()
+    for f in ("skiplist_ov.txt",):
+        p = os.path.join(KIT, f)
+        if os.path.exists(p):
+            lib |= {m.group(1) for m in re.finditer(r"\bov(\d{3})\b", open(p, encoding="utf-8").read())}
+    out.sort(key=lambda c: (c["module"] in lib, c["near"] > 0x400, abs(c["size"] - 450) // 50, c["near"]))
     return out
 
 

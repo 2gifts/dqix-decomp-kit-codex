@@ -23,8 +23,18 @@ What this process produced for the Claude team, which this fork copies:
 
 A one-function PR costs the maintainer about as much review as a 100-function one.
 
-Run everything from the kit checkout. In Git Bash: `export DQIX_KIT="$(pwd -W)"`. In PowerShell:
-`$env:DQIX_KIT = (Get-Location).Path`.
+Run everything from the kit checkout. `.codex/config.toml` (from `codex/setup_workspace.py`) already
+sets the Python environment and `DQIX_*` paths for every command.
+
+**GitHub credentials are invisible inside the Windows sandbox.** `gh` reports an invalid token, and
+`git fetch` fails with `SEC_E_NO_CREDENTIALS`. Run every command that talks to GitHub with
+escalated permissions (outside the sandbox) from the first attempt; do not try it sandboxed first.
+These commands are:
+- `team.py sync`, `candidates`, `reserve`, `issue --publish`, `integrate`, `pr`, `release`
+- `kit_update.py`
+- any `gh` or `git fetch`/`push`
+
+Gating, `next` and `collect` run fine inside the sandbox, and workers never need GitHub.
 
 ## 0. Start of every session
 
