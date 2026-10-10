@@ -727,6 +727,9 @@ def quality(path):
     vol = [l for l in code.splitlines() if "volatile" in l and not MMIO.search(l)]
     if vol:
         probs.append(f"volatile outside an MMIO register define: {vol[0].strip()[:80]}")
+    raw = re.findall(r"\*\s*\(\s*[\w\s]+\*+\s*\)\s*\(\s*\(\s*(?:unsigned\s+)?char\s*\*\s*\)", code)
+    if len(raw) > 2:
+        probs.append(f"{len(raw)} raw `*(T*)((char*)p + off)` reads: declare the struct fields instead")
     if "// USA:" not in src:
         probs.append("missing the // USA: tag line")
     if not src.lstrip().startswith("#include <globaldefs.h>"):
