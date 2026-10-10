@@ -661,6 +661,49 @@ def cmd_dispatch(a):
     print(f"done: spent ${spent() - start:.2f} this run")
 
 
+def cmd_prep(a):
+    """Prepare N one-function tasks for in-session subagents: prework (zero tokens), then a task file
+    each, so the coordinator's spawn prompt is one line. Workers write their report to a file."""
+    run_dir = os.path.join(TEAM, "run")
+    os.makedirs(run_dir, exist_ok=True)
+    os.makedirs(REPORTS, exist_ok=True)
+    runner = os.path.join(run_dir, "k")
+    with open(runner, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(f'#!/bin/bash\ncd "{KIT.replace(chr(92), "/")}" && PYTHONUTF8=1 DQIX_NO_FRESHNESS=1 '
+                 f'exec "{PY.replace(chr(92), "/")}" "$@"\n')
+    rk = runner.replace("\\", "/")
+    brief = open(os.path.join(HERE, "WORKER_LEAN.md"), encoding="utf-8").read()
+    brief = brief.replace("Tools: Bash runs only `python ...` from the kit directory.",
+                          f"Run every kit command through the runner `{rk}` (it changes to the kit and uses the right "
+                          "Python): `\"<runner>\" wgate.py ...`.")
+    brief = brief.replace("Commands (kit dir is your working directory):", "Commands (prefix each with the runner):")
+    made = 0
+    for i in range(a.n):
+        rows = load_ledger()
+        group = take_group(rows, 1, a.module)
+        if not group:
+            break
+        r = group[0]
+        lbl = f"{a.prefix}{datetime.datetime.now():%H%M}-{i + 1}"
+        r["status"], r["note"] = "ASSIGNED", lbl
+        save_ledger(rows)
+        verdict, diff = prework(r)
+        if verdict == "MATCH":
+            print(f"{lbl} {r['addr']} PREWORK-MATCH")
+            continue
+        report = os.path.join(REPORTS, f"{lbl}.json").replace("\\", "/")
+        body = (brief.replace("Your final message must be only this JSON (one entry):",
+                              f"Write this JSON with the Write tool to {report}, then reply with one line: "
+                              f"`<verdict> {r['addr']}`. JSON (one entry):")
+                + "\n\n" + lean_prompt(r, verdict, diff).replace(f"Module arg: {r['module']}",
+                                                                  f"Module arg: {r['module']}   Runner: {rk}"))
+        path = os.path.join(run_dir, f"{lbl}.md")
+        open(path, "w", encoding="utf-8").write(body)
+        print(f"{lbl} {r['addr']} {path.replace(chr(92), '/')}")
+        made += 1
+    print(f"{made} task file(s) ready")
+
+
 def cmd_sweep(a):
     """Zero-token pass: colorsweep every REGPERM/SCHED wip file, re-gate, report what matched."""
     rows = load_ledger()
@@ -1157,6 +1200,10 @@ def main():
                    help="claude: `claude --bare -p` against DeepSeek's Anthropic endpoint, one function per session")
     p.add_argument("--budget", type=float, help="USD: stop starting workers once this run has spent this much")
     p.add_argument("--max-turns", type=int, default=60)
+    p = sub.add_parser("prep")
+    p.add_argument("--n", type=int, default=10)
+    p.add_argument("--prefix", default="h")
+    p.add_argument("--module")
     p = sub.add_parser("sweep")
     p.add_argument("--statuses", default="RESIDUE,RELEASED")
     p.add_argument("--classes", default="REGPERM,SCHED")
