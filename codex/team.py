@@ -529,7 +529,10 @@ def prework(r):
         run([PY, os.path.join(KIT, "colorsweep.py"), mod, addr, f, "--apply"], cwd=KIT)
         v = gate_line(mod, addr, f)
     diff = ""
-    if v != "MATCH":
+    if v == "MATCH" and quality(f):
+        v = ("MATCH on bytes, but rejected by the quality check: " + "; ".join(quality(f)) +
+             ". Rewrite that part in plain C++ and keep the gate at MATCH.")
+    elif v != "MATCH":
         d = run([PY, os.path.join(KIT, "wdiff.py"), mod, addr, f], cwd=KIT).stdout.splitlines()
         diff = "\n".join(d[:40])
     return v, diff
