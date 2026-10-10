@@ -256,10 +256,10 @@ def cmd_sync(a):
     print(f"decomp checkout at {tip[:10]} ({kitpaths.DECOMP_BRANCH})")
 
 
-def candidate_rows(cfg, module=None, lo=None, hi=None):
+def candidate_rows(cfg, module=None, lo=None, hi=None, include_released=False):
     lo = cfg["min_size"] if lo is None else lo
     hi = cfg["max_size"] if hi is None else hi
-    taken = {key(r) for r in load_ledger() if r["status"] != "RELEASED"}
+    taken = {key(r) for r in load_ledger() if include_released or r["status"] != "RELEASED"}
     blocked = reserved_elsewhere(cfg) | skiplisted()
     out = []
     for mod in modules():
@@ -300,7 +300,7 @@ def cmd_reserve(a):
     have = {key(r): r for r in rows}
     picks = []
     if a.take:
-        cands = candidate_rows(cfg, a.module, a.min, a.max)
+        cands = candidate_rows(cfg, a.module, a.min, a.max, a.include_released)
         picks = [(c["module"], c["addr"], c["size"]) for c in cands[:a.take]]
     else:
         if len(a.pairs) % 2:
@@ -335,9 +335,10 @@ def issue_body(cfg, rows):
         return None, None
     total = sum(int(r["size"]) for r in live)
     mods = [r["module"] for r in live]
-    where = "USA main and overlay" if "main" in mods else "USA overlay"
+    ovs = [m for m in mods if m != "main"]
+    where = (f"USA main and overlay {modtext(ovs)}" if ovs else "USA main") if "main" in mods else f"USA overlay {modtext(mods)}"
     label_for = {"MATCH": "Matched; preparing PR", "RESIDUE": "Retained attempt; still matching"}
-    out = [f"Working on these {where} {modtext(mods)} functions ({total:,} bytes total; ends exclusive):", "",
+    out = [f"Working on these {where} functions ({total:,} bytes total; ends exclusive):", "",
            "| Module | Start | End exclusive | Bytes | Status |", "| --- | --- | --- | ---: | --- |"]
     for r in live:
         a = int(r["addr"], 16)
@@ -969,7 +970,8 @@ def pr_body(cfg, integ, base, rows):
     table.sort(key=key)
     total = sum(int(r["size"]) for r in table)
     mods = [r["module"] for r in table]
-    where = "USA main and overlay" if "main" in mods else "USA overlay"
+    ovs = [m for m in mods if m != "main"]
+    where = (f"USA main and overlay {modtext(ovs)}" if ovs else "USA main") if "main" in mods else f"USA overlay {modtext(mods)}"
     added_syms = [l[1:].split()[0] for l in run(["git", "-C", integ, "diff", f"{base}..HEAD", "--", "config/**/symbols.txt",
                                                   "config/*/arm9/symbols.txt"]).stdout.splitlines()
                   if l.startswith("+") and not l.startswith("+++") and l[1:].strip()]
@@ -981,7 +983,7 @@ def pr_body(cfg, integ, base, rows):
                  f"second name ({', '.join(f'`{s}`' for s in added_syms[:6])})")
     tail += "; no other source or header is changed" if not other else f"; also changed: {', '.join(other)}"
     out = ["## What this changes", "",
-           f"Matches {len(table)} {where} {modtext(mods)} functions ({total:,} bytes). Each is a new source file in "
+           f"Matches {len(table)} {where} functions ({total:,} bytes). Each is a new source file in "
            f"its module's `src/` directory, wired into that module's `delinks.txt`; {tail}.", "",
            "| Module | Address | Bytes | Function |", "| --- | --- | ---: | --- |"]
     out += [f"| {label(r['module'])} | `0x{r['addr']}` | {r['size']} | {r['desc']} |" for r in table]
@@ -1124,6 +1126,7 @@ def main():
     p = sub.add_parser("reserve")
     p.add_argument("pairs", nargs="*")
     p.add_argument("--take", type=int)
+    p.add_argument("--include-released", action="store_true", help="also take rows this team tried and released")
     p.add_argument("--module")
     p.add_argument("--min", type=int)
     p.add_argument("--max", type=int)
