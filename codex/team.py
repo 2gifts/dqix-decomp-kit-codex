@@ -436,34 +436,239 @@ def run_worker(group, lbl, a):
     return p.returncode, report
 
 
+# ---------------------------------------------------------------- claude -p engine (DeepSeek and other
+# Anthropic-compatible providers). One function per session, a fixed system prompt (identical prefix
+# across workers, so the provider's prefix cache serves it), and every zero-token step done here.
+
+DEEPSEEK = {"base_url": "https://api.deepseek.com/anthropic", "key_env": "DEEPSEEK_API_KEY",
+            # USD per 1M tokens: (cache hit, cache miss, output); off-peak is half. api-docs.deepseek.com
+            "prices": {"deepseek-flash": (0.006, 0.30, 1.20), "deepseek-v4-pro": (0.044, 1.32, 3.96)}}
+USAGE = os.path.join(TEAM, "usage.tsv")
+
+
+def claude_bin():
+    exe = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude.exe")
+    if not os.path.exists(exe):
+        die("Claude Code CLI not found (claude on PATH or ~/.local/bin/claude.exe)")
+    return exe
+
+
+def peak_now():
+    t = datetime.datetime.now(datetime.timezone.utc)
+    return t.weekday() < 5 and (1 <= t.hour < 4 or 6 <= t.hour < 10)
+
+
+def deepseek_cost(model, usage):
+    hit, miss, out = DEEPSEEK["prices"].get(model, DEEPSEEK["prices"]["deepseek-v4-pro"])
+    scale = 1.0 if peak_now() else 0.5
+    m = (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)) / 1e6
+    h = usage.get("cache_read_input_tokens", 0) / 1e6
+    o = usage.get("output_tokens", 0) / 1e6
+    return scale * (h * hit + m * miss + o * out)
+
+
+def spent():
+    if not os.path.exists(USAGE):
+        return 0.0
+    total = 0.0
+    for line in open(USAGE, encoding="utf-8"):
+        p = line.rstrip("\n").split("\t")
+        if len(p) >= 9 and p[0] != "when":
+            total += float(p[8])
+    return total
+
+
+def gate_line(mod, addr, f):
+    g = run([PY, os.path.join(KIT, "wgate.py"), mod, addr, f], cwd=KIT)
+    return (g.stdout.strip().splitlines() or [g.stderr.strip()[:200]])[0]
+
+
+def neighbours(mod, addr, n=2):
+    """Matched source files delinked just before and after the address: the siblings to copy from."""
+    owners = sorted((int(s, 16), p) for p, (m, s) in delink_owners(REPO).items() if m == mod)
+    a = int(addr, 16)
+    before = [p for s, p in owners if s < a][-n:]
+    after = [p for s, p in owners if s > a][:n]
+    return [os.path.join(REPO, p).replace("\\", "/") for p in before + after]
+
+
+def prework(r):
+    """Everything a worker would otherwise spend tokens on: the starting file, a gate, a free
+    colorsweep for colouring residues, and the first diff. Returns (verdict, diff excerpt)."""
+    mod, addr = r["module"], r["addr"]
+    f = wip(mod, addr)
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    if not os.path.exists(f):
+        prior = run([PY, os.path.join(KIT, "resumable.py"), addr], cwd=KIT).stdout.strip().splitlines()
+        src = prior[0].strip() if prior and os.path.isfile(prior[0].strip()) else None
+        if src:
+            shutil.copy2(src, f)
+        else:
+            run([PY, os.path.join(KIT, "scaffold.py"), mod, addr, f], cwd=KIT)
+    v = gate_line(mod, addr, f)
+    if any(c in v for c in ("REGPERM", "SCHED")):
+        run([PY, os.path.join(KIT, "colorsweep.py"), mod, addr, f, "--apply"], cwd=KIT)
+        v = gate_line(mod, addr, f)
+    diff = ""
+    if v != "MATCH":
+        d = run([PY, os.path.join(KIT, "wdiff.py"), mod, addr, f], cwd=KIT).stdout.splitlines()
+        diff = "\n".join(d[:40])
+    return v, diff
+
+
+def lean_prompt(r, verdict, diff):
+    f = wip(r["module"], r["addr"])
+    lines = [f"Task: match {label(r['module'])} {r['addr']} ({r['size']} bytes).",
+             f"Source to edit: {f}",
+             f"Module arg: {r['module']}   Decomp checkout (read only): {REPO.replace(chr(92), '/')}",
+             "Neighbour matched sources to read first:"] + [f"  {p}" for p in neighbours(r["module"], r["addr"])]
+    lines += ["", f"Current gate verdict: {verdict}"]
+    if diff:
+        lines += ["Current difference (first lines of wdiff):", diff]
+    return "\n".join(lines)
+
+
+def run_worker_claude(r, lbl, a):
+    os.makedirs(REPORTS, exist_ok=True)
+    os.makedirs(LOGS, exist_ok=True)
+    verdict, diff = prework(r)
+    report = os.path.join(REPORTS, f"{lbl}.json")
+    if verdict == "MATCH":
+        json.dump({"functions": [{"module": r["module"], "addr": r["addr"], "verdict": "MATCH", "residue": "",
+                                  "size": int(r["size"]), "file": wip(r["module"], r["addr"]), "description": "",
+                                  "lever": "", "lever_bytes": 0, "notes": "matched by prework (no model)"}]},
+                  open(report, "w", encoding="utf-8"))
+        return "prework", report, 0.0
+    key_env = DEEPSEEK["key_env"]
+    if not os.environ.get(key_env):
+        die(f"set {key_env} in the environment first")
+    env = dict(os.environ, ANTHROPIC_BASE_URL=DEEPSEEK["base_url"], ANTHROPIC_API_KEY=os.environ[key_env],
+               ANTHROPIC_MODEL=a.model, ANTHROPIC_SMALL_FAST_MODEL="deepseek-flash",
+               ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
+               DISABLE_AUTOUPDATER="1", PYTHONUTF8="1", DQIX_NO_FRESHNESS="1")
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    env["PATH"] = os.path.dirname(PY) + os.pathsep + env.get("PATH", "")
+    cmd = [claude_bin(), "--bare", "-p", "--model", a.model, "--output-format", "json",
+           "--max-turns", str(a.max_turns), "--no-session-persistence", "--strict-mcp-config",
+           "--system-prompt-file", os.path.join(HERE, "WORKER_LEAN.md"),
+           "--tools", "Bash,Read,Edit,Write,Grep,Glob",
+           "--allowedTools", "Bash(python:*)", "Bash(python *)", "Read", "Edit", "Write", "Grep", "Glob",
+           "--add-dir", SP, "--add-dir", REPO]
+    t0 = time.time()
+    try:
+        p = subprocess.run(cmd, input=lean_prompt(r, verdict, diff), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", cwd=KIT, env=env, timeout=a.timeout * 60)
+        out, code = p.stdout, p.returncode
+    except subprocess.TimeoutExpired as e:
+        out, code = (e.stdout or ""), "timeout"
+    open(os.path.join(LOGS, f"{lbl}.json"), "w", encoding="utf-8").write(out if isinstance(out, str) else "")
+    try:
+        res = json.loads(out)
+    except (ValueError, TypeError):
+        res = {}
+    usage = res.get("usage", {}) or {}
+    cost = deepseek_cost(a.model, usage)
+    new = not os.path.exists(USAGE)
+    with open(USAGE, "a", encoding="utf-8") as fh:
+        if new:
+            fh.write("when\tlabel\tmodel\tturns\tin_miss\tin_hit\tout\tsecs\tusd\n")
+        fh.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M}\t{lbl}\t{a.model}\t{res.get('num_turns', '')}\t"
+                 f"{usage.get('input_tokens', 0) + usage.get('cache_creation_input_tokens', 0)}\t"
+                 f"{usage.get('cache_read_input_tokens', 0)}\t{usage.get('output_tokens', 0)}\t"
+                 f"{int(time.time() - t0)}\t{cost:.4f}\n")
+    text = res.get("result") or ""
+    m = re.search(r"\{.*\}", text, re.S)
+    try:
+        json.dump(json.loads(m.group(0)), open(report, "w", encoding="utf-8")) if m else None
+    except ValueError:
+        pass
+    return code, report if os.path.exists(report) else None, cost
+
+
 def cmd_dispatch(a):
-    if not shutil.which("codex"):
+    claude = a.engine == "claude"
+    if claude:
+        claude_bin()
+        if not os.environ.get(DEEPSEEK["key_env"]):
+            die(f"set {DEEPSEEK['key_env']} in the environment first")
+    elif not shutil.which("codex"):
         die("codex CLI not on PATH")
-    rows = load_ledger()
-    jobs, n = [], 0
-    while len(jobs) < a.groups:
-        group = take_group(rows, a.per, a.module)
+    per = 1 if claude else a.per
+    budget = a.budget if a.budget is not None else float("inf")
+    start = spent()
+    n = 0
+
+    def next_job():
+        nonlocal n
+        rows = load_ledger()
+        group = take_group(rows, per, a.module)
         if not group:
-            break
+            return None
         n += 1
         lbl = f"w{datetime.datetime.now():%m%d%H%M}-{n}"
         for r in group:
             r["status"], r["note"] = "ASSIGNED", lbl
-        jobs.append((lbl, group))
-    save_ledger(rows)
-    if not jobs:
-        die("no ACTIVE rows to dispatch; reserve and publish first", 3)
-    print(f"dispatching {len(jobs)} group(s), {a.workers} at a time")
+        save_ledger(rows)
+        return lbl, group
+
+    print(f"dispatching with {a.workers} workers ({a.engine}{', ' + a.model if claude else ''}); "
+          f"budget ${budget:.2f}, spent so far ${start:.2f}", flush=True)
     with ThreadPoolExecutor(max_workers=a.workers) as pool:
-        futs = {pool.submit(run_worker, g, lbl, a): (lbl, g) for lbl, g in jobs}
-        for fut in as_completed(futs):
-            lbl, group = futs[fut]
+        futs = {}
+        while True:
+            while len(futs) < a.workers and n < a.groups and spent() - start < budget:
+                job = next_job()
+                if not job:
+                    break
+                lbl, group = job
+                fn = (lambda g=group, l=lbl: run_worker_claude(g[0], l, a)) if claude else \
+                     (lambda g=group, l=lbl: run_worker(g, l, a) + (0.0,))
+                futs[pool.submit(fn)] = job
+            if not futs:
+                break
+            done = next(as_completed(futs))
+            lbl, group = futs.pop(done)
             try:
-                code, report = fut.result()
+                code, report, cost = done.result()
             except subprocess.TimeoutExpired:
-                code, report = "timeout", None
-            print(f"[{lbl}] exit {code}; collecting {' '.join(r['addr'] for r in group)}", flush=True)
+                code, report, cost = "timeout", None, 0.0
+            print(f"[{lbl}] exit {code} ${cost:.3f} (total ${spent() - start:.2f}); collecting "
+                  f"{' '.join(r['addr'] for r in group)}", flush=True)
             collect([key(r) for r in group], report_files=[report] if report else [])
+    print(f"done: spent ${spent() - start:.2f} this run")
+
+
+def cmd_sweep(a):
+    """Zero-token pass: colorsweep every REGPERM/SCHED wip file, re-gate, report what matched."""
+    rows = load_ledger()
+    want = [r for r in rows if r["status"] in a.statuses.split(",") and os.path.exists(wip(r["module"], r["addr"]))
+            and (not a.classes or any(c in r["note"] for c in a.classes.split(",")))]
+    print(f"sweeping {len(want)} source(s) with colorsweep, {a.jobs} at a time", flush=True)
+
+    def one(r):
+        f = wip(r["module"], r["addr"])
+        run([PY, os.path.join(KIT, "colorsweep.py"), r["module"], r["addr"], f, "--apply", "--budget", str(a.budget)],
+            cwd=KIT)
+        return r, gate_line(r["module"], r["addr"], f)
+
+    hits = []
+    with ThreadPoolExecutor(max_workers=a.jobs) as pool:
+        for fut in as_completed([pool.submit(one, r) for r in want]):
+            r, v = fut.result()
+            print(f"{r['module']} {r['addr']}: {v}", flush=True)
+            if v == "MATCH" and not quality(wip(r["module"], r["addr"])):
+                hits.append(r)
+    rows = load_ledger()
+    by = {key(r): r for r in rows}
+    for r in hits:
+        row = by[key(r)]
+        if row["status"] in ("ACTIVE", "ASSIGNED", "RESIDUE"):
+            row["status"], row["note"] = "MATCH", "colorsweep"
+        else:
+            row["note"] = (row["note"] + "; colorsweep MATCH").strip("; ")
+    save_ledger(rows)
+    print(f"{len(hits)} new match(es). Released rows that matched: "
+          "python codex/team.py reclaim --matches-only (re-gates; publish the issue after)")
 
 
 def report_index(files=None):
@@ -876,7 +1081,8 @@ def cmd_reclaim(a):
     blocked = reserved_elsewhere(cfg, max_age=0)
     keys = []
     for r in rows:
-        if r["status"] != "RELEASED" or (a.matches_only and "from MATCH" not in r["note"]):
+        if r["status"] != "RELEASED" or (a.matches_only and "from MATCH" not in r["note"]
+                                         and "colorsweep MATCH" not in r["note"]):
             continue
         if r["addr"] in blocked:
             print(f"{r['module']} {r['addr']}: reserved by someone else now; left released")
@@ -919,6 +1125,15 @@ def main():
     p.add_argument("--effort")
     p.add_argument("--sandbox", default="workspace-write")
     p.add_argument("--timeout", type=int, default=240, help="minutes per worker")
+    p.add_argument("--engine", choices=("codex", "claude"), default="codex",
+                   help="claude: `claude --bare -p` against DeepSeek's Anthropic endpoint, one function per session")
+    p.add_argument("--budget", type=float, help="USD: stop starting workers once this run has spent this much")
+    p.add_argument("--max-turns", type=int, default=60)
+    p = sub.add_parser("sweep")
+    p.add_argument("--statuses", default="RESIDUE,RELEASED")
+    p.add_argument("--classes", default="REGPERM,SCHED")
+    p.add_argument("--jobs", type=int, default=4)
+    p.add_argument("--budget", type=int, default=80, help="colorsweep compile budget per function")
     p = sub.add_parser("collect")
     p.add_argument("addrs", nargs="*")
     p = sub.add_parser("describe")
@@ -933,6 +1148,8 @@ def main():
     p = sub.add_parser("reclaim")
     p.add_argument("--matches-only", action="store_true", help="only rows released while MATCH")
     a = ap.parse_args()
+    if a.cmd == "dispatch" and a.engine == "claude" and not a.model:
+        a.model = "deepseek-flash"
     globals()[f"cmd_{a.cmd}"](a)
 
 
