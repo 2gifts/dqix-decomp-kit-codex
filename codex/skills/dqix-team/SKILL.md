@@ -155,7 +155,21 @@ Once a PR is open, leave its branch as it is. Do not merge or rebase `decomp-mat
 that moves the head after the maintainers gate it, and they resolve conflicts at landing. Never
 close an open PR to fold it into a bigger batch. Send the next batch as a new PR.
 
-## 5. Stop or wrap up
+## 5. Promote what the batch taught (the improvement loop)
+
+`collect` writes each worker's reported lever to `$SP/wlog/levers.tsv`. After a batch lands on
+`decomp-matching`, run `python levercheck.py`. For each landed lever it lists:
+
+1. Check that `worker_src/core.md` does not already teach it.
+2. Isolate the cause: gate the landed source with only that construct removed
+   (`WGATE_ALLOW_COMMITTED=1 python wgate.py ...`). It must stop matching.
+3. Send it as a `core.md` rule citing the address, a few lines, one rule per kit pull request.
+   Run `build_worker_docs.py`, then `prready.py kit` READY. Or decline it in
+   `$SP/wlog/levers_declined.txt`.
+
+This is the one kind of kit pull request this team sends. See `docs/IMPROVEMENT_LOOP.md`.
+
+## 6. Stop or wrap up
 
     python codex/team.py release            closes the issue with a release comment; unfinished rows -> RELEASED
     python codex/team.py reclaim --matches-only   later: re-reserve released matches nobody took, re-gated

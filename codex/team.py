@@ -506,6 +506,21 @@ def quality(path):
     return probs
 
 
+def record_lever(addr, size, before, text, tsv=None):
+    """Append the worker's lever as a $SP/wlog/levers.tsv row (IMPROVEMENT_LOOP.md §2), once per address
+    and text, so levercheck.py asks for it to be promoted once the function lands."""
+    tsv = tsv or os.path.join(SP, "wlog", "levers.tsv")
+    text = " ".join(str(text).split())
+    if os.path.exists(tsv):
+        for line in open(tsv, encoding="utf-8", errors="ignore"):
+            f = line.rstrip("\n").split("\t")
+            if len(f) >= 4 and f[0] == addr and f[3] == text:
+                return
+    os.makedirs(os.path.dirname(tsv), exist_ok=True)
+    with open(tsv, "a", encoding="utf-8") as fh:
+        fh.write(f"{addr}\t{size}\t{int(before)}\t{text}\n")
+
+
 def collect(keys, report_files=None):
     rows = load_ledger()
     by = {key(r): r for r in rows}
@@ -535,6 +550,8 @@ def collect(keys, report_files=None):
                 r["status"], r["note"] = "RESIDUE", "QUALITY: " + "; ".join(probs)
             else:
                 r["status"], r["note"] = "MATCH", ""
+                if (rep.get("lever") or "").strip():
+                    record_lever(k[1], r["size"], rep.get("lever_bytes") or 0, rep["lever"])
         else:
             r["status"], r["note"] = "RESIDUE", verdict[:200]
         print(f"{k[0]} {k[1]}: {r['status']} {r['note']}".rstrip())

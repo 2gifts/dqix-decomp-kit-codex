@@ -113,7 +113,8 @@ whole final message.
     {"functions": [
       {"module": "017", "addr": "0218dd18", "verdict": "MATCH", "residue": "", "size": 568,
        "file": "<abs path>", "description": "Object/world-node collision push-out",
-       "notes": "callee X signature guessed from call site"}
+       "lever": "bound the add to its own local `int reach = a + b;` to fix the operand order",
+       "lever_bytes": 4, "notes": "callee X signature guessed from call site"}
     ]}
 
 - Include one entry per assigned address.
@@ -121,6 +122,11 @@ whole final message.
   `NOT_STARTED`.
 - `description` is a 3-8 word noun phrase saying what the function does; it goes straight into the
   PR table.
+- `lever` names the source transformation that closed the last residue, concretely, and
+  `lever_bytes` is the byte difference just before it. Leave `lever` empty (`lever_bytes` 0) when
+  the first natural source matched or only declaration order moved. `collect` records each lever
+  in `$SP/wlog/levers.tsv`, so the improvement loop can promote it
+  (`docs/IMPROVEMENT_LOOP.md`).
 - `notes` lists anything the coordinator must know:
   - a new struct that duplicates an existing header
   - a guessed signature

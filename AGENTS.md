@@ -7,9 +7,11 @@ maintained by its owner, who merges upstream into it. Matched functions still go
 
 ## Start here (every Codex session)
 
-The job is matched functions landing upstream in large, clean pull requests. Nothing else counts:
-no kit pull requests, no kit edits, no tooling projects. If a kit tool is broken, tell the user the
-command and the output line, and work on something else.
+The job is matched functions landing upstream in large, clean pull requests, and the levers that
+closed them going back to the kit. The only kit pull requests this team sends are recipes: one
+`worker_src/core.md` rule per PR, citing a landed address whose cause you isolated (`dqix-team`
+step 5, `docs/IMPROVEMENT_LOOP.md`). No other kit edits, no tooling projects. If a kit tool is
+broken, tell the user the command and the output line, and work on something else.
 
 1. `python kit_update.py`, then `python codex/team.py sync` and `python codex/team.py status`. Run
    anything that talks to GitHub (`kit_update.py`, `team.py sync`/`candidates`/`reserve`/`issue`/
@@ -82,8 +84,10 @@ new work (exit 3) until you update. Your own unpublished kit commits are kept on
 
 ## Changing the kit
 
-Codex sessions never change this kit and never open kit pull requests, upstream or here. The
-fork's owner changes it and merges upstream into it (`docs/CODEX_FORK.md`). If a script fails, or a
+Codex sessions change this fork never, and upstream only through recipe pull requests to
+ZevyaDev/dqix-decomp-kit (`dqix-team` step 5): one `core.md` rule citing a landed address,
+`prready.py kit` READY. Push recipe branches from a clean checkout of upstream `main`, not from
+this fork. The fork's owner changes the fork and merges upstream into it (`docs/CODEX_FORK.md`). If a script fails, or a
 rule here contradicts what the tools do, stop that line of work and report the exact command and
 output to the user.
 
