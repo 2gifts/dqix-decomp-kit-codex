@@ -446,6 +446,22 @@ DEEPSEEK = {"base_url": "https://api.deepseek.com/anthropic", "key_env": "DEEPSE
 USAGE = os.path.join(TEAM, "usage.tsv")
 
 
+def provider_key():
+    """The provider key from this process's environment, else from the Windows user environment
+    (a variable set after this shell started is only in the registry)."""
+    name = DEEPSEEK["key_env"]
+    if os.environ.get(name):
+        return os.environ[name]
+    if os.name == "nt":
+        import winreg
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+                return winreg.QueryValueEx(k, name)[0] or None
+        except OSError:
+            return None
+    return None
+
+
 def claude_bin():
     exe = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude.exe")
     if not os.path.exists(exe):
@@ -539,10 +555,10 @@ def run_worker_claude(r, lbl, a):
                                   "lever": "", "lever_bytes": 0, "notes": "matched by prework (no model)"}]},
                   open(report, "w", encoding="utf-8"))
         return "prework", report, 0.0
-    key_env = DEEPSEEK["key_env"]
-    if not os.environ.get(key_env):
-        die(f"set {key_env} in the environment first")
-    env = dict(os.environ, ANTHROPIC_BASE_URL=DEEPSEEK["base_url"], ANTHROPIC_API_KEY=os.environ[key_env],
+    api_key = provider_key()
+    if not api_key:
+        die(f"set {DEEPSEEK['key_env']} first")
+    env = dict(os.environ, ANTHROPIC_BASE_URL=DEEPSEEK["base_url"], ANTHROPIC_API_KEY=api_key,
                ANTHROPIC_MODEL=a.model, ANTHROPIC_SMALL_FAST_MODEL="deepseek-flash",
                ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-flash", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1",
                DISABLE_AUTOUPDATER="1", PYTHONUTF8="1", DQIX_NO_FRESHNESS="1")
@@ -589,8 +605,9 @@ def cmd_dispatch(a):
     claude = a.engine == "claude"
     if claude:
         claude_bin()
-        if not os.environ.get(DEEPSEEK["key_env"]):
-            die(f"set {DEEPSEEK['key_env']} in the environment first")
+        if not provider_key():
+            die(f"set {DEEPSEEK['key_env']} first: in PowerShell, "
+                f"[Environment]::SetEnvironmentVariable('{DEEPSEEK['key_env']}', '<key>', 'User')")
     elif not shutil.which("codex"):
         die("codex CLI not on PATH")
     per = 1 if claude else a.per
