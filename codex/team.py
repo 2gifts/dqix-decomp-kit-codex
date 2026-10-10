@@ -259,7 +259,7 @@ def cmd_sync(a):
 def candidate_rows(cfg, module=None, lo=None, hi=None, include_released=False):
     lo = cfg["min_size"] if lo is None else lo
     hi = cfg["max_size"] if hi is None else hi
-    taken = {key(r) for r in load_ledger() if include_released or r["status"] != "RELEASED"}
+    taken = {key(r) for r in load_ledger() if not include_released or r["status"] != "RELEASED"}
     blocked = reserved_elsewhere(cfg) | skiplisted()
     out = []
     for mod in modules():
@@ -273,6 +273,8 @@ def candidate_rows(cfg, module=None, lo=None, hi=None, include_released=False):
             if i >= 0 and body[i][0] <= ai < body[i][1]:
                 continue
             if not (lo <= size <= hi) or addr in blocked or (mod, addr) in taken:
+                continue
+            if not include_released and os.path.exists(wip(mod, addr)):
                 continue
             near = min([ai - body[i][1] if i >= 0 else 1 << 30, body[i + 1][0] - ai if i + 1 < len(body) else 1 << 30])
             out.append({"module": mod, "addr": addr, "size": size, "name": name, "near": near, "matched": len(body)})
