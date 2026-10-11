@@ -24,7 +24,7 @@ funcs = sorted((int(m.group(2), 16), m.group(1)) for m in re.finditer(
     open(f"{REPO}/{cfg}/symbols.txt", encoding="utf-8").read()))
 
 obj = f"{os.path.dirname(os.path.abspath(__file__))}/_tucheck_{os.getpid()}.o"
-r = subprocess.run([buildcfg.CC] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=REPO,
+r = subprocess.run(buildcfg.tool_command(buildcfg.CC) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=REPO,
                    capture_output=True, text=True)
 if r.returncode:
     sys.exit("COMPILE " + (r.stdout + r.stderr)[-1500:])

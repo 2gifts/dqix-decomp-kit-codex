@@ -98,8 +98,8 @@ Interceptor.attach(ptr('0x4feba0'), { onEnter(a) { this.pc = a[0]; }, onLeave(r)
 
 
 def run(src, out):
-    cc = buildcfg.cc_path(None).replace("/", "\\")
-    argv = [cc] + list(buildcfg.FLAGS) + ["-c", src, "-o", os.path.splitext(src)[0] + ".st.o"]
+    cc = os.path.normpath(buildcfg.cc_path(None))
+    argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", os.path.splitext(src)[0] + ".st.o"]
     events = []
     done = threading.Event()
     device = frida.get_local_device()

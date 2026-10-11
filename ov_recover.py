@@ -12,11 +12,14 @@ import kitpaths as _kp
 import re, subprocess, os, sys, glob, time, shutil, hashlib
 import srcdir
 import culprits
+import buildcfg
 # The scratchpad is wherever THIS file lives; the old absolute %TEMP% path was deleted by Windows
 # cleanup on 2026-08-24 and took the whole pipeline with it.
 SP = _kp.SP
 KIT = _kp.KIT
 REPO = _kp.REPO
+REGION = buildcfg.REGION
+TAG = REGION.upper()
 os.chdir(REPO)
 MOD = sys.argv[1]              # "000".."035" (an overlay) or "main" (the arm9 module)
 MAIN = (MOD == "main")
@@ -25,7 +28,7 @@ if MAIN:
     SUF     = "main"                       # suffix for wlog/hold/stage filenames
     TAGPRE  = "func_"                      # `// USA: func_<addr>` — no `ov` infix
     HEXC    = "[0-9a-fA-F]"                # main's delinks.txt mixes UPPER and lowercase hex
-    CFG     = "config/usa/arm9"            # not .../overlays/ovNN
+    CFG     = buildcfg.config_dir(MOD)     # not .../overlays/ovNN
     SRCDIR  = srcdir.for_module("main")
     INT     = f"{KIT}/integrate.py"         # one integrator for every module
     INTARGS = ["main"]
@@ -39,7 +42,7 @@ else:
     SUF     = f"ov{OV}"
     TAGPRE  = f"func_ov{OV}_"
     HEXC    = "[0-9a-f]"
-    CFG     = f"config/usa/arm9/overlays/ov{OV}"
+    CFG     = buildcfg.config_dir(MOD)
     SRCDIR  = srcdir.for_module(OV)
     INT     = f"{KIT}/integrate.py"         # one integrator for every module
     INTARGS = [OV]
@@ -49,7 +52,7 @@ else:
 # The `// USA:` tag matcher. The overlay pattern is byte-identical to the old hardcoded one; main only
 # adds \b so `func_<8hex>` can never swallow a 9th hex digit. The two can never cross-match: after
 # `// USA: func_` an overlay tag continues `ov...`, and `o` is not a hex digit.
-TAGRE = rf'// USA: {TAGPRE}({HEXC}{{8}})' + (r'\b' if MAIN else '')
+TAGRE = rf'// {TAG}: {TAGPRE}({HEXC}{{8}})' + (r'\b' if MAIN else '')
 def tag_addr(txt):
     m = re.search(TAGRE, txt)
     return m.group(1).lower() if m else None       # .lower() is a no-op on the overlay class
@@ -73,16 +76,16 @@ def bound_addrs():
 
 
 def retag(txt, fp):
-    m = re.search(r"^// USA: (\S+)[^\n]*\n([^\n]*)", txt, re.M)
+    m = re.search(rf"^// {TAG}: (\S+)[^\n]*\n([^\n]*)", txt, re.M)
     if not m:
         return txt
     a = bound_addrs().get(m.group(1))
     if not a:
-        print(f"NO-TAG {os.path.basename(fp)}: '// USA: {m.group(1)}' names no function of this module")
+        print(f"NO-TAG {os.path.basename(fp)}: '// {TAG}: {m.group(1)}' names no function of this module")
         return txt
     keep = "" if 'extern "C"' in m.group(2) else " // KEEP-NAME"
     print(f"RETAG {os.path.basename(fp)}: {m.group(1)} -> {TAGPRE}{a}")
-    return txt[:m.start()] + f"// USA: {TAGPRE}{a}{keep}" + txt[m.start() + 8 + len(m.group(1)):]
+    return txt[:m.start()] + f"// {TAG}: {TAGPRE}{a}{keep}" + txt[m.end(1):]
 # VERIFICATION MODE (default OFF — production behaviour is completely unchanged when unset).
 # NOCOMMIT=1 runs the entire pipeline for real — gather, classify, integrate, full `ninja check` gate —
 # but makes no git commit, and therefore also skips the final clean() so the gated tree survives for
@@ -240,13 +243,15 @@ def sweep_foreign():
 
 
 def gate():
-    for p in ["build/usa/arm9.o"] + glob.glob("build/usa/build/*.bin"):
+    for p in [f"build/{REGION}/arm9.o"] + glob.glob(f"build/{REGION}/build/*.bin"):
         try: os.remove(p)
         except OSError: pass
     sweep_foreign()
-    configure_args = ["python", "tools/configure.py", "usa", "--no-extract"]
+    configure_args = ["python", "tools/configure.py", REGION, "--no-extract"]
     if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
         configure_args += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
+    if os.environ.get("DQIX_WINE"):
+        configure_args += ["-w", os.environ["DQIX_WINE"]]
     cf = sh(*configure_args)
     # MAIN-ONLY PREFLIGHT (~free: `ninja check` depends on `ninja delink` anyway, so this only pulls
     # that step forward). A new main delink entry re-splits one of dsd's gap modules, and a module
@@ -292,7 +297,7 @@ def sanitize(text, addr):
     # Must accept THUMB as well as ARM. With ARM-only this returned None for every thumb function, so
     # place() skipped writing the file entirely and 28 of 31 gate-verified thumb matches silently
     # vanished before the integrator ever saw them.
-    m = re.search(rf'// USA: {TAGPRE}{addr}[^\n]*\n.*?\b(?:ARM|THUMB)\b[^\n;{{]*?\b([A-Za-z_]\w*)\s*\(',
+    m = re.search(rf'// {TAG}: {TAGPRE}{addr}[^\n]*\n.*?\b(?:ARM|THUMB)\b[^\n;{{]*?\b([A-Za-z_]\w*)\s*\(',
                   text, re.S) or re.search(r'\b(?:ARM|THUMB)\b[^\n(]*?\b([A-Za-z_]\w*)\s*\(', text)
     if not m: return None, text
     name = m.group(1)
@@ -519,12 +524,12 @@ def place(addrs):
             bn = f"{SRCDIR}/{name}_{a}.cpp"
         if bn.rsplit('/', 1)[-1][:-4] in _FOREIGN_STEMS or bn in used:   # still not unique -> force it
             bn = f"{SRCDIR}/{TAGPRE}{a}.cpp"
-        if f"// USA: {TAGPRE}{a}" not in txt:
+        if f"// {TAG}: {TAGPRE}{a}" not in txt:
             _defpat = ('(?m)^(?:extern "C"\\s+)?'
                        '(?:__declspec\\([^)]*\\)\\s*)?'
                        '(?:ARM|THUMB)[^' + chr(10) + ';{]*' + chr(92) + '(')
             _m = re.search(_defpat, txt)
-            _tag = f"// USA: {TAGPRE}{a}" + chr(10)
+            _tag = f"// {TAG}: {TAGPRE}{a}" + chr(10)
             txt = (txt[:_m.start()] + _tag + txt[_m.start():]) if _m else (_tag + txt)
         open(bn, 'w', encoding='utf-8').write(txt)
         carry_cc_override(a, bn)
@@ -582,8 +587,8 @@ def try_set(addrs):
     print(f"  DBG-PLACED untracked={len(_u)} {[os.path.basename(x) for x in _u[:3]]}")
     if _u:
         _tx = open(_u[0], encoding="utf-8", errors="ignore").read()
-        print(f"  DBG-TAG {os.path.basename(_u[0])} hasUSA={chr(47)+chr(47)+chr(32)}USA: "
-              f"{TAGPRE} in _tx -> {(chr(47)+chr(47)+chr(32)+chr(85)+chr(83)+chr(65)+chr(58)+chr(32)+TAGPRE) in _tx}")
+        print(f"  DBG-TAG {os.path.basename(_u[0])} has{TAG}=// {TAG}: "
+              f"{TAGPRE} in _tx -> {('// ' + TAG + ': ' + TAGPRE) in _tx}")
     _r = sh("python", INT, *INTARGS)
     _TRACKED = None   # delegated integrator is a mutation boundary
     try:
@@ -613,7 +618,7 @@ def try_set(addrs):
         except OSError:
             continue
         if not any(a.lower() in _wired
-                   for a in re.findall(rf"// USA: {TAGPRE}([0-9a-fA-F]{{8}})\b", _txt)):
+                   for a in re.findall(rf"// {TAG}: {TAGPRE}([0-9a-fA-F]{{8}})\b", _txt)):
             sh("git", "checkout", "--", _rel)
             print(f"  REVERT-REJECTED {_rel}")
     return gate()

@@ -48,7 +48,7 @@ def rom_text():
 
 def our_text(src):
     obj = os.path.splitext(src)[0] + "_cd.o"
-    r = subprocess.run([CC] + FLAGS + ["-c", src, "-o", obj], capture_output=True, text=True,
+    r = subprocess.run(buildcfg.tool_command(CC) + FLAGS + ["-c", src, "-o", obj], capture_output=True, text=True,
                        cwd=REPO)
     if r.returncode:
         sys.exit(r.stdout[-2000:] + r.stderr[-2000:])

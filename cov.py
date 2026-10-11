@@ -20,10 +20,12 @@ import json
 import os
 import re
 import sys
+import buildcfg
 
 REPO = _kp.REPO
-REPORT = f"{REPO}/build/usa/report.json"
-CFG = f"{REPO}/config/usa/arm9"
+REGION = buildcfg.REGION
+REPORT = f"{REPO}/build/{REGION}/report.json"
+CFG = f"{REPO}/{buildcfg.config_dir('main')}"
 
 FUNC = re.compile(r"(?m)^(\S+)\s+kind:function\((?:arm|thumb),size=0x([0-9a-fA-F]+)\)"
                   r"\s+addr:0x([0-9a-fA-F]+)")

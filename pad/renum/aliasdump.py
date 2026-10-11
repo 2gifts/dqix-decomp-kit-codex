@@ -91,7 +91,7 @@ send({worst: cstr(ptr('0x5ef31c')), worsthex: hex(ptr('0x5ef31c'), 16)});
 
 def run(src, cfg):
     obj = os.path.join(os.environ.get("TEMP", "."), "aliasdump_%d.o" % os.getpid())
-    argv = [buildcfg.cc_path(None).replace("/", "\\")] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
+    argv = buildcfg.tool_command(os.path.normpath(buildcfg.cc_path(None))) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
     events = []
     done = threading.Event()
     device = frida.get_local_device()

@@ -94,9 +94,30 @@ def mut_callee(txt, own_addr):
     undefined symbol at all, so the gate rightly says MATCH and the test would report a hole that
     is not there. That false positive is exactly the kind of claim this harness exists to prevent.
     """
+    # A declaration/call in another region's #if is not emitted. Select a callee
+    # from actual relocations so such a no-op cannot be reported as a gate hole.
+    import buildcfg
+    from elftools.elf.elffile import ELFFile
+    with tempfile.TemporaryDirectory(prefix="callee_", dir=f"{SP}/handwork") as work:
+        src, obj = os.path.join(work, "sample.cpp"), os.path.join(work, "sample.o")
+        with open(src, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(txt)
+        r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(os.environ.get("MWCC")))
+                           + list(buildcfg.FLAGS) + os.environ.get("WGATE_FLAGS", "").split()
+                           + ["-c", src, "-o", obj], cwd=REPO, capture_output=True, text=True)
+        if r.returncode:
+            raise RuntimeError(f"callee mutation fixture did not compile: {r.stdout}{r.stderr}")
+        with open(obj, "rb") as fh:
+            elf = ELFFile(fh)
+            symtab = elf.get_section_by_name(".symtab")
+            referenced = {symtab.get_symbol(rr["r_info_sym"]).name
+                          for sec in elf.iter_sections() if hasattr(sec, "iter_relocations")
+                          and elf.get_section(sec["sh_info"])["sh_flags"] & 4
+                          for rr in sec.iter_relocations()
+                          if symtab.get_symbol(rr["r_info_sym"])["st_shndx"] == "SHN_UNDEF"}
     for m in re.finditer(r"\b(func_[0-9a-fA-F]{8})\s*\(", txt):
-        if m.group(1) != f"func_{own_addr.lower()}":
-            return txt.replace(m.group(1), "func_deadbeef"), "UNDEF"
+        if m.group(1) != f"func_{own_addr.lower()}" and m.group(1) in referenced:
+            return re.sub(rf"\b{m.group(1)}\b", "func_deadbeef", txt), "UNDEF"
     return None
 
 

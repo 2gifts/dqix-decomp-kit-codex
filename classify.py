@@ -77,14 +77,14 @@ def _ctx(MOD):
     if MOD in _CTX: return _CTX[MOD]
     MAIN = (MOD == 'main')
     if MAIN:
-        CFG = f"{REPO}/config/usa/arm9"
-        pristine = open(f"{REPO}/extract/usa/arm9/arm9.bin", "rb").read()
+        CFG = f"{REPO}/{buildcfg.config_dir(MOD)}"
+        pristine = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
         HEXC, PRE, ANCH = "[0-9a-fA-F]", "func_", "(?m)^"   # main's configs mix hex case; the ^ anchor
         # stops `func_<8hex>` from matching inside a `func_ovNNN_<8hex>` symbol (it cannot anyway — `o`
         # is not hex — but the anchor makes that structural rather than accidental).
     else:
-        CFG = f"{REPO}/config/usa/arm9/overlays/ov{MOD}"
-        pristine = open(f"{REPO}/extract/usa/arm9_overlays/ov{MOD}.bin", "rb").read()
+        CFG = f"{REPO}/{buildcfg.config_dir(MOD)}"
+        pristine = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
         HEXC, PRE, ANCH = "[0-9a-f]", f"func_ov{MOD}_", ""
     _dl = open(f"{CFG}/delinks.txt").read()
     # Section map (header block) — ALL code sections, not just .text. `.init` holds
@@ -110,7 +110,7 @@ def _ctx(MOD):
     else:
         base = min(int(m, 16) for m in re.findall(r'start:0x([0-9a-f]+)', _dl))
     symaddr = buildcfg.lcf_symbols()
-    for p in glob.glob(f"{REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
+    for p in glob.glob(f"{REPO}/{buildcfg.config_dir('main')}/**/symbols.txt", recursive=True):
         for l in open(p):
             m = re.match(r'(\S+)\s+kind:\w+[^\n]*?addr:0x([0-9a-fA-F]+)', l)
             if m:
@@ -195,7 +195,7 @@ def classify(MOD, cands, workdir=None, names=None):
             if keys[addr] in _verdicts():
                 out[addr] = _verdicts()[keys[addr]]; continue
         open(src, 'w', encoding='utf-8').write(txt)
-        r = subprocess.run([_cc] + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
+        r = subprocess.run(buildcfg.tool_command(_cc) + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
                            cwd=REPO)
         if r.returncode != 0:
             out[addr] = 'COMPILE'; continue
