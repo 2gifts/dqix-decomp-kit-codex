@@ -521,7 +521,9 @@ definition (`idx = i - 1;`, reusing a dead parameter) (`021d8c30`). The same var
 place also works: `last = shown; last -= 1;` instead of `last = shown - 1;` (`021db634`, colorsweep r63).
 A function-wide swap decided by one high-pressure loop: bind the ELEMENT address once
 (`SafeAllocator* alloc = &self->allocs[2]; alloc->Reset();`, pass `alloc`) instead of a base plus
-`&alloc[2]` at each use (`02155e28`).
+`&alloc[2]` at each use (`02155e28`). An index local shared by two read-modify-writes is an
+element pointer per site instead: `int* pA = &arrA[e->slot]; *pA = f(*pA);` closed an r7/r8
+swap colorforce named as one vreg order (`021f9874`).
 A pointer coalescing onto a base's register (`entries = tbl + 4` sharing `tbl`'s r7) is the same
 fix: share ONE function-scope variable between that case and another loop so it has two
 definitions (`021f2e6c`). Same when two values sit in each other's callee-saved registers and
@@ -786,7 +788,8 @@ and compiler-temp spills are laid out BELOW the declared scalars:
     if (e->mode == 1 && obj->f311 != 0) waitUnique = 0;            // slot 0x14, 49 bytes
     if (e->mode == 1) waitUnique = obj->f311 != 0 ? 0 : waitUnique;  // slot 0xc,  35 bytes
 
-Same instructions (store 1, then `movne`/`strne` 0), different slot. `ov025:021ebb90`.
+Same instructions (store 1, then `movne`/`strne` 0), different slot. `ov025:021ebb90`. An if/else
+1/0 flag written `changed = (a | b) ? 1 : 0;` takes the lowest slot the same way (`0219d250`).
 
 ### BREAK A CSE WITHOUT SWAPPING REGISTERS — build the named pointer through a `static inline`
 When the ROM RECOMPUTES `&obj->arr[i]` for a call but ours reuses a named `e = &obj->arr[i]`, every

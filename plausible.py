@@ -26,7 +26,7 @@ def findings(text):
 
     for i in range(start, len(lines)):
         ln = lines[i]
-        m = re.match(r"^\s+volatile\s+[^;(]*?\b(%s)\s*(=\s*([^;]+))?;" % IDENT, ln)
+        m = re.match(r"^\s+(?:const\s+)?volatile\s+[^;(]*?\b(%s)\s*(=\s*([^;]+))?;" % IDENT, ln)
         if m and not (m.group(3) and HW.search(ln)):
             out.append((i + 1, "VOLATILE-LOCAL", m.group(1)))
 

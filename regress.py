@@ -2776,6 +2776,16 @@ def _integ_bootstrap():
     return None
 
 
+@check("plausible.py flags a const volatile pointer local",
+       "`const volatile struct CombatantStruct* c_v = c;` in 021f9874's worker attempt passed "
+       "plausible.py because its volatile check required the line to start with `volatile`")
+def _plausible_const_volatile():
+    text = "void f(struct S* c) {\n    const volatile struct S* c_v = c;\n    g(c_v);\n}\n"
+    if "VOLATILE-LOCAL" not in repr(load("plausible").findings(text)):
+        return "plausible.py did not flag `const volatile struct S* c_v`"
+    return None
+
+
 @check("colorforce, schedforce and renum read the size argument the same way",
        "schedforce parsed the size as hex while colorforce took decimal, so the plan's 'same "
        "arguments' run read 2816 as 0x2816 and crashed in struct.unpack on ov000:02165490")
