@@ -352,6 +352,13 @@ register) and not a `static inline` init (too big: mwcc emits it out of line) (`
 
 ## SCRATCH REGISTERS (r0-r3, ip, lr) ANSWER ONLY TO OPERAND ORDER
 
+**ARGUMENT CONSTANTS SET BEFORE THE ADDRESS THEY SHOULD FOLLOW = TYPED CONSTANT LOCALS.** An `int`
+local holding a literal is propagated into every block, so the call gets `mov rN, #imm`, which loses
+the pass-1 tie to an address `add`. An enum-typed local defined in an earlier block is not propagated
+across blocks: its uses become register copies that win the tie, as the ROM's `mov r1, #0xc00`
+ahead of `add r0, r4, #0x800` shows. `enum PairTableSize { kPairTableSize = 0xc00 };` then
+`PairTableSize size = kPairTableSize;` passed to the call (`02185634`).
+
 **CHECK THE FUNCTION'S OWN RETURN TYPE, NOT JUST ITS CALLEES** (`ov017:021ce5b4`).
 A scaffold's `void` is a guess: if the target leaves a derived pointer in r0 on
 success and each already-null call result in r0 on early exits, returning that
