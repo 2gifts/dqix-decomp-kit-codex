@@ -1332,7 +1332,10 @@ wrong and a byte-perfect function still fails the gate:
   `func_ov023_021d8a40`, not ov026. Read the name out of the config; never construct it.
 - to call a C++ callee with specific argument widths, declare it `extern "C"` under its MANGLED name
   (`_Z25EnqueueEventTag8_021cc4b8hhi`) with the widths you need — an int param home is then emitted
-  in declaration order with no `and #0xff` truncation at the call (`021cc388`).
+  in declaration order with no `and #0xff` truncation at the call (`021cc388`). The reverse: a
+  parameter the mangling spells `j` is `unsigned int`; declaring it `unsigned char` reorders the
+  argument setup. Keep `unsigned int` and narrow at the call, `(unsigned char)(idx + 1) & 0xff`
+  (`021539a0`; the cast or the mask alone stays SCHED 7).
 - a symbol may mangle as void-param even when you pass arguments (`_Z21BlankFunction020a28dcv` with
   4 args, `021982ac`).
 - **but pool-word FUNCTION ADDRESSES resolve to mangled symbols** (`_Z22TransferMainObjPaletteiij`)
