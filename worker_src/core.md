@@ -864,7 +864,9 @@ is register NUMBERS around a byte value, retype it before touching anything else
   preceding store), declare it `short`. If it is assigned from a call, also declare that callee as
   returning `short`, or the new truncation costs more than it saves; the return type is not part of
   the symbol, so the link is unchanged. Inert for this: `volatile` (reloads everywhere), address-taken
-  (loads once), a narrow ternary assigned into an `int`. colorsweep `r51_short_spill`.
+  (loads once), a narrow ternary assigned into an `int`. colorsweep `r51_short_spill`. A spill
+  `str` scheduled ahead of an argument `mov` is the same lever: a `short` flag from a callee
+  declared returning `short` (`021e4c04`).
 - **a local that copies a field takes the FIELD's type** (`0219e384`): `unsigned char kind`,
   `unsigned short value`, `unsigned char tag = detail[1]`, and the callee assigned into `value`
   declared returning `unsigned short`, put a spilled store ahead of the next load at two sites.
