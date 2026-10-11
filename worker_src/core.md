@@ -539,7 +539,9 @@ A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend sp
 source reaches it as ONE member at its full offset (`+0x684`), not through the `+0x284` sub-object's
 `+0x400` field. That gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`). A
 register holding a partial sum (`save+0x324`) with `#0x2400` re-added at each use is the same
-split: one access at the full `+0x2724` fixes a function-wide callee-saved swap (`021adcb0`).
+split: one access at the full `+0x2724` fixes a function-wide callee-saved swap (`021adcb0`). A
+loop-invariant pointer at an unencodable `+0xdf8` bound before the loop does the same and also
+schedules its load ahead of a result copy (`021e33b4`).
 Prefer a struct member at that offset over raw `(u8*)` arithmetic; both compile the same.
 
 ### A ZERO WRITTEN AFTER CONSTANT STORES TAKES THE OTHER SCRATCH REGISTER
