@@ -1290,7 +1290,10 @@ together. A switch arm that does only what "no arm" does should not be written.
 - **backward `goto` into a label** reproduces mwcc's tail-merge of a duplicated reset block
   (`02002b90`).
 - **EARLY RETURN vs SINGLE EXIT decides WHERE a returned constant is materialised — both directions
-  are levers.** Single exit keeps it live past the test so it must be materialised first
+  are levers.** It also moves a call argument: `if (flag != 0) { stores; func(self); } else
+  { counter++; } return;` schedules `mov r0, sl` after the state store where the guard
+  `if (flag == 0) { counter++; return; }` does not (`02164400`). Single exit keeps it live past the
+  test so it must be materialised first
   (`020a1bb4` + its twin `020a1ccc`); early return out of the success branch instead makes the FAIL
   path materialise its `NULL` before the cleanup calls rather than sinking it to the final return
   (`0207568c`, 296B, 53 bytes — but only with `#pragma opt_propagation off` at function scope, which
