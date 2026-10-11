@@ -2776,6 +2776,24 @@ def _integ_bootstrap():
     return None
 
 
+@check("an evolve run reserves its address against worker claims",
+       "evolve ran on ov009 02185634 while a worker claimed the same address, paying twice for one "
+       "function: nothing put an evolve target in wlog/evolve_queue.txt, the list claim.py skips")
+def _evolve_reserves_address():
+    E = load("evocap")
+    with tempfile.TemporaryDirectory() as d:
+        q = os.path.join(d, "evolve_queue.txt")
+        E.reserve("009", "02185634", q)
+        E.reserve("009", "02185634", q)
+        E.reserve("main", "0201099c", q)
+        lines = open(q, encoding="utf-8").read().split()
+        if lines != ["ov009:02185634", "main:0201099c"]:
+            return "evolve_queue.txt holds %r" % lines
+    if "--reserve ${MOD}" not in open(f"{KIT}/.claude/workflows/dqix-evolve.js", encoding="utf-8").read():
+        return "the evolve workflow does not pass --reserve to evocap.py"
+    return None
+
+
 @check("plausible.py flags a const volatile pointer local",
        "`const volatile struct CombatantStruct* c_v = c;` in 021f9874's worker attempt passed "
        "plausible.py because its volatile check required the line to start with `volatile`")
