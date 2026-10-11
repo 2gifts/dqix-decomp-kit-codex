@@ -2,7 +2,7 @@
 
     python plausible.py <file.cpp> [...]      prints one line per finding; exit 1 if any
 
-Used by wgate (RESIDUE IMPLAUSIBLE) so a byte-exact file built on a fake construct is not a match.
+blocker.py records a miss on a flagged file as IMPLAUSIBLE; pad/evo_score.py penalises one.
 """
 import re
 import sys

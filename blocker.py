@@ -4,6 +4,7 @@
     python blocker.py <main|NNN> <addr> <file.cpp> --print
 
 Appends one row to wlog/blockers.tsv: epoch, module, addr, size, class, metric, detail, evidence.
+A residue on a file plausible.py flags is recorded as IMPLAUSIBLE and exits 1: not parked.
 """
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
@@ -14,10 +15,13 @@ import subprocess
 import sys
 import time
 
+import plausible
+
 SP = _kp.SP
 KIT = _kp.KIT
 TSV = f"{SP}/wlog/blockers.tsv"
 RESIDUE_LINE = re.compile(r"^RESIDUE\s+(\S+)\s+(-?\d+)\s*(.*)$", re.M)
+NOT_RESIDUE = {"MATCH", "UNKNOWN", "ALREADY-COMMITTED"}
 
 
 def gate_residue(mod, addr, src):
@@ -59,6 +63,21 @@ def find_artifact(mod, addr):
     return None
 
 
+def measure(mod, addr, src):
+    if src == "-" or not os.path.isfile(src):
+        src = find_artifact(mod, addr) or src
+    if src == "-" or not os.path.isfile(src):
+        return "NO-ARTIFACT", -1, "no candidate source on disk", ""
+    src = os.path.abspath(src)
+    cls, metric, detail = gate_residue(mod, addr, src)
+    with open(src, encoding="utf-8", errors="ignore") as fh:
+        invented = plausible.findings(fh.read())
+    if invented and cls not in NOT_RESIDUE:
+        detail = "%s %s; %s" % (cls, detail, "; ".join("%s %s" % (k, w) for _l, k, w in invented))
+        cls = "IMPLAUSIBLE"
+    return cls, metric, detail, src.replace(chr(92), "/")
+
+
 def record(mod, addr, size, cls, metric, detail, evidence):
     os.makedirs(f"{SP}/wlog", exist_ok=True)
     row = "\t".join(str(x) for x in
@@ -78,19 +97,16 @@ def main():
     if len(sys.argv) > 4 and sys.argv[4].isdigit():
         size = int(sys.argv[4])
 
-    if src == "-" or not os.path.isfile(src):
-        src = find_artifact(mod, addr) or src
-    if src == "-" or not os.path.isfile(src):
-        cls, metric, detail, evidence = "NO-ARTIFACT", -1, "no candidate source on disk", ""
-    else:
-        src = os.path.abspath(src)
-        cls, metric, detail = gate_residue(mod, addr, src)
-        evidence = src.replace(chr(92), "/")
-
+    cls, metric, detail, evidence = measure(mod, addr, src)
     if printing:
         print("%s %s %s" % (cls, metric, detail))
         return 0
     print(record(mod, addr, size, cls, metric, detail, evidence))
+    if cls == "IMPLAUSIBLE":
+        print("NOT PARKED: strip what the developers could not have written, go back to the last natural "
+              "form and try another lever from there (worker_src/core.md: A RESIDUE THAT WILL NOT MOVE)",
+              file=sys.stderr)
+        return 1
     return 0
 
 

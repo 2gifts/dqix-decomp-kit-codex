@@ -2616,6 +2616,39 @@ def _compiler_sweep_root_fixture():
             return "buildcfg CLI did not return the configured root"
 
 
+@check("a residue measured on invented code is not parked, queued or counted as an idiom",
+       "a miss on a file with a volatile local was recorded as REGALLOC 4, queued as a near miss and "
+       "resumed in the same invented form instead of being stripped back to a natural one first")
+def _blocker_implausible():
+    B = load("blocker")
+    B.gate_residue = lambda mod, addr, src: ("REGALLOC", 4, "r4<->r5")
+    body = '// USA: func_02000000\nextern "C" int f(int* p) {\n%s    return p[0];\n}\n'
+    with tempfile.TemporaryDirectory() as d:
+        bad, good = os.path.join(d, "bad.cpp"), os.path.join(d, "good.cpp")
+        with open(bad, "w") as fh:
+            fh.write(body % "    volatile int t = p[1];\n")
+        with open(good, "w") as fh:
+            fh.write(body % "")
+        invented, natural = B.measure("main", "02000000", bad), B.measure("main", "02000000", good)
+        if invented[0] != "IMPLAUSIBLE" or "VOLATILE-LOCAL" not in invented[2]:
+            return "invented file measured %r" % (invented,)
+        if natural[0] != "REGALLOC":
+            return "natural file measured %r" % (natural,)
+        tsv = os.path.join(d, "blockers.tsv")
+        with open(tsv, "w") as fh:
+            fh.write("1\tmain\t02000000\t64\tIMPLAUSIBLE\t4\tx\t%s\n" % bad)
+            fh.write("1\tmain\t02000004\t64\tREGALLOC\t6\tx\t%s\n" % good)
+        N = load("nearmiss")
+        N.TSV = tsv
+        N.matched_ranges, N._last_paid, N._declined_classes = (lambda: []), (lambda a: 0), set
+        N.skiplisted = N.staged = N.reserved = set
+        queued = [r[3] for r in N.rows(16, verify=False)]
+        if queued != ["02000004"]:
+            return "near-miss queue held %r" % queued
+    if not load("blockercheck").unfinished({"cls": "IMPLAUSIBLE", "metric": "4", "size": 64}):
+        return "blockercheck counts IMPLAUSIBLE as an uncracked idiom class"
+
+
 if __name__ == "__main__":
     slow = "--slow" in sys.argv
     nbad = run_functional() if slow else 0

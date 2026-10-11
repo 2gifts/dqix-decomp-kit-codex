@@ -170,7 +170,7 @@ def rows(maxb, verify=True, include_worked=False):
             addr = f[2].strip().lower()
             if not re.fullmatch(r"[0-9a-fA-F]{8}", addr):
                 continue
-            if not f[5].strip().isdigit():
+            if not f[5].strip().isdigit() or f[4].strip() == "IMPLAUSIBLE":
                 continue
             gap = int(f[5].strip())
             if addr not in paid:

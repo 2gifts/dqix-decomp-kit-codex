@@ -67,7 +67,7 @@ Fetch the exact recipe rather than reasoning from memory:
 | callee-saved register order wrong | they are allocated in **reverse definition order**; register class is irrelevant |
 | target branches where you emit straight-line code | change the control-flow shape (`core.md`: CONTROL-FLOW SHAPE). `#pragma optimize_for_size on` only as a diagnosis — `wgate` refuses any codegen pragma. If the TARGET is the predicated one, remove whatever made yours branch |
 | target holds a constant you re-materialize | the pointer round-trip or an inline accessor (`core.md`: PREFER THE POINTER ROUND-TRIP TO `opt_propagation off`); the pragma is a diagnosis only |
-| target re-loads what you keep in a register | break CSE with `volatile` (a plain cast is inert); `opt_common_subs off` is a diagnosis only |
+| target re-loads what you keep in a register | re-read it at the second use or read it through an accessor (`core.md`: `opt_common_subs off` closes it); the pragma is a diagnosis only |
 | spill/temp mismatch | named local vs CSE temp; type width is a regalloc lever, and byte-param coercion beats source casts |
 | block order differs | control-flow shape: if/else-if chains, tail sharing, diamond order |
 | `UNDEF-SYM`, or a call to the wrong symbol | `extern "C"` and mangling — pool-word addresses resolve MANGLED |
@@ -98,9 +98,15 @@ a `colorsweep.py` rule, a repair, or a `core.md` rule citing the address, with i
   not; "won't match" has been wrong here repeatedly.
 * **Do not hatch asm.** The project goal is very little asm in the final product; asm is endgame
   residue only.
+* **Before parking, ask whether a developer would have written your source, and backtrack.** Run
+  `python $KIT/plausible.py <file.cpp>` and read the whole file for what `core.md` "A RESIDUE THAT
+  WILL NOT MOVE IS POINTING AT CODE YOU INVENTED" lists. Go back to the last natural form (one typed
+  struct, named members, no invented macros or casts) and try a different lever from there, even
+  when it gates worse.
 * Park it: `python $KIT/blocker.py <main|NNN> <addr> <file.cpp> <size>` records the measured residue
   class, and the function's handoff records every form already disproven, so the next attempt does
   not re-buy the same dead ends. Only the kit's maintainers add `worker_src/deadends.md` rows.
+  `blocker.py` records a file `plausible.py` flags as `IMPLAUSIBLE` and exits 1: that is not parked.
 * If a novel transformation DID close it, record it as a lever (one tab-separated line in
   `$SP/wlog/levers.tsv`: `<addr>\t<size>\t<bytediff before>\t<transformation>`) so it can be promoted
   into the worker doc — a lever that reaches workers is worth more than the single function.

@@ -54,6 +54,8 @@ def unfinished(r):
     # A size class only names an IDIOM while the gap is small. `UNDERGEN 8360` on a 0x23a0 function
     # is a worker that did not finish writing it, and no recipe addresses that -- counting those as
     # uncracked members holds the dispatcher for work that is merely incomplete.
+    if r["cls"] == "IMPLAUSIBLE":
+        return True
     if r["cls"] not in ("UNDERGEN", "OVERGEN"):
         return False
     try:
