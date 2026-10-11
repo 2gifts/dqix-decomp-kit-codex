@@ -725,7 +725,8 @@ belongs (ROM slot above `battle` => declare it before `battle`) and keep the ass
     codes = node->codes;                         // where the ROM loads it
 
 `ov025:021ebb90` (4096B) 84 -> 49 in one edit. Moving the INITIALISED declaration instead drags the
-load with it and costs more than it saves.
+load with it and costs more than it saves. Declare EVERY spilled scalar this way, in ROM slot
+order, even ones assigned first; 12-byte struct locals follow the same rule (`02176634`, 47 -> 0).
 
 ### A LITERAL-POOL OFFSET DIFF CAN HIDE A WRONG CONSTANT — compare the VALUES, not the offsets
 `ldr r0, [pc, #0x584] | ldr r0, [pc, #0x58c]` reads like pool-layout noise and usually is. It can
@@ -1248,10 +1249,16 @@ together. A switch arm that does only what "no arm" does should not be written.
   diff means the SOURCE has the wrong operator, not the wrong colouring (`020cddec`).
 - **block the range fold** (`0205337c`): an `||`-chain of equality tests written as
   `!(a != x && a != y && a != z)` stops mwcc lowering it to `(unsigned)(a-x) <= 2` and forces real
-  cmp/cmpne/cmpne/bne with a non-predicated then-block.
+  cmp/cmpne/cmpne/bne with a non-predicated then-block. For two ADJACENT constants with the field
+  bound to a local, `s == 0x54 || s == 0x55` becomes `sub`, a shift pair, `cmp #1` and `ls`-
+  predicated stores (OVERGEN 20); reading the field at each compare keeps the two `cmp` (`02160f4c`).
 - **a chain that opens with `cmpne` right after a `beq` on the same value** repeats the test the
   branch above already decided: `if (s == 0) {...} else if (s != 0 && s != 1 && s != 2)`. Without
   the redundant `s != 0` the chain opens with a plain `cmp` (`021dbf04`).
+- **a null test on a member's address** (`add`, `adds`, `ldrbne`, `cmpne`, `bne`): bind
+  `Task* task = &ctx->task;` and write `!(task != 0 && task->active != 0)` in the condition. An
+  int-returning inline materialises `movne`/`moveq`/`cmp`, and an unbound `&ctx->task` re-adds the
+  base (`0215e69c`).
 - **backward `goto` into a label** reproduces mwcc's tail-merge of a duplicated reset block
   (`02002b90`).
 - **EARLY RETURN vs SINGLE EXIT decides WHERE a returned constant is materialised — both directions
