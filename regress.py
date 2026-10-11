@@ -1567,7 +1567,7 @@ def _retag_bound_name():
         return "ov_recover.py has no retag()/bound_addrs()"
     if "txt = retag(txt, fp)" not in src:
         return "gather() no longer retags an untagged candidate"
-    ns = {"re": re, "os": os, "TAGPRE": "func_ov015_",
+    ns = {"re": re, "os": os, "TAG": "USA", "TAGPRE": "func_ov015_",
           "_BOUND": {"_Z3Foov": "0218bb3c", "Bar": "0218bb40"}}
     exec(fns["bound_addrs"] + "\n" + fns["retag"], ns)
     out = ns["retag"]("// USA: _Z3Foov\nARM void Foo()\n{\n}\n", "x.cpp")
@@ -2377,6 +2377,10 @@ def _integrate_region_fixture():
        "finish_wave/integrate_fast configured USA or dropped the existing Linux toolchain environment")
 def _integration_shell_environment():
     import subprocess
+    import shutil
+    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
+    if not bash:
+        return "bash unavailable for integration environment test"
     for script in ("finish_wave.sh", "integrate_fast.sh"):
         source = open(f"{KIT}/{script}", encoding="utf-8").read()
         lines = source.splitlines()
@@ -2392,13 +2396,225 @@ def _integration_shell_environment():
                        'REGION=jpn; LOG=/dev/null;\n' + snippet)
             env = dict(os.environ, CAPTURE=output, DQIX_PREINSTALLED_COMPILER="/tools/compiler root",
                        DQIX_WINE="/tools/wine runner")
-            result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True)
+            result = subprocess.run([bash, "-c", harness], env=env, capture_output=True, text=True)
             got = open(output).read().splitlines() if os.path.exists(output) else []
             want = ["tools/configure.py", "jpn", "--no-extract", "--compiler",
                     "/tools/compiler root", "-w", "/tools/wine runner"]
             if result.returncode or got != want:
                 return "%s forwarded %r, expected %r: %s" % (script, got, want, result.stderr)
 
+
+
+def _fixture_assignments(source, ns, names):
+    import ast
+    nodes = [n for n in ast.parse(source).body if isinstance(n, ast.Assign) and
+             any(isinstance(t, ast.Name) and t.id in names for t in n.targets)]
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "fixture", "exec"), ns)
+
+
+@check("ov_recover gathers and retags the selected region",
+       "JPN waves gathered no sources because recovery still read USA tags and config")
+def _recover_region_fixture():
+    import ast
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            for mod, addr in (("main", "02000000"), ("017", "02100000")):
+                ns, source = _region_functions("ov_recover", root, region)
+                ns.update(REGION=region, TAG=region.upper(), MOD=mod, MAIN=mod == "main",
+                          OV=mod, srcdir=SimpleNamespace(for_module=lambda mod: root), _BOUND=None)
+                start = source.index("if MAIN:")
+                exec(source[start:source.index("def tag_addr", start)], ns)
+                if ns["CFG"] != ns["buildcfg"].config_dir(mod):
+                    return "wrong recovery config"
+                name = "UsaName" if region == "usa" else "JpnName"
+                text = '// %s: %s\nextern "C" int %s() { return 0; }\n' % (region.upper(), name, name)
+                result = ns["retag"](text, "fixture.cpp")
+                if ns["tag_addr"](result) != addr:
+                    return "%s %s was not gathered after retag" % (region, mod)
+                other = "JPN" if region == "usa" else "USA"
+                if ns["tag_addr"](result.replace(region.upper() + ":", other + ":")):
+                    return "accepted a foreign region tag"
+                gate = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "gate")
+                end = next(i for i, n in enumerate(gate.body) if isinstance(n, ast.Assign) and
+                           any(isinstance(t, ast.Name) and t.id == "cf" for t in n.targets))
+                calls = []
+                ns.update(sweep_foreign=lambda: None, sh=lambda *args: calls.append(args))
+                for item in (region, "jpn" if region == "usa" else "usa"):
+                    binary = Path(root, "build", item, "arm9.o")
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.write_bytes(item.encode())
+                cwd = os.getcwd()
+                try:
+                    os.chdir(root)
+                    with patch.dict(os.environ, {"DQIX_PREINSTALLED_COMPILER": "/compiler root", "DQIX_WINE": "/wine runner"}):
+                        exec(compile(ast.Module(body=gate.body[:end + 1], type_ignores=[]), "gate", "exec"), ns)
+                finally:
+                    os.chdir(cwd)
+                want = ("python", "tools/configure.py", region, "--no-extract", "--compiler", "/compiler root", "-w", "/wine runner")
+                if calls != [want] or Path(root, "build", region, "arm9.o").exists():
+                    return "recovery gate selected wrong region/runner"
+                other = "jpn" if region == "usa" else "usa"
+                if not Path(root, "build", other, "arm9.o").exists():
+                    return "recovery removed another region's output"
+
+
+@check("classify reads selected-region symbols and pristine bytes",
+       "JPN integration classified functions against USA config and pristine bytes")
+def _classify_region_fixture():
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            ns, source = _region_functions("classify", root, region)
+            ns["_CTX"] = {}
+            ns["buildcfg"].lcf_symbols = lambda: {}
+            for mod in ("main", "017"):
+                blob, base, symbols, sizes, ranges = ns["_ctx"](mod)
+                expected = "UsaName" if region == "usa" else "JpnName"
+                if blob != region.encode() + b"\0" or set(symbols) != {expected}:
+                    return "%s %s read another region" % (region, mod)
+
+
+@check("delinked searches only the selected region",
+       "JPN reservations were tested against USA delink ranges")
+def _delinked_region_fixture():
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            ns, source = _region_functions("delinked", root, region)
+            for mod in (None, "main", "017"):
+                with patch.dict(sys.modules, {"buildcfg": ns["buildcfg"]}):
+                    paths = ns["files"](mod)
+                if len(paths) != (2 if mod is None else 1) or any(
+                        "/config/" + region + "/" not in p.replace("\\", "/") for p in paths):
+                    return "%s %s selected %r" % (region, mod, paths)
+
+
+@check("culprits identifies selected-region source tags",
+       "a failed JPN build could not name its JPN-tagged candidates")
+def _culprits_region_fixture():
+    for region in ("usa", "jpn"):
+        ns, source = _region_functions("culprits", "unused", region)
+        _fixture_assignments(source, ns, {"TAG"})
+        for prefix, mod in (("func_", "main"), ("func_ov017_", "017")):
+            text = "// %s: %s02100000\n" % (region.upper(), prefix)
+            if ns["tag_of"](text) != (mod, "02100000"):
+                return "selected tag not recognized"
+            other = "JPN" if region == "usa" else "USA"
+            if ns["tag_of"](text.replace(region.upper(), other)) is not None:
+                return "foreign tag accepted"
+
+
+@check("countfix reads matching region report and modifies only that config",
+       "a JPN gate caused countfix to repair config/usa using build/usa/report.json")
+def _countfix_region_fixture():
+    from pathlib import Path
+    import shutil
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            path = Path(root, "build", region, "report.json")
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"units": [{"name": region, "metadata": {"complete": True},
+                                                  "functions": [{"fuzzy_match_percent": 50}]}]}))
+        for region in ("usa", "jpn"):
+            ns, source = _region_functions("countfix", root, region)
+            ns.update(json=json, shutil=shutil)
+            _fixture_assignments(source, ns, {"CFG", "BACKUP"})
+            if ns["report_units"]() != [region]:
+                return "read the wrong report"
+            name = "UsaName" if region == "usa" else "JpnName"
+            locations = ns["function_locations"]()
+            if set(locations) != {name}:
+                return "read the wrong symbol config"
+            other = "jpn" if region == "usa" else "usa"
+            other_path = Path(root, "config", other, "arm9", "symbols.txt")
+            before = other_path.read_bytes()
+            symbol = Path(ns["CFG"], "symbols.txt")
+            symbol.write_text("Fixture kind:function(thumb,size=0x6) addr:0x02000000\n")
+            changed = ns["apply"]([], [(str(symbol), "Fixture", 6, 4)])
+            if changed != [str(symbol)] or "size=0x4" not in symbol.read_text() or other_path.read_bytes() != before:
+                return "repair did not stay within selected config"
+            ns["restore"]()
+            symbol.write_text("%s kind:function(thumb,size=0x4) addr:0x02000000\n" % name)
+
+
+@check("regionsync forwards the configured compiler runner",
+       "region synchronization dropped DQIX_WINE when configuring its next build")
+def _regionsync_runner_fixture():
+    from unittest.mock import patch
+    ns, source = _region_functions("regionsync", "unused", "jpn")
+    ns["run"] = lambda *args: args
+    for wine in ("", "/tools/wine runner"):
+        with patch.dict(os.environ, {"DQIX_PREINSTALLED_COMPILER": "/tools/compiler root", "DQIX_WINE": wine}):
+            result = ns["configure"]("jpn")
+        want = (sys.executable, "tools/configure.py", "jpn", "--no-extract", "--compiler", "/tools/compiler root")
+        if wine:
+            want += ("-w", wine)
+        if result != want:
+            return "configure forwarded %r, expected %r" % (result, want)
+
+
+@check("integration environment fixture uses Git Bash on Windows",
+       "plain bash selected Windows System32 WSL instead of Git Bash")
+def _integration_windows_bash_fixture():
+    import ast
+    from types import SimpleNamespace
+    source = open(f"{KIT}/regress.py", encoding="utf-8").read()
+    fn = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and
+              n.name == "_integration_shell_environment")
+    assignments = [n for n in fn.body if isinstance(n, ast.Assign) and
+                   any(isinstance(t, ast.Name) and t.id == "bash" for t in n.targets)]
+    ns = dict(os=SimpleNamespace(name="nt"), shutil=SimpleNamespace(which=lambda name: "System32/bash.exe"))
+    exec(compile(ast.Module(body=assignments, type_ignores=[]), "bash", "exec"), ns)
+    if ns.get("bash") != "C:/Program Files/Git/bin/bash.exe":
+        return "Windows fixture did not select Git Bash"
+
+
+@check("compiler sweeps enumerate the configured compiler root",
+       "ccsweep and pad/ccscore ignored a preinstalled compiler directory")
+def _compiler_sweep_root_fixture():
+    import ast
+    import glob
+    import shutil
+    import subprocess
+    from pathlib import Path
+    from types import SimpleNamespace
+    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
+    if not bash:
+        return "bash unavailable for compiler sweep test"
+    with tempfile.TemporaryDirectory() as root:
+        compiler_root = Path(root, "compiler root")
+        compiler = compiler_root / "2.0" / "sp2p2" / "mwccarm.exe"
+        compiler.parent.mkdir(parents=True)
+        compiler.touch()
+        cfg = SimpleNamespace(COMPILER_ROOT=str(compiler_root))
+        source = Path(KIT, "pad", "ccscore.py").read_text(encoding="utf-8")
+        ns = dict(glob=glob, casediff=SimpleNamespace(REPO=root, buildcfg=cfg))
+        _fixture_assignments(source, ns, {"builds"})
+        if [os.path.normpath(p) for p in ns["builds"]] != [str(compiler)]:
+            return "ccscore did not enumerate the configured compiler"
+        source = Path(KIT, "ccsweep.sh").read_text(encoding="utf-8")
+        snippet = source[source.index('cd "$REPO"'):]
+        harness = ('python() { case "$1" in */buildcfg.py) printf "%s\\n" "$ROOT";; '
+                   '*/wdiff.py) printf "%s\\n" "$MWCC";; esac; };\n' + snippet)
+        result = subprocess.run([bash, "-c", harness], capture_output=True, text=True,
+                                env=dict(os.environ, ROOT=compiler_root.as_posix(), REPO=root, KIT=KIT))
+        if result.returncode or not re.search(r"2\.0/sp2p2\s+2\.0/sp2p2", result.stdout):
+            return "ccsweep did not use the configured root: " + result.stdout + result.stderr
+        source = Path(KIT, "buildcfg.py").read_text(encoding="utf-8")
+        main = next(n for n in ast.parse(source).body if isinstance(n, ast.If) and
+                    ast.unparse(n.test) == "__name__ == '__main__'")
+        printed = []
+        exec(compile(ast.Module(body=main.body, type_ignores=[]), "buildcfg", "exec"),
+             dict(sys=SimpleNamespace(argv=["buildcfg.py", "--compiler-root"]),
+                  COMPILER_ROOT=str(compiler_root), print=printed.append))
+        if printed != [compiler_root.as_posix()]:
+            return "buildcfg CLI did not return the configured root"
 
 
 if __name__ == "__main__":

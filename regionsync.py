@@ -30,7 +30,9 @@ def run(*args):
 
 def configure(region):
     compiler = os.environ.get("DQIX_PREINSTALLED_COMPILER")
-    return run(sys.executable, "tools/configure.py", region, "--no-extract", *(["--compiler", compiler] if compiler else []))
+    wine = os.environ.get("DQIX_WINE")
+    return run(sys.executable, "tools/configure.py", region, "--no-extract",
+               *(["--compiler", compiler] if compiler else []), *(["-w", wine] if wine else []))
 
 
 def green():

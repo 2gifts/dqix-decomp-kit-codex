@@ -15,10 +15,11 @@ import subprocess
 import sys
 
 import kitpaths as _kp
+import buildcfg
 
 REPO = _kp.REPO
 SP = _kp.SP
-TAG = re.compile(r"// USA: func_(?:ov(\d+)_)?([0-9a-fA-F]{8})")
+TAG = re.compile(rf"// {buildcfg.REGION.upper()}: func_(?:ov(\d+)_)?([0-9a-fA-F]{{8}})")
 SOURCE_ERROR = re.compile(r"^(\S+?\.(?:cpp|c|s)):\d+:", re.M)
 OBJECT = re.compile(r"([\w$]+)\.o\b")
 CONFIG_LINE = re.compile(r"(config[\\/]\S+?\.txt):(\d+):")

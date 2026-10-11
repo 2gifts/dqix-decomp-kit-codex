@@ -23,7 +23,7 @@ for i, a in enumerate(sys.argv):
     if a == "--only":
         only = sys.argv[i + 1]
 
-builds = sorted(glob.glob(f"{casediff.REPO}/tools/mwccarm/*/*/mwccarm.exe"))
+builds = sorted(glob.glob(f"{casediff.buildcfg.COMPILER_ROOT}/*/*/mwccarm.exe"))
 default = casediff.CC
 rows = []
 for cc in builds:

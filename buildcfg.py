@@ -109,6 +109,8 @@ if __name__ == "__main__":
         print(" ".join(FLAGS))
     elif "--region" in sys.argv:
         print(REGION)
+    elif "--compiler-root" in sys.argv:
+        print(COMPILER_ROOT.replace("\\", "/"))
     elif "--config-dir" in sys.argv:
         print(config_dir(sys.argv[sys.argv.index("--config-dir") + 1]))
     else:
