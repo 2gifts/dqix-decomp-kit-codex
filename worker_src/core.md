@@ -379,7 +379,9 @@ Simplify scans vregs in ascending order and the last node pushed takes the lowes
 textual order regardless of scope: to raise a number, declare it EARLIER; to land between two
 block-scoped locals, move the group to function scope in the order you need (`021615bc`, 75 -> 0).
 `python $KIT/pad/renum/renum.py <src> <mod> <addr> <size> X=<rank>` forces a numbering in the real
-compiler (`X=86.5` = between v86 and v87) and tells you which rank closes it.
+compiler (`X=86.5` = between v86 and v87) and tells you which rank closes it. colorforce `order_0` +
+`renum 83=105.5` named a whole-function swap that a bare function-scope `void* root;` declared just
+above the pointer it must outrank closed (`021575dc`).
 Declaration order only moves locals that KEEP their own vreg. Check first with
 `pad/renum/vdump.py`: if a local's number does not change when you move its declaration, the lever
 is dead for it. Two kinds ignore it: loop-body shorts/chars and CSE'd loads that become IR temps (a
