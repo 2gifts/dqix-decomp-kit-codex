@@ -1714,6 +1714,9 @@ def _prready():
                 return f"a current checkout was refused by prready.py {mode}: {out.strip()[-300:]}"
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
                         "src/Dead.cpp": "void Dead() {}\n",
+                        "src/Untagged.cpp": "void Untagged() {}\n",
+                        "config/jpn/arm9/delinks.txt": "src/Untagged.cpp:\n    complete\n"
+                                                       "    .text start:0x02000020 end:0x02000030\n",
                         "src/A.cpp": "#pragma optimize_for_size off\nvoid Foo() {}\n#pragma optimize_for_size reset\n",
                         "config/usa/arm9/symbols.txt": "Bar kind:function(arm,size=0x10) addr:0x02000010\n"
                                                        "data_02000030 kind:data(any) addr:0x02000030\n"
@@ -1724,7 +1727,8 @@ def _prready():
         commit(pub_decomp, {"src/A.cpp": "void Foo() { }\n"})
         commit(pub_kit, {"README.md": "x\n"})
         want = {"decomp": ("KIT BEHIND", "DECOMP BEHIND", "OUTSIDE A MATCH .github/workflows/match.yml",
-                           "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2"),
+                           "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2",
+                           "NO USA TAG src/Untagged.cpp"),
                 "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400", "UNPROVEN CITATION 02150010")}
         for mode, needles in want.items():
             code, out = prready(mode)
@@ -1738,9 +1742,13 @@ def _prready():
         code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "gh pr create -R ZevyaDev/dqix-decomp"}}))
         if code != 2 or "HALF RENAME" not in out:
             return f"the hook let gh pr create through on a stale decomp: exit {code}"
-        code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "git status"}}))
-        if code != 0:
-            return f"the hook blocked a command that opens no pull request: exit {code} {out.strip()[-200:]}"
+        code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "gh pr merge 5 -R ZevyaDev/dqix-decomp"}}))
+        if code != 2 or "landpr.sh" not in out:
+            return f"the hook let gh pr merge land a decomp pull request without landpr.sh: exit {code}"
+        for command in ("git status", "gh pr merge 5 -R ZevyaDev/dqix-decomp-kit"):
+            code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": command}}))
+            if code != 0:
+                return f"the hook blocked `{command}`: exit {code} {out.strip()[-200:]}"
     return None
 
 
@@ -2214,6 +2222,69 @@ def _regionsync_restores_only_red_modules():
             return f"the red module was committed or left in the tree: {line}"
         if git("log", "-1", "--format=%s") != "Port 1 matched files to JPN" or code != 1:
             return f"reported as {code}: {line}"
+    return None
+
+
+@check("regionsync wires into usa a file another region delinks and usa does not",
+       "#99 delinked five ov031 functions in JPN only, and nothing ported them to USA or EUR")
+def _regionsync_into_usa():
+    import subprocess
+    from types import SimpleNamespace
+    rs = load("regionsync")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="regionsync_usa_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        files = {
+            "config/usa/arm9/delinks.txt": "    .text       start:0x02000000 end:0x02001000 kind:code align:32\r\n"
+                                           "\r\nsrc/Old.cpp:\r\n    complete\r\n    .text start:0x02000000 end:0x02000010\r\n",
+            "config/usa/arm9/symbols.txt": "Old kind:function(arm,size=0x10) addr:0x02000000\n"
+                                           "New kind:function(arm,size=0x20) addr:0x02000100\n"
+                                           "Big kind:function(arm,size=0x8) addr:0x02000200\n"
+                                           "Data kind:function(arm,size=0x10) addr:0x02000300\n"
+                                           "Curated kind:function(arm,size=0x10) addr:0x02000700\n",
+            "config/jpn/arm9/delinks.txt": "src/New.cpp:\n    complete\n    .text start:0x02000180 end:0x020001a0\n\n"
+                                           "src/Big.cpp:\n    complete\n    .text start:0x02000400 end:0x02000410\n\n"
+                                           "src/Data.cpp:\n    complete\n    .text start:0x02000500 end:0x02000510\n"
+                                           "    .data start:0x02100000 end:0x02100008\n\n"
+                                           "src/Untagged.cpp:\n    complete\n    .text start:0x02000600 end:0x02000620\n\n"
+                                           "src/Raw.cpp:\n    complete\n    .text start:0x02000800 end:0x02000810\n",
+            "src/Old.cpp": "// USA: Old\nvoid Old() {}\n",
+            "src/New.cpp": "// USA: New\nvoid New() {}\n",
+            "src/Big.cpp": "// USA: Big\nvoid Big() {}\n",
+            "src/Data.cpp": "// USA: Data\nvoid Data() {}\n",
+            "src/Untagged.cpp": "void Untagged() {}\n",
+            "src/Raw.cpp": "// USA: func_02000700\nvoid Curated() {}\n"}
+        for path, text in files.items():
+            os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
+            with open(f"{root}/{path}", "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+        for args in (("init", "-q"), ("config", "user.name", "regress"), ("config", "user.email", "regress@localhost"),
+                     ("add", "-A"), ("commit", "-q", "-m", "base")):
+            subprocess.run(["git", "-C", root, "-c", "core.autocrlf=false", *args], capture_output=True)
+        real = rs.run
+        rs.run = lambda *args: (0, "") if args[0] == "ninja" else real(*args)
+        rs.green, rs.configure, rs.kitpaths = (lambda: (True, "")), (lambda region: (0, "")), SimpleNamespace(SP=root)
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            runs = [rs.sync("usa", None), rs.sync("usa", None)]
+        finally:
+            os.chdir(cwd)
+        with open(f"{root}/config/usa/arm9/delinks.txt", encoding="utf-8", newline="") as f:
+            text = f.read()
+        for name, start, end in (("New", "02000100", "02000120"), ("Raw", "02000700", "02000710")):
+            if f"\r\nsrc/{name}.cpp:\r\n    complete\r\n    .text start:0x{start} end:0x{end}\r\n" not in text:
+                return f"{name}.cpp was not wired at its usa function: {text!r}"
+        wrong = [n for n in ("Old", "Big", "Data", "Untagged") if text.count(f"src/{n}.cpp:") != (n == "Old")]
+        if wrong:
+            return f"wired into usa: {wrong}"
+        for code, line in runs:
+            missing = [n for n in ("Big.cpp: jpn: 0x10 bytes here", "Data.cpp: jpn: owns .text, .data",
+                                   "Untagged.cpp: jpn: no `// USA:` tag") if f"NOT IN USA src/{n}" not in line]
+            if code != 1 or missing or "in sync" in line:
+                return f"exit {code}, unreported {missing}: {line}"
+        if "Port 2 matched files to USA" not in runs[0][1]:
+            return f"the port was not committed: {runs[0][1]}"
     return None
 
 

@@ -79,7 +79,7 @@ def _pr_hook():
 @check("every landing ports what it matched to the other regions",
        "matches landed in config/usa only, so EUR fell 577 files behind and JPN never moved")
 def _regionsync():
-    missing = [s for s in ("finish_wave.sh", "integrate_fast.sh") if "regionsync.py" not in read(f"{KIT}/{s}")]
+    missing = [s for s in ("finish_wave.sh", "integrate_fast.sh", "landpr.py") if "regionsync" not in read(f"{KIT}/{s}")]
     return f"{', '.join(missing)} never runs regionsync.py" if missing else None
 
 

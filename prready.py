@@ -2,7 +2,8 @@
 
     python prready.py kit       last step before a pull request on ZevyaDev/dqix-decomp-kit
     python prready.py decomp    last step before a pull request on ZevyaDev/dqix-decomp
-    python prready.py --hook    Claude Code PreToolUse hook: blocks `gh pr create` until READY
+    python prready.py --hook    Claude Code PreToolUse hook: blocks `gh pr create` until READY, and
+                                `gh pr merge` on the decomp, which lands through landpr.sh
 
 Fetches the published kit and decomp-matching and compares your commits with them. Exit 0: READY.
 1: NOT READY, one line per problem saying what to do. 2: a fetch failed, or the hook blocked.
@@ -25,6 +26,7 @@ ADDR = re.compile(r"\b(02[0-9a-fA-F]{6})\b")
 FUNCTION = re.compile(r"\bkind:function\S*\s+addr:0x([0-9a-fA-F]+)")
 SYMBOLS = re.compile(r"^config/([^/]+)/(.+/symbols\.txt)$")
 MARKER = re.compile(r"(?m)^(<{7}|>{7})( |\r?$)")
+USA_TAG = re.compile(r"(?m)^// USA: \S+")
 
 
 def git(repo, *args):
@@ -120,6 +122,8 @@ def decomp(decomp_tip):
     for path in added:
         if path.endswith(SOURCE) and f"{path}:" not in wired:
             problems.append(f"DEAD FILE {path}: no delinks.txt entry names it; delete it")
+        elif path.endswith((".c", ".cpp")) and not USA_TAG.search(show(REPO, "HEAD", path)):
+            problems.append(f"NO USA TAG {path}: put `// USA: <USA symbol>` on the line above the definition")
     for path in changed:
         if path.startswith("src/"):
             gained = (len(CODEGEN_PRAGMA.findall("\n".join(diff_lines(REPO, decomp_tip, path, "+"))))
@@ -153,14 +157,19 @@ def hooked_target():
     except ValueError:
         return None
     command = str(event.get("tool_input", {}).get("command", ""))
-    if not re.search(r"\bgh\s+pr\s+create\b", command):
+    action = re.search(r"\bgh\s+pr\s+(create|merge)\b", command)
+    if not action:
         return None
     if "dqix-decomp-kit" in command:
-        return "kit"
-    if "dqix-decomp" in command:
-        return "decomp"
-    cwd = os.path.abspath(event.get("cwd") or os.getcwd()).replace("\\", "/").lower()
-    return "decomp" if cwd.startswith(REPO.lower()) else "kit"
+        target = "kit"
+    elif "dqix-decomp" in command:
+        target = "decomp"
+    else:
+        cwd = os.path.abspath(event.get("cwd") or os.getcwd()).replace("\\", "/").lower()
+        target = "decomp" if cwd.startswith(REPO.lower()) else "kit"
+    if action.group(1) == "merge":
+        return "land" if target == "decomp" else None
+    return target
 
 
 HOOK = sys.argv[1:] == ["--hook"]
@@ -168,6 +177,10 @@ if HOOK:
     target = hooked_target()
     if target is None:
         sys.exit(0)
+    if target == "land":
+        print("gh pr merge skips the strip, the region ports and the three-region build; "
+              "land decomp pull requests with: bash landpr.sh <number>...", file=sys.stderr)
+        sys.exit(2)
 elif sys.argv[1:] in (["kit"], ["decomp"]):
     target = sys.argv[1]
 else:
