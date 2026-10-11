@@ -2776,6 +2776,17 @@ def _integ_bootstrap():
     return None
 
 
+@check("colorforce, schedforce and renum read the size argument the same way",
+       "schedforce parsed the size as hex while colorforce took decimal, so the plan's 'same "
+       "arguments' run read 2816 as 0x2816 and crashed in struct.unpack on ov000:02165490")
+def _forcing_size_arg():
+    for tool in ("frida/colorforce.py", "frida/schedforce.py", "pad/renum/renum.py"):
+        src = open(f"{KIT}/{tool}", encoding="utf-8").read()
+        if "int(sys.argv[4], 0)" not in src:
+            return "%s does not parse the size with int(x, 0)" % tool
+    return None
+
+
 @check("landpr refreshes the build report after it publishes",
        "landpr.py never ran `ninja report`, so after a pull-request landing cov.py and health kept "
        "the previous wave's count while CI showed the new one")
