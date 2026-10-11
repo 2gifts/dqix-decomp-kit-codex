@@ -405,6 +405,8 @@ alignment qualifier. Signature: an index product like `mov #0xac; mla` re-done a
 constants re-materialised, nothing hoisted, only per-block CSE. Source: the buffer it uses is
 declared `__attribute__((aligned(4)))` on the object (`extern int data_0211e33c __attribute__((aligned(4)));`, consistent with its 0x...33c address). Any N works, on the object or via `typedef T A __attribute__((aligned(N)))`; on a STRUCT type it does nothing. colorsweep r62 tries it.
 Try that FIRST when a function shows this signature; every other lever is inert until it is right.
+The same buffer as an array, `extern unsigned char data_0211e33c[0x30000] __attribute__((aligned(4)));`,
+closed UNDERGEN 8 in a LoadFileIntoMemory caller (`021f1868`).
 
 **A load that cannot move past a store = an alias edge mwcc added** (`021de124`, decompiled). An
 access through an unresolved pointer is worst-case; an access to a known object (local static,
