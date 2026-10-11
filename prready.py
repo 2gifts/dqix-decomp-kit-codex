@@ -22,6 +22,7 @@ KIT, REPO = kitpaths.KIT, kitpaths.REPO
 MATCH_PATHS = ("src/", "include/", "config/")
 SOURCE = (".c", ".cpp", ".s")
 ADDR = re.compile(r"\b(02[0-9a-fA-F]{6})\b")
+FUNCTION = re.compile(r"\bkind:function\S*\s+addr:0x([0-9a-fA-F]+)")
 SYMBOLS = re.compile(r"^config/([^/]+)/(.+/symbols\.txt)$")
 MARKER = re.compile(r"(?m)^(<{7}|>{7})( |\r?$)")
 
@@ -49,6 +50,16 @@ def show(repo, rev, path):
 def delinks(repo, rev, root):
     names = git(repo, "ls-tree", "-r", "--name-only", rev, root).stdout.split()
     return [show(repo, rev, n) for n in names if n.endswith("delinks.txt")]
+
+
+def landed_functions(repo, rev, root):
+    found = set()
+    for n in git(repo, "ls-tree", "-r", "--name-only", rev, root).stdout.split():
+        if n.endswith("delinks.txt"):
+            texts = [show(repo, rev, n)]
+            funcs = FUNCTION.findall(show(repo, rev, n[:-len("delinks.txt")] + "symbols.txt"))
+            found |= {int(a, 16) for a in funcs if delinked.covers(int(a, 16), texts)}
+    return found
 
 
 def diff_lines(repo, tip, path, sign):
@@ -86,10 +97,10 @@ def kit(kit_tip, decomp_tip):
     if git(KIT, "diff", "--name-only", f"{kit_tip}...HEAD", "--", "worker_src/deadends.md").stdout.strip():
         problems.append("NO DEAD ENDS: the kit takes no worker_src/deadends.md change; record the miss in $SP "
                         "(blocker.py, the handoff) and open the pull request from a branch without it")
-    matched = delinks(REPO, decomp_tip, "config/usa/arm9")
+    landed = landed_functions(REPO, decomp_tip, "config/usa/arm9")
     cited = dict.fromkeys(a.lower() for l in diff_lines(KIT, kit_tip, "worker_src/core.md", "+") for a in ADDR.findall(l))
     for addr in cited:
-        if not delinked.covers(int(addr, 16), matched):
+        if int(addr, 16) not in landed:
             problems.append(f"UNPROVEN CITATION {addr} in core.md: not matched on {kitpaths.DECOMP_BRANCH}; "
                             "land the match first or cite a landed address")
     return problems

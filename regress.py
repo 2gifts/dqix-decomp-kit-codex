@@ -1688,7 +1688,13 @@ def _prready():
                                            "data_02000040 kind:data(any) addr:0x02000040\n",
             "config/eur/arm9/symbols.txt": "Foo kind:function(arm,size=0x10) addr:0x02000010\n",
             "config/jpn/arm9/symbols.txt": "data_02000040 kind:data(any) addr:0x02000040\n",
-            "src/A.cpp": "void Foo() {}\n"})
+            "config/usa/arm9/overlays/ov001/delinks.txt": "src/B.cpp:\n    complete\n"
+                                                          "    .text start:0x02150000 end:0x02150100\n",
+            "config/usa/arm9/overlays/ov001/symbols.txt": "Baz kind:function(arm,size=0x100) addr:0x02150000\n",
+            "config/usa/arm9/overlays/ov002/delinks.txt": "",
+            "config/usa/arm9/overlays/ov002/symbols.txt": "Qux kind:function(arm,size=0x10) addr:0x02150010\n",
+            "src/A.cpp": "void Foo() {}\n",
+            "src/B.cpp": "void Baz() {}\n"})
         commit(pub_kit, {n: open(f"{KIT}/{n}", encoding="utf-8").read()
                          for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py")}
                | {"worker_src/deadends.md": "# dead ends\n", "worker_src/core.md": "# core\n"})
@@ -1714,12 +1720,12 @@ def _prready():
                                                        "data_02000040 kind:data(any) addr:0x02000040\n",
                         "config/jpn/arm9/symbols.txt": "data_02000030 kind:data(any) addr:0x02000040\n"})
         commit(kit, {"worker_src/deadends.md": "# dead ends\n02000010\tstale\n02000040\topen\n",
-                     "worker_src/core.md": "# core\nrule (02000010)\nrule (02000400)\n"})
+                     "worker_src/core.md": "# core\nrule (02000010)\nrule (02000400)\nrule (02150010)\n"})
         commit(pub_decomp, {"src/A.cpp": "void Foo() { }\n"})
         commit(pub_kit, {"README.md": "x\n"})
         want = {"decomp": ("KIT BEHIND", "DECOMP BEHIND", "OUTSIDE A MATCH .github/workflows/match.yml",
                            "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2"),
-                "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400")}
+                "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400", "UNPROVEN CITATION 02150010")}
         for mode, needles in want.items():
             code, out = prready(mode)
             missing = [n for n in needles if n not in out]
