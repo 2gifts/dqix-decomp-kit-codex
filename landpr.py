@@ -134,6 +134,8 @@ def main():
     if code not in (0, 2):
         refuse(f"integ_tree.py publish: {out.strip()[-300:]}")
     print(f"LANDED {' '.join('#' + n for n in numbers)} at {git(tree, 'rev-parse', '--short', 'HEAD')[1].strip()}")
+    if run(tree, "ninja", "report")[0] or run(KIT, sys.executable, f"{KIT}/integ_tree.py", "report")[0]:
+        print("WARN ninja report failed -- cov.py is stale until the next wave")
 
 
 if __name__ == "__main__":

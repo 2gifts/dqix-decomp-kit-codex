@@ -2776,6 +2776,21 @@ def _integ_bootstrap():
     return None
 
 
+@check("landpr refreshes the build report after it publishes",
+       "landpr.py never ran `ninja report`, so after a pull-request landing cov.py and health kept "
+       "the previous wave's count while CI showed the new one")
+def _landpr_report():
+    import ast
+    tree = ast.parse(open(f"{KIT}/landpr.py", encoding="utf-8").read())
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    calls = [ast.unparse(c) for c in ast.walk(main) if isinstance(c, ast.Call)]
+    if not any("'ninja', 'report'" in c for c in calls):
+        return "landpr.main() does not run `ninja report`"
+    if not any("integ_tree.py" in c and "'report'" in c for c in calls):
+        return "landpr.main() does not copy the report out of the integration tree"
+    return None
+
+
 @check("the cached kit-behind count is dropped when the checkout's HEAD moves",
        "behind() cached `5` for 10 minutes after a manual pull, so every dispatcher restart saw KIT "
        "UPDATE WAITING, ran kit_update (up to date) and restarted again, in a loop")
