@@ -533,7 +533,10 @@ field re-read into the function's existing `col`/`row` locals, col first, before
 ### A LICM TEMP TAKES ITS SPILL SLOT AFTER THE LOCALS DECLARED BEFORE IT
 Two spilled values in each other's slots: a named pointer local (`codes = row->codes;`) is slotted
 in declaration order; deleting it and writing `row->codes[i]` makes the hoisted address a compiler
-temp created later, which swaps the slots (`021d8c30`). For a pair fed from one value, the
+temp created later, which swaps the slots (`021d8c30`). The reverse also works: naming a
+per-iteration pointer (`char* pairs = models->unknown_cc + i * 0x70;`) right after the alloc local
+gives the LICM base temp the lower slot even though the add is still re-emitted (`021b3e14`).
+For a pair fed from one value, the
 assignment chain is the store order: `keepDefault = textKind = x;` stores `textKind` first.
 A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend split temp: the
 source reaches it as ONE member at its full offset (`+0x684`), not through the `+0x284` sub-object's
