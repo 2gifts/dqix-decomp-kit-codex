@@ -806,6 +806,9 @@ is register NUMBERS around a byte value, retype it before touching anything else
   12 bytes short (`02155d54`).
 - a flag passed to a `bool` parameter is a `bool` local; an `int` converted at the call costs
   OVERGEN 16 (`ov005:021589f4`).
+- a spilled `str` of a parameter at the very front of the prologue means the parameter is `short`;
+  a 0..3 range test on it as its own `static inline` taking `short` keeps the 0/1 result in r0
+  instead of a conversion temp (`021da9e0`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
   truncation; typing the local `unsigned short` emits `lsl`/`lsr #0x10` at every use (`020307d0`).
 - three separate `and rX,sl,#0xff` for ONE integer argument are per-call implicit conversions to an
