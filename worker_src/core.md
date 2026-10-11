@@ -453,6 +453,8 @@ lowest free register. `int state = self->state; G.elapsed += dt;` gives state r3
 (`ov023:021f4c04`). A single-use plain load is forwarded to its store and cannot be reordered this
 way; bind it through an inline accessor instead (`Entry* e = obj->GetEntries();` before
 `obj->GetTable()->SetEntries(e, n)`), which creates the value before the base (`02184a4c`).
+A struct copy (`Vector3i endPos = self->position_;`) defined before a chained-offset pointer
+(`res+0x2b4` then `+0x3400`) swaps that r1/r2 address pair the same way (`0219344c`).
 Same for a compare operand: `signed char cv = cells[cur]; if (cv == n)` swaps the reloaded byte
 and `n`; field reads bound through inline accessors before the index load create the base temps in
 ROM order (`02169eec`).
