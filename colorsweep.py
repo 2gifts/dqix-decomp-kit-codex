@@ -290,8 +290,6 @@ def _decl_independent(a, b):
 
 
 def _r4_local_lines(text):
-    """Declaration lines in executable scopes, never aggregate member lists."""
-    # Comments and literals can contain braces or type keywords; retain line positions only.
     token = r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\''
     code = re.sub(token, lambda m: re.sub(r'[^\n]', ' ', m.group()), text)
     code = re.sub(r'(?m)^[ \t]*#[^\n]*', '', code)
