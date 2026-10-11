@@ -433,6 +433,7 @@ but not in a baseline report)
 | `transweep.py` | gate `translate.py` output, rebind `Trans_<addr>` on WRONG-SYMBOL | |
 | `toolgripes.py` | mine worker verdicts for TOOL complaints | |
 | `integrate_all.sh` | run `finish_wave` for every module that has staged work, biggest backlog first | the per-module fallback `integrate_fast.sh` calls on a red combined build |
+| `reserved.py [--refresh\|--publish]` | addresses other contributors hold in open kit issues and open decomp pull requests (range ends dropped), cached in `wlog/reserved.txt` for 10 minutes; `claim.py` never serves one. `--publish` writes the fleet's claims into its own `Fleet claims` kit issue | `regress.py` holds the parse and the claim filter |
 | `resumable.py` | rank every unmatched address that already has a saved attempt; `skips()` is the verdict reservoir | reads `wlog/*.log`, so it depends on the rebuilt attempt history |
 | `poolsweep.py` | gate the .cpp left in ungathered scratch pools and stage the matches | written 2026-08-25; addresses read from the `// USA:` tag |
 

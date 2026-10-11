@@ -2813,6 +2813,33 @@ def _blocker_implausible():
         return "blockercheck counts IMPLAUSIBLE as an uncracked idiom class"
 
 
+@check("claim.py skips an address another contributor reserved, and never a range's end",
+       "claim.py did not read kit issues, so the xl queue opened on ov003 021539a0 (#178) and "
+       "ov012 02184d80 (#227), both reserved by contributors")
+def _reserved_skipped():
+    R = load("reserved")
+    issues = [{"number": 1, "author": {"login": "other"}, "title": "ov012",
+               "body": "| Module | Start | End exclusive |\n|---|---|---|\n"
+                       "| ov012 | `0x02184d80` | `0x0218558c` |\n"
+                       "- Range: [021ce524, 021ce5b4)\nov017 021c0000 021c1000\n"},
+              {"number": 2, "author": {"login": "me"}, "title": "Fleet claims",
+               "body": "| ov024 | `021da9e0` |"}]
+    prs = [{"number": 3, "author": {"login": "other"}, "title": "x", "body": "",
+            "files": [{"path": "src/func_ov031_02221f78.cpp"}]}]
+    got = set(R.holders(issues, prs, "me"))
+    want = {"02184d80", "021ce524", "021c0000", "021c1000", "02221f78"}
+    if got != want:
+        return "holders() returned %s, want %s" % (sorted(got), sorted(want))
+    C = load("claim")
+    old, C.reserved._HELD = C.reserved._HELD, {"0dead000"}
+    try:
+        if "0dead000" not in C.skiplist():
+            return "claim.skiplist() ignores reserved addresses"
+    finally:
+        C.reserved._HELD = old
+    return None
+
+
 if __name__ == "__main__":
     slow = "--slow" in sys.argv
     nbad = run_functional() if slow else 0

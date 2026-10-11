@@ -33,6 +33,7 @@ import sys
 import time
 
 import buildcfg
+import reserved
 
 SP = _kp.SP
 KIT = _kp.KIT
@@ -67,7 +68,7 @@ def skiplist():
                 out.add(line.strip().split(":")[1].lower())
     except OSError:
         pass
-    return out
+    return out | reserved.load()
 
 
 _ATTEMPTS = None
