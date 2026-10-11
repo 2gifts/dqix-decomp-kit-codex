@@ -22,7 +22,7 @@ Every `wgate` run ends with `RESIDUE <CLASS> <metric> <detail>`. Route on it:
 
 | class | what it means | do this |
 |---|---|---|
-| `NO-COMPILE` | it does not build | read the first error only; it is usually one declaration or cast |
+| `NO-COMPILE` | it does not build | read the first error only; a second prototype of a function the headers already declare is the usual one (`0216806c`, `02168354`) |
 | `OVERGEN` / `UNDERGEN` | wrong length | no colouring rewrite can help while the size is wrong — fix the shape first |
 | `LOOP-SHAPE` | branch targets differ | a loop/guard is built differently. Declaration order is INERT here |
 | `REGPERM` | only register numbers differ | `colorsweep --apply`, then recipe #9 (callee-saved) or #15 (scratch) |
@@ -283,7 +283,10 @@ Propagation cannot fold `&g` through the increment; a later pass cancels `++` ag
 arithmetic emitted is unchanged and only the address formation moves. Two ZoneFeatures functions
 that previously matched only under a file-wide `off` match byte-exact at the `-O2` default this way.
 `colorsweep` r27 generates both this and the `instance--` / `(instance + 1)` mirror, so run the sweep
-before reaching for the pragma. The same trick on an integer (`v++` … `v - 1`) does NOT survive —
+before reaching for the pragma. When the base's two adds must stay separate, the lever is the
+pointer formed one element past the object, `l = (T *)(base + off) + 1;`. Which read then keeps the
+add differs per function, so try both: `l--; l->f` (`0215d864`, where `(l - 1)->f` folds `#0xc00`)
+and `(l - 1)->f` (`02164d14`). The same trick on an integer (`v++` … `v - 1`) does NOT survive —
 that folds at propagation time; it is pointer arithmetic that outlives the pass.
 
 Caching a field in a local is the same lever pointed the other way: re-reading `p->b` at its second
@@ -307,6 +310,14 @@ The VALUE matters as much as the arity. Passing `0` where a nearby block store a
 the two share one constant: the store's zero CSEs into the argument register and pushes the object
 pointer off r1, which is the whole residue (`021d9340`, 2332B, 8 bytes). Read what the surrounding
 code already materialises before choosing the extra argument.
+
+When `symbols.txt` already binds the void mangling, cast at the call instead of redeclaring it.
+A new declaration would change the committed symbol:
+
+    ((int (*)(char*))_Z33CheckAndClearEntryStatus_0215b7d0v)(base);
+
+`021631e8` keeps `base` in r0 that way. `02160068` passes the extra `0` through the same kind of
+cast, on a two-parameter symbol.
 
 **The reverse: a STALE argument register means the call passes FEWER arguments** (`02178910`). If r1
 still holds an unrelated pointer at the call and the value you expected there lives only in r2 (for
@@ -357,7 +368,7 @@ expression, hoisting an operand first. Declaration order is a CALLEE-SAVED lever
 here. Each site is independent — with several such blocks the answer may be swapping one and not the
 other, so give `colorsweep` depth for the combinations instead of rewriting by hand.
 
-### A CALLEE-SAVED ROTATION IS VREG NUMBERING — set it by declaration order (`0215d63c`, `021615bc`)
+### A CALLEE-SAVED ROTATION IS VREG NUMBERING — set it by declaration order (`0215d63c`, `021615bc`, `0216049c`)
 Simplify scans vregs in ascending order and the last node pushed takes the lowest free register, so
 "X must colour before Y" means X needs a HIGHER vreg number. Declared locals are numbered in REVERSE
 textual order regardless of scope: to raise a number, declare it EARLIER; to land between two
@@ -773,6 +784,12 @@ is register NUMBERS around a byte value, retype it before touching anything else
 - SIGNEDNESS PICKS THE MNEMONIC. A struct field typed `int` rather than `unsigned int` makes
   `f >> 2` emit `asr` not `lsr`, and `f >= 0x38` emit `blt`/`bge` not `blo`/`bhs`. When the only
   wrong mnemonics are shift or compare flavours, retype the FIELD, not the local (`020c0a40`).
+- an `unsigned char` compared `> 0` folds to `!= 0` (`movne`/`bne`). A `movgt`/`bgt` right after
+  the `ldrb` means the compare was signed: write `(int)p->field > 0` and keep the field
+  `unsigned char` (`021c5c5c`).
+- `ldrsh` then `lsl`/`lsr #0x10` into an `unsigned short` local is a `(short)` read of a u16 field:
+  `value = (short)p->field;`. The plain read emits a predicated `ldrh` and the function comes out
+  12 bytes short (`02155d54`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
   truncation; typing the local `unsigned short` emits `lsl`/`lsr #0x10` at every use (`020307d0`).
 - three separate `and rX,sl,#0xff` for ONE integer argument are per-call implicit conversions to an
@@ -801,7 +818,7 @@ is register NUMBERS around a byte value, retype it before touching anything else
   `forced = 1` / `mode = 0` gets folded into its uses; typed `unsigned char` it stays a real value,
   so an inline reuses it (`ldrle` reload), its store sinks below the neighbouring `mov`, and a reset
   that writes `0.0f` emits the `mov r0,r0` copy. Retype flag locals when those three symptoms show.
-  Same for a predicated loop flag (`021dcf14`): as `int` its `streq` lands before the adjacent
+  Same for a predicated loop flag (`021dcf14`, `02159900`): as `int` its `streq` lands before the adjacent
   conditional store; `unsigned char` puts it after. A global whose store pins later loads there
   was the inline-accessor static (see "A CONSTANT HOISTED ABOVE A GLOBAL'S POOL LOAD").
 - a truncation the ROM does UNCONDITIONALLY (`and #0xff`, not predicated `andeq`) is a narrow local bound before the `if` (`unsigned char b = v;`) (`02159d0c`).
@@ -989,6 +1006,10 @@ calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the func
 mutating — call it AGAIN rather than testing a held flag (`021ea85c`, 500B, matched on the first
 compile) — and a plain redundant `ldr`, written by naming the field again at the use site
 (`020307d0`).
+`02156054` — a cast on an INDEX does break CSE. With `unsigned char j` and a loop condition that
+reads `tbl[j]`, the ROM loads `tbl[j]` again in the body. Write the body's read as `tbl[(int)j]`: a
+different subscript expression, so mwcc reloads. Plain `tbl[j]` reuses the condition's register,
+and the function comes out 4 bytes short.
 `02188d9c` — `const` is the OPPOSITE lever and it moves whole blocks, not one load: declaring an
 extern lookup table `extern const short tbl[]` means `int` stores through an unrelated pointer can
 no longer alias it, so eight `ldrsh` hoist above the store block and their index adds materialise up
@@ -1220,6 +1241,9 @@ together. A switch arm that does only what "no arm" does should not be written.
 - **block the range fold** (`0205337c`): an `||`-chain of equality tests written as
   `!(a != x && a != y && a != z)` stops mwcc lowering it to `(unsigned)(a-x) <= 2` and forces real
   cmp/cmpne/cmpne/bne with a non-predicated then-block.
+- **a chain that opens with `cmpne` right after a `beq` on the same value** repeats the test the
+  branch above already decided: `if (s == 0) {...} else if (s != 0 && s != 1 && s != 2)`. Without
+  the redundant `s != 0` the chain opens with a plain `cmp` (`021dbf04`).
 - **backward `goto` into a label** reproduces mwcc's tail-merge of a duplicated reset block
   (`02002b90`).
 - **EARLY RETURN vs SINGLE EXIT decides WHERE a returned constant is materialised — both directions
@@ -1290,7 +1314,11 @@ wrong and a byte-perfect function still fails the gate:
 - a byte read and later cleared through ONE `add rX,gs,#0x7000` (`ldrb [rX,#0xf72]` …
   `strb [rX,#0xf72]`) is a member-array access, `*(unsigned char*)&gs->unk_6fc0[0x7f72 - 0x6fc0]`.
   `((unsigned char*)gs)[0x7f72]` splits the store as `#0x72`+`#0x7f00` into a second register;
-  the plain `char` member gives `ldrsb` (`main:02000c9c`).
+  the plain `char` member gives `ldrsb` (`main:02000c9c`). A `char *` walked as `e[0]` / `e[4]`,
+  or as the flag byte `el[0xc5]`, is the same `ldrsb`; the pointer is `unsigned char *`
+  (`021544f4`, `0215c988`). Indexing an `int *` taken at the first field
+  (`int *q = &s->id; short cur = q[1]; short id = q[0];`) is what keeps that base in one
+  register. A `char *` plus the raw offset does not (`02160004`).
 
 ## DUPLICATE POOL WORD — the alias also works for DATA and BSS
 One symbol referenced twice ALWAYS dedupes to a single pool word. Declare a second extern named
@@ -1315,6 +1343,11 @@ and `func_020a1bb4`, no callee-saved copy) means the ID is POINTER-typed. `OVERL
 `unsigned int`, and mwcc CSEs an integer into a callee-saved register; it never CSEs a pointer
 constant, it rematerialises it. Declare the callee `func_020a1940(unsigned int* id)` in that file
 and pass `&OVERLAY_19_ID`. Eight load/unload pairs, 36 bytes (`main:02000c9c`).
+
+**A pool word at a section boundary is an LCF symbol too.** The arm9 LCF defines
+`ARM9_<TEXT|INIT|RODATA|CTOR|DATA>_START`/`_END`. The static-initializer walk takes
+`extern "C" void (*ARM9_CTOR_START[])(void);`. The literal `0x020eeb18` passes USA only with its
+`relocs.txt` entry set to `module:none`, and fails EUR, whose table is 0x10 later (`0200edc8`).
 
 ## RELOCS — an array-indexed base needs its OWN extern symbol
 `&data_02107870[i]` fails the reloc check: mwcc addend relocs resolve back to the base symbol. Each

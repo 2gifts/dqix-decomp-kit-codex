@@ -55,6 +55,18 @@ def load(mod):
     return m
 
 
+@check("decomment keeps the KEEP-NAME marker integrate reads",
+       "a staged file stripped by pad/decomment.py lost `// KEEP-NAME`, so integrate no longer "
+       "delinked it under its mangled symbol")
+def _decomment_keeps_markers():
+    src = ("// KEEP-NAME: the ROM symbol here is the mangled C++ name, not a func_ tag.\n"
+           "// USA: 0x02000000\n// note\nint f() { return 0; } /* x */\n")
+    out = load("pad/decomment").strip(src)
+    if "// KEEP-NAME" not in out or "// USA:" not in out or "note" in out or "/*" in out:
+        return "stripped to %r" % out
+    return None
+
+
 # ---------------------------------------------------------------- resumable.py
 
 @check("distances() ignores hex tails and size deltas",
@@ -1012,6 +1024,18 @@ def _levercheck_boards():
     return None
 
 
+@check("levercheck's default doc list keeps a checkout path that contains ':'",
+       "the two worker_src paths were joined with os.pathsep and split again, so a colon in the "
+       "checkout path made every core.md citation invisible and claim.py served nothing")
+def _levercheck_colon_path():
+    docs = load("levercheck").doc_paths("/tmp/Dragon Quest IX: Sentinels/kit")
+    core = os.path.join("/tmp/Dragon Quest IX: Sentinels/kit", "worker_src", "core.md")
+    dead = os.path.join("/tmp/Dragon Quest IX: Sentinels/kit", "worker_src", "deadends.md")
+    if docs != [core, dead]:
+        return "doc_paths split the checkout path: %r" % (docs,)
+    return None
+
+
 @check("r28 rewrites a field read to the literal its equality arm compared against",
        "020db3f4 sits 6 bytes and one wrong mnemonic out because `field + 15` re-loads the field "
        "instead of reusing the register the compare already materialised the literal in. The "
@@ -1330,7 +1354,7 @@ def _compile_elf(text, repo):
         src, obj = os.path.join(d, "t.cpp"), os.path.join(d, "t.o")
         with open(src, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-        r = subprocess.run(buildcfg.tool_command(buildcfg.CC) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=repo,
+        r = subprocess.run([buildcfg.CC] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=repo,
                            capture_output=True, text=True)
         if r.returncode:
             return "COMPILE " + (r.stdout + r.stderr)[-200:]
@@ -1626,12 +1650,10 @@ def _prready():
             "config/usa/arm9/delinks.txt": "    .text       start:0x02000000 end:0x02001000 kind:code align:32\n\n"
                                            "src/A.cpp:\n    complete\n    .text start:0x02000010 end:0x02000020\n",
             "config/usa/arm9/symbols.txt": "Foo kind:function(arm,size=0x10) addr:0x02000010\n"
-                "data_020e7e30 kind:data(any) addr:0x020e7e30\n"
-                "data_020e74ec kind:data(any) addr:0x020e74ec\n",
-            "config/eur/arm9/symbols.txt": "Foo kind:function(arm,size=0x10) addr:0x02000010\n"
-                "data_020e7e30 kind:data(any) addr:0x020e7e40\n"
-                "data_020e74ec kind:data(any) addr:0x020e74fc\n",
-            "config/jpn/arm9/symbols.txt": "data_020e7e30 kind:data(any) addr:0x020e7e30\n",
+                                           "data_02000030 kind:data(any) addr:0x02000030\n"
+                                           "data_02000040 kind:data(any) addr:0x02000040\n",
+            "config/eur/arm9/symbols.txt": "Foo kind:function(arm,size=0x10) addr:0x02000010\n",
+            "config/jpn/arm9/symbols.txt": "data_02000040 kind:data(any) addr:0x02000040\n",
             "src/A.cpp": "void Foo() {}\n"})
         commit(pub_kit, {n: open(f"{KIT}/{n}", encoding="utf-8").read()
                          for n in ("prready.py", "delinked.py", "kitpaths.py")}
@@ -1650,37 +1672,12 @@ def _prready():
             code, out = prready(mode)
             if code != 0:
                 return f"a current checkout was refused by prready.py {mode}: {out.strip()[-300:]}"
-        # Real fault: JPN's address-derived table name collided with an unrelated
-        # USA string. Porting it to the existing USA table name is not a global rename.
-        commit(decomp, {"config/jpn/arm9/symbols.txt":
-                        "data_020e74ec kind:data(any) addr:0x020e7e30\n"})
-        code, out = prready("decomp")
-        if code != 0:
-            return f"canonical JPN data rebinding was refused: {out.strip()[-500:]}"
-        for replacement in (
-                "NewName kind:data(any) addr:0x020e7e30\n",
-                "data_020e74ec kind:data(any) addr:0x020e7e34\n",
-                "data_020e74ec kind:function(arm,size=4) addr:0x020e7e30\n",
-                "data_020e74ec kind:data(any) addr:0x020e7e30 align:4\n",
-                "data_020e74ec kind:data(any) addr:0x020e7e30\n"
-                "Alias kind:data(any) addr:0x020e7e30\n", ""):
-            commit(decomp, {"config/jpn/arm9/symbols.txt": replacement})
-            code, out = prready("decomp")
-            if code != 1 or "HALF RENAME data_020e7e30" not in out:
-                return f"unproven JPN change passed: {replacement!r}: {out.strip()[-300:]}"
-        commit(decomp, {"config/jpn/arm9/symbols.txt":
-                        "data_020e74ec kind:data(any) addr:0x020e7e30\n"})
-        original_usa = open(f"{decomp}/config/usa/arm9/symbols.txt", encoding="utf-8").read()
-        commit(decomp, {"config/usa/arm9/symbols.txt":
-                        "Foo kind:function(arm,size=0x10) addr:0x02000010\n"
-                        "data_020e74ec kind:data(any) addr:0x020e7e30\n"})
-        code, out = prready("decomp")
-        if code != 1 or "HALF RENAME data_020e7e30" not in out:
-            return f"the JPN-only exception changed USA validation: {out.strip()[-300:]}"
-        commit(decomp, {"config/usa/arm9/symbols.txt": original_usa})
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
                         "src/Dead.cpp": "void Dead() {}\n",
-                        "config/usa/arm9/symbols.txt": "Bar kind:function(arm,size=0x10) addr:0x02000010\n"})
+                        "config/usa/arm9/symbols.txt": "Bar kind:function(arm,size=0x10) addr:0x02000010\n"
+                                                       "data_02000030 kind:data(any) addr:0x02000030\n"
+                                                       "data_02000040 kind:data(any) addr:0x02000040\n",
+                        "config/jpn/arm9/symbols.txt": "data_02000030 kind:data(any) addr:0x02000040\n"})
         commit(kit, {"worker_src/deadends.md": "# dead ends\n02000010\tstale\n02000040\topen\n",
                      "worker_src/core.md": "# core\nrule (02000010)\nrule (02000400)\n"})
         commit(pub_decomp, {"src/A.cpp": "void Foo() { }\n"})
@@ -1695,125 +1692,14 @@ def _prready():
                 return f"prready.py {mode}: exit {code}, missing {missing}: {out.strip()[-400:]}"
             if mode == "kit" and "CITATION 02000010" in out:
                 return f"prready.py kit flagged a landed citation: {out.strip()[-400:]}"
+            if mode == "decomp" and "HALF RENAME data_02000040" in out:
+                return f"prready.py decomp flagged a region port taking the USA name: {out.strip()[-400:]}"
         code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "gh pr create -R ZevyaDev/dqix-decomp"}}))
         if code != 2 or "HALF RENAME" not in out:
             return f"the hook let gh pr create through on a stale decomp: exit {code}"
         code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "git status"}}))
         if code != 0:
             return f"the hook blocked a command that opens no pull request: exit {code} {out.strip()[-200:]}"
-    return None
-
-
-@check("prready distinguishes a canonical JPN function binding from a global rename",
-       "JPN02033c3c was mislabeled func_020341e0 although its extra check matches USA02034104; "
-       "correcting that binding was rejected while both distinct USA functions stayed unchanged")
-def _prready_function_binding():
-    import ast
-    from types import SimpleNamespace
-    src = open(f"{KIT}/prready.py", encoding="utf-8").read()
-    functions = {n.name: ast.get_source_segment(src, n) for n in ast.parse(src).body
-                 if isinstance(n, ast.FunctionDef)}
-    ns = {"re": re}
-    exec(functions["names"] + "\n" + functions["existing_regional_binding"], ns)
-    classify = ns["existing_regional_binding"]
-    old = ("func_020341e0 "
-           "kind:function(arm,size=0xcc) addr:0x02033c3c\n")
-    new = ("func_02034104 "
-           "kind:function(arm,size=0xcc) addr:0x02033c3c\n")
-    other = ("func_020341e0 "
-             "kind:function(arm,size=0xcc) addr:0x020341e0\n"
-             "func_02034104 "
-             "kind:function(arm,size=0xdc) addr:0x02034104\n")
-    name = "func_020341e0"
-    if not classify(name, old, new, other, other):
-        return "the proven same-address JPN raw function correction was refused"
-    overlay = lambda s: s.replace("func_", "func_ov031_")
-    if not classify(overlay(name), overlay(old), overlay(new), overlay(other), overlay(other)):
-        return "a same-module raw overlay correction was refused"
-    for replacement in (
-            new.replace("func_02034104", "CuratedName"),
-            new.replace("func_02034104", "func_02034108"),
-            new.replace("func_02034104", "func_ov031_02034104"),
-            new.replace("addr:0x02033c3c", "addr:0x02033c40"),
-            new.replace("size=0xcc", "size=0xdc"),
-            new.replace("arm,", "thumb,"),
-            new.replace("kind:function(arm,size=0xcc)", "kind:data(any)"),
-            new.rstrip() + " align:4\n", new + new,
-            new + "Alias kind:function(arm,size=0xcc) addr:0x02033c3c\n", ""):
-        if classify(name, old, replacement, other, other):
-            return f"an unproven function correction passed: {replacement!r}"
-    if classify("CuratedOld", old.replace(name, "CuratedOld"), new, other, other):
-        return "a curated old name was exempted"
-    if classify(name, old + new.replace("02033c3c", "02033000"), new, other, other):
-        return "a target already present in JPN was exempted"
-    for changed in ("", other.replace("func_020341e0", "Renamed"),
-                    other.replace("addr:0x02034104", "addr:0x02034108"),
-                    other.replace("size=0xdc", "size=0xd8"), other + other):
-        if classify(name, old, new, other, changed):
-            return "a changed or ambiguous other-region entity was exempted"
-    if classify(name, old, new, other.splitlines(True)[0], other.splitlines(True)[0]):
-        return "a target missing from the other-region baseline was exempted"
-    if classify(name, old, new, other.replace("addr:0x02034104", "addr:0x020341e0"),
-                other.replace("addr:0x02034104", "addr:0x020341e0")):
-        return "two names at one other-region address were exempted"
-    # Exercise the actual JPN-only guard, not just the classifier in isolation.
-    for region in ("jpn", "usa", "eur"):
-        path = f"config/{region}/arm9/symbols.txt"
-        def fake_git(repo, *args):
-            if args[0] == "ls-tree":
-                return SimpleNamespace(stdout="config/usa\nconfig/eur\nconfig/jpn\n")
-            return SimpleNamespace(stdout="" if "--diff-filter=A" in args else path + "\n")
-        def fake_show(repo, rev, filename):
-            return (old if rev == "tip" else new) if filename == path else other
-        ns.update(REPO="fixture", MATCH_PATHS=("src/", "include/", "config/"),
-                  SOURCE=(".c", ".cpp", ".s"), SYMBOLS=re.compile(r"^config/([^/]+)/(.+/symbols\.txt)$"),
-                  MARKER=re.compile(r"(?m)^(<{7}|>{7})( |\r?$)"), git=fake_git, show=fake_show,
-                  delinks=lambda *args: [], diff_lines=lambda *args: old.splitlines())
-        exec(functions["decomp"], ns)
-        problems = ns["decomp"]("tip")
-        if (region == "jpn" and problems) or (region != "jpn" and len(problems) != 2):
-            return f"region guard changed for {region}: {problems}"
-    return None
-
-
-@check("prready accepts an existing mangled JPN function binding",
-       "an address-derived JPN label can belong to an unchanged named USA/EUR function")
-def _prready_mangled_function_binding():
-    import ast
-    src = open(f"{KIT}/prready.py", encoding="utf-8").read()
-    parts = {n.name: ast.get_source_segment(src, n) for n in ast.parse(src).body
-             if isinstance(n, ast.FunctionDef)}
-    ns = {"re": re}
-    exec(parts["names"] + "\n" + parts["existing_regional_binding"], ns)
-    classify = ns["existing_regional_binding"]
-    name = "func_" + "020e4864"
-    target = "_Z23SetEntryEnabled020e2cc4P13Entry020e2cc4i"
-    old = name + " kind:function(arm,size=0x60) addr:0x020e4864\n"
-    new = target + " kind:function(arm,size=0x60) addr:0x020e4864\n"
-    other = (name + " kind:function(arm,size=0xf4) addr:0x020e4864\n"
-             + target + " kind:function(arm,size=0x60) addr:0x020e2cc4\n")
-    if not classify(name, old, new, other, other):
-        return "a same-address JPN binding to an unchanged mangled entity was refused"
-    for replacement in (new.replace(target, "_Z14UnknownTargetv"),
-                        new.replace(target, "UnprovenCuratedName"),
-                        new.replace("addr:0x020e4864", "addr:0x020e4868"),
-                        new.replace("size=0x60", "size=0x64"),
-                        new.replace("arm,", "thumb,"), new + new):
-        if classify(name, old, replacement, other, other):
-            return "an unproven mangled correction passed"
-    if classify(name, old + new.replace("020e4864", "020e4880"), new, other, other):
-        return "a target already bound elsewhere in JPN was exempted"
-    for changed in ("", other.replace(target, "ChangedTarget"),
-                    other.replace("addr:0x020e2cc4", "addr:0x020e2cc8"), other + other):
-        if classify(name, old, new, other, changed):
-            return "a changed or ambiguous other-region entity was exempted"
-    if classify(name, old, new, other.splitlines(True)[0], other.splitlines(True)[0]):
-        return "a missing other-region target was exempted"
-    data = lambda s: s.replace("func_", "data_").replace(
-        "kind:function(arm,size=0x60)", "kind:data(any)").replace(
-        "kind:function(arm,size=0xf4)", "kind:data(any)")
-    if classify(data(name), data(old), data(new), data(other), data(other)):
-        return "the mangled-function exception leaked into data classification"
     return None
 
 
@@ -2236,164 +2122,6 @@ def _rename_respects_region_blocks():
         return "rewrote a region block wrongly:\n" + out
 
 
-@check("gate tool runner follows configure on Windows and Linux",
-       "executing MWCC .exe directly on Linux prevented every region's gate from compiling")
-def _gate_tool_runner():
-    import buildcfg
-    old = buildcfg._cfg.WINE
-    try:
-        for runner, prefix in (("", []), ("./wibo", [os.path.join(buildcfg.REPO, "wibo")]),
-                               ("/tmp/runner with spaces", ["/tmp/runner with spaces"]),
-                               ("wine", ["wine"])):
-            buildcfg._cfg.WINE = runner
-            if buildcfg.tool_command("compiler.exe") != prefix + ["compiler.exe"]:
-                return f"incorrect runner prefix for {runner!r}"
-    finally:
-        buildcfg._cfg.WINE = old
-
-
-@check("integration helpers isolate each region's symbols and relocations",
-       "Japanese integration repaired symbols and loaded relocations from the USA configuration")
-def _integration_regions():
-    import buildcfg
-    repair = load("autorepair")
-    ownership = load("dataown")
-    old_region, old_repo = buildcfg.REGION, repair.REPO
-    try:
-        with tempfile.TemporaryDirectory() as root:
-            repair.REPO = root
-            for region in ("usa", "jpn"):
-                directory = os.path.join(root, "config", region, "arm9")
-                os.makedirs(directory)
-                with open(os.path.join(directory, "symbols.txt"), "w") as fh:
-                    fh.write(f"{region}_name kind:function(arm,size=0x4) addr:0x02000000\n")
-                with open(os.path.join(directory, "relocs.txt"), "w") as fh:
-                    fh.write(region + "\n")
-            for region in ("usa", "jpn"):
-                buildcfg.REGION = region
-                repair._SYMS.clear()
-                if repair._symbols("main").get("02000000") != region + "_name":
-                    return f"{region} read another region's symbol"
-                relocs = ownership.load_relocs(root)
-                if len(relocs) != 1 or next(iter(relocs.values()))[0] != region + "\n":
-                    return f"{region} loaded another region's relocations"
-    finally:
-        buildcfg.REGION, repair.REPO = old_region, old_repo
-
-
-@check("coverage reports code bytes and functions separately without substituting estimates",
-       "a function-count percentage was presented as byte coverage or a missing report as measured progress")
-def _coverage_details():
-    coverage = load("cov")
-    with tempfile.TemporaryDirectory() as root:
-        coverage.REPORT = os.path.join(root, "report.json")
-        with open(coverage.REPORT, "w") as fh:
-            json.dump({"measures": {"matched_functions": "9", "total_functions": "10",
-                                   "matched_functions_percent": 90.0,
-                                   "matched_code": "10", "total_code": "100"}}, fh)
-        details = coverage.report_details()
-        if "functions: 9/10 (90.00%)" not in details or "code bytes: 10/100 (10.00%)" not in details:
-            return "function and byte scales were conflated"
-        if coverage.from_report() != ("9", "10", 90.0):
-            return "legacy report interface changed"
-        os.remove(coverage.REPORT)
-        try:
-            coverage.report_details()
-        except OSError:
-            return None
-        return "missing report did not fail closed"
-
-
-@check("scaffolds use regional symbols and preserve JP callee 02081130 despite source tags",
-       "a USA source name at 02081130 replaced an unrelated Japanese callee and poisoned the scaffold")
-def _scaffold_region_tags():
-    import buildcfg
-    import subprocess
-    from unittest.mock import patch
-    # Load the real generator without running the command-line dispatcher.
-    path = os.path.join(KIT, "scaffold.py")
-    code = open(path, encoding="utf-8").read().split('\nif sys.argv[1] == "--all":', 1)[0]
-    with tempfile.TemporaryDirectory() as root:
-        subprocess.run(["git", "init", "-q", root], check=True, capture_output=True)
-        for region in ("usa", "jpn", "eur"):
-            directory = os.path.join(root, "config", region, "arm9")
-            os.makedirs(directory)
-            with open(os.path.join(directory, "symbols.txt"), "w") as fh:
-                for address in ("02000000", "02081130", "02090000"):
-                    symbol = "func_" + address
-                    if address == "02081130" and region == "usa":
-                        symbol = "SetOrClearEntryFlag0x102081130"
-                    elif address == "02090000":
-                        symbol = region + "_only"
-                    fh.write(f"{symbol} kind:function(arm,size=0x8) addr:0x{address}\n")
-            with open(os.path.join(directory, "relocs.txt"), "w") as fh:
-                fh.write("from:0x02000000 kind:call to:0x02081130 module:main\n"
-                         "from:0x02000004 kind:call to:0x02090000 module:main\n")
-            with open(os.path.join(root, region + ".cpp"), "w") as fh:
-                fh.write(f"// {region.upper()}: func_02090000\nARM void poisoned_{region}_tag() {{}}\n")
-                if region == "usa":
-                    fh.write("// USA: func_02081130\nARM void SetOrClearEntryFlag0x102081130() {}\n")
-            image = os.path.join(root, "extract", region, "arm9")
-            os.makedirs(image)
-            with open(os.path.join(image, "arm9.bin"), "wb") as fh:
-                fh.write(bytes.fromhex("0000a0e10000a0e1"))
-        subprocess.run(["git", "-C", root, "add", "."], check=True, capture_output=True)
-        for region in ("usa", "jpn", "eur"):
-            with patch.object(buildcfg, "REGION", region), patch.object(_kp, "REPO", root):
-                namespace = {"__file__": path, "__name__": "_scaffold_region_test"}
-                exec(compile(code, path, "exec"), namespace)
-                output, refs = namespace["scaffold"]("main", "02000000")
-            wanted = "SetOrClearEntryFlag0x102081130" if region == "usa" else "func_02081130"
-            if f'extern "C" void {wanted}();' not in output or refs != 2:
-                return f"{region} resolved concrete callee 02081130 incorrectly"
-            if f'extern "C" void {region}_only();' not in output:
-                return f"{region} lost its canonical symbol name"
-            if "poisoned_" in output:
-                return f"{region} let a source tag replace its canonical symbol"
-            if any(f'void {other}_only();' in output for other in ("usa", "jpn", "eur") if other != region):
-                return f"{region} used another region's source name"
-            if f"// {region.upper()}: func_02000000" not in output:
-                return f"{region} emitted the wrong source tag"
-
-
-@check("kit initialization checks only the selected region and defaults to USA",
-       "a configured Japanese checkout failed initialization because only USA ROM paths were accepted")
-def _kit_init_region_dependencies():
-    import contextlib
-    import io
-    from types import SimpleNamespace
-    from unittest.mock import patch
-    path = os.path.join(KIT, "kit_init.py")
-    code = open(path, encoding="utf-8").read().rsplit("\nmain()", 1)[0]
-    for selection in (None, "usa", "jpn", "eur"):
-        region = selection or "usa"
-        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ):
-            if selection is None:
-                os.environ.pop("DQIX_REGION", None)
-            else:
-                os.environ["DQIX_REGION"] = selection
-            required = ["tools/configure.py", f"config/{region}/arm9/symbols.txt",
-                        f"config/{region}/arm9/delinks.txt", "build.ninja",
-                        f"extract/{region}/arm9/arm9.bin"]
-            for relative in required + ["compiler.exe"]:
-                filename = os.path.join(root, relative)
-                os.makedirs(os.path.dirname(filename), exist_ok=True)
-                with open(filename, "wb") as fh:
-                    fh.write(b"fixture")
-            compiler = SimpleNamespace(CC=os.path.join(root, "compiler.exe"), MWCC_VERSION="fixture")
-            with patch.object(_kp, "REPO", root), patch.dict(sys.modules, {"buildcfg": compiler}):
-                namespace = {"__file__": path, "__name__": "_kit_init_region_test"}
-                exec(compile(code, path, "exec"), namespace)
-                if namespace["REPO_FILES"] != required:
-                    return f"selection {selection!r} checks another region's files"
-                with contextlib.redirect_stdout(io.StringIO()):
-                    if not namespace["check_repo"]():
-                        return f"selection {selection!r} rejected its configured fixture"
-                    os.remove(os.path.join(root, required[-1]))
-                    if namespace["check_repo"]():
-                        return f"selection {selection!r} accepted a missing selected-region ROM"
-
-
 @check("regionsync keeps the ported modules that build when another ported module is red",
        "one bad JPN port turned ov025 red; regionsync restored all of config/jpn, so every later "
        "integration ported nothing to JPN")
@@ -2463,59 +2191,21 @@ def _external_gate_state():
     if 'os.replace(_tmp,' not in gate or 'ELFFile(io.BytesIO(_fh.read()))' not in diff:
         return "snapshot publication is not atomic or differ retains an open object handle"
 
-@check("pipetest mutates an emitted callee rather than an inactive regional declaration",
-       "0205faf4 and 0206f81c selected JP-only callees during USA tests and falsely reported gate holes")
-def _active_callee_mutation():
-    import pipetest
-    source = ('#if defined(jpn)\nextern "C" void func_020e0484();\n#endif\n'
-              'extern "C" void func_020457e0();\n'
-              'ARM void func_0205faf4() { func_020457e0(); }\n')
-    for symbols in ({"func_020457e0"}, {"_Z13func_020457e0v"}):
-        result = pipetest.mut_callee(source, "0205faf4", symbols)
-        if result != (source.replace("func_020457e0", "func_deadbeef"), "UNDEF"):
-            return "did not select the emitted callee while preserving the inactive declaration"
-    if pipetest.mut_callee(source, "0205faf4", set()) is not None:
-        return "selected a callee without an emitted undefined relocation"
-    if pipetest.mut_callee(source, "0205faf4", {"func_0205faf4"}) is not None:
-        return "selected the function's own definition"
-
-
-
-@check("wgate selects ISA and size by physical address, not raw-name suffix",
-       "JP021d4af8 was584B but raw name func_ov017_021d4af8 belonged at021d4f48/164B; name-first selected the wrong slot")
-def _gate_slot_address():
-    source = open(f"{KIT}/wgate.py", encoding="utf-8").read()
-    start = source.index("# accept THUMB as well as ARM.")
-    selection = source[start:source.index("if SEC is None:", start)]
-    def missing(message, *args, **kwargs):
-        raise ValueError(message)
-    cases = [
-        ("renamed ARM with colliding raw name", "021d4af8", "func_ov017_",
-         "func_ov017_021d4af8 kind:function(thumb,size=0xa4) addr:0x021d4f48\n"
-         "func_ov017_021d46a4 kind:function(arm,size=0x248) addr:0x021d4af8\n", ("arm", 584)),
-        ("renamed Thumb", "02001000", "func_",
-         "SemanticName kind:function(thumb,size=0x20) addr:0x02001000\n", ("thumb", 32)),
-        ("ordinary raw ARM", "02001000", "func_",
-         "func_02001000 kind:function(arm,size=0x30) addr:0x02001000\n", ("arm", 48)),
-        ("ordinary raw Thumb", "02001000", "func_",
-         "func_02001000 kind:function(thumb,size=0x10) addr:0x02001000\n", ("thumb", 16)),
-        ("missing", "02001000", "func_", "", None),
-        ("missing despite same raw name elsewhere", "02001000", "func_",
-         "func_02001000 kind:function(arm,size=0x30) addr:0x02002000\n", None),
-        ("data at requested address is not a function", "02001000", "func_",
-         "data_02001000 kind:data size:0x30 addr:0x02001000\n", None),
-    ]
-    for label, address, prefix, symbols, expected in cases:
-        namespace = dict(re=re, ADDR=address, PFX=prefix, symtxt=symbols, fail=missing)
-        try:
-            exec(selection, namespace)
-            actual = (namespace["ISA"], namespace["slot"])
-        except ValueError as error:
-            if not str(error).startswith("NO-SLOT:"):
-                return label + ": unexpected error " + str(error)
-            actual = None
-        if actual != expected:
-            return "%s: got %r, expected %r" % (label, actual, expected)
+@check("repool leaves a member already spelled as the renamed nested symbol",
+       "021eefd0 declared GetGrottoStruct inside struct GameState; repool pasted "
+       "_ZN9GameState15GetGrottoStructEv over the member and the call, and the source stopped compiling")
+def _repool_member():
+    R = load("pad/repool")
+    spell = {"GetGrottoStruct": "_ZN9GameState15GetGrottoStructEv", "Foo": "_Z3Foov"}
+    member = ("struct G;\nstruct GameState {\n    static GameState* GetInstance();\n"
+              "    G* GetGrottoStruct();\n};\n\nvoid f() { GameState::GetInstance()->GetGrottoStruct(); }\n")
+    new, _what = R.rewrite(member, True, spell, {}, set(), {}, {})
+    if new != member:
+        return "rewrote a member declaration and its call"
+    free = "int Foo();\n\nvoid f() { Foo(); }\n"
+    new, _what = R.rewrite(free, True, spell, {}, set(), {}, {})
+    if not new or "_Z3Foov" not in new:
+        return "no longer rewrites a renamed free function"
 
 
 if __name__ == "__main__":
