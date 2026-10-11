@@ -26,9 +26,6 @@ STATE_DIRS = ["wlog", "wlog/gates", "wip", "staging", "handwork", "attempts", "c
               "gated", "clsbest", "quarantine", "doc_cache", "refs"]
 REQUIRED = {"capstone": "capstone", "elftools": "pyelftools"}
 OPTIONAL = {"frida": "frida (only for frida/*.py and pad/renum/)", "yaml": "pyyaml (only for frida/schedforce.py)"}
-REGION = os.environ.get("DQIX_REGION", "usa")
-REPO_FILES = ["tools/configure.py", f"config/{REGION}/arm9/symbols.txt", f"config/{REGION}/arm9/delinks.txt",
-              "build.ninja", f"extract/{REGION}/arm9/arm9.bin"]
 PORTABLE_SKILLS = ["dqix-hand-match", "dqix-status", "dqix-stop", "dqix-coordinate"]
 
 
@@ -57,15 +54,18 @@ def check_repo():
     if not os.path.isdir(REPO):
         print(f"FAIL  decomp checkout not found at {REPO}; clone it there or set DQIX_REPO")
         return False
-    missing = [f for f in REPO_FILES if not os.path.exists(os.path.join(REPO, f))]
-    if missing:
-        print(f"FAIL  {REPO} is not configured and built; missing: {', '.join(missing)}")
-        print("      follow the decomp README (base ROM in place, python tools/configure.py, ninja check)")
-        return False
     try:
         import buildcfg
     except Exception as e:
         print(f"FAIL  buildcfg could not read the build configuration: {e}")
+        return False
+    cfg = buildcfg.config_dir("main")
+    repo_files = ["tools/configure.py", f"{cfg}/symbols.txt", f"{cfg}/delinks.txt",
+                  "build.ninja", buildcfg.pristine("main")]
+    missing = [f for f in repo_files if not os.path.exists(os.path.join(REPO, f))]
+    if missing:
+        print(f"FAIL  {REPO} is not configured and built; missing: {', '.join(missing)}")
+        print("      follow the decomp README (base ROM in place, python tools/configure.py, ninja check)")
         return False
     if not os.path.exists(buildcfg.CC):
         print(f"FAIL  compiler {buildcfg.CC} is missing; run `ninja check` in the decomp once to fetch the toolchain")

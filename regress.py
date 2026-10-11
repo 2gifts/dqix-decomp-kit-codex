@@ -1354,7 +1354,7 @@ def _compile_elf(text, repo):
         src, obj = os.path.join(d, "t.cpp"), os.path.join(d, "t.o")
         with open(src, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-        r = subprocess.run([buildcfg.CC] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=repo,
+        r = subprocess.run(buildcfg.tool_command(buildcfg.CC) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=repo,
                            capture_output=True, text=True)
         if r.returncode:
             return "COMPILE " + (r.stdout + r.stderr)[-200:]
@@ -2038,7 +2038,7 @@ def _finish_bulk_snapshot_behaviour():
             with open(os.path.join(source,filename),"w") as out:
                 out.write("// USA: func_" + addr + "\n")
         with open(os.path.join(q,".done_main"),"w") as out: out.write("02000000\n")
-        body = 'cd "$1" || exit 99; SP="$1/state"; Q="$1/quarantine"; OV=main; TAGPRE=func_; SRCDIR="src/Combat/Main"; calls="$1/calls"\n'
+        body = 'cd "$1" || exit 99; SP="$1/state"; Q="$1/quarantine"; OV=main; REGION_TAG=USA; TAGPRE=func_; SRCDIR="src/Combat/Main"; calls="$1/calls"\n'
         # Record actual quarantine moves without changing their arguments or result.
         body += 'mv() { printf "%s\\n" "$1" >> "$SP/../moves"; command mv "$@"; }\n'
         body += 'git() { echo x >> "$calls"; '
@@ -2206,6 +2206,199 @@ def _repool_member():
     new, _what = R.rewrite(free, True, spell, {}, set(), {}, {})
     if not new or "_Z3Foov" not in new:
         return "no longer rewrites a renamed free function"
+
+
+@check("wgate selects ISA and size by physical address, not raw-name suffix",
+       "JP021d4af8 was584B but raw name func_ov017_021d4af8 belonged at021d4f48/164B; name-first selected the wrong slot")
+def _gate_slot_address():
+    source = open(f"{KIT}/wgate.py", encoding="utf-8").read()
+    start = source.index("# accept THUMB as well as ARM.")
+    selection = source[start:source.index("if SEC is None:", start)]
+    def missing(message, *args, **kwargs):
+        raise ValueError(message)
+    cases = [
+        ("renamed ARM with colliding raw name", "021d4af8", "func_ov017_",
+         "func_ov017_021d4af8"
+         " kind:function(thumb,size=0xa4) addr:0x021d4f48\n"
+         "func_ov017_021d46a4"
+         " kind:function(arm,size=0x248) addr:0x021d4af8\n", ("arm", 584)),
+        ("renamed Thumb", "02001000", "func_",
+         "SemanticName kind:function(thumb,size=0x20) addr:0x02001000\n", ("thumb", 32)),
+        ("ordinary raw ARM", "02001000", "func_",
+         "func_02001000"
+         " kind:function(arm,size=0x30) addr:0x02001000\n", ("arm", 48)),
+        ("ordinary raw Thumb", "02001000", "func_",
+         "func_02001000"
+         " kind:function(thumb,size=0x10) addr:0x02001000\n", ("thumb", 16)),
+        ("missing", "02001000", "func_", "", None),
+        ("missing despite same raw name elsewhere", "02001000", "func_",
+         "func_02001000"
+         " kind:function(arm,size=0x30) addr:0x02002000\n", None),
+        ("data at requested address is not a function", "02001000", "func_",
+         "data_02001000 kind:data size:0x30 addr:0x02001000\n", None),
+    ]
+    for label, address, prefix, symbols, expected in cases:
+        namespace = dict(re=re, ADDR=address, PFX=prefix, symtxt=symbols, fail=missing)
+        try:
+            exec(selection, namespace)
+            actual = (namespace["ISA"], namespace["slot"])
+        except ValueError as error:
+            if not str(error).startswith("NO-SLOT:"):
+                return label + ": unexpected error " + str(error)
+            actual = None
+        if actual != expected:
+            return "%s: got %r, expected %r" % (label, actual, expected)
+
+
+
+
+
+# Region fixtures exercise the real lookup/rewriting functions without a ROM or compiler.
+def _region_functions(script, root, region):
+    import ast
+    import functools
+    import glob
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(
+        REGION=region,
+        config_dir=lambda mod: "config/%s/arm9%s" % (
+            region, "" if mod == "main" else "/overlays/ov" + mod),
+        pristine=lambda mod: "extract/%s/%s" % (
+            region, "arm9/arm9.bin" if mod == "main" else "arm9_overlays/ov" + mod + ".bin"))
+    source = open(f"{KIT}/{script}.py", encoding="utf-8").read()
+    tree = ast.parse(source)
+    nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) or
+             (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and
+              t.id == "REGION_TAG" for t in n.targets))]
+    ns = dict(re=re, os=os, sys=sys, glob=glob, functools=functools,
+              buildcfg=cfg, REPO=root, SP=root, KIT=KIT, _SYMS={},
+              SYMS={}, BOUNDS={}, __file__=f"{KIT}/{script}.py")
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), script, "exec"), ns)
+    return ns, source
+
+
+def _region_files(root):
+    from pathlib import Path
+    for region, name, isa in (("usa", "UsaName", "arm"), ("jpn", "JpnName", "thumb")):
+        for mod, addr in (("main", "02000000"), ("017", "02100000")):
+            cfg = Path(root, "config", region, "arm9")
+            if mod != "main":
+                cfg /= "overlays/ov" + mod
+            cfg.mkdir(parents=True)
+            (cfg / "symbols.txt").write_text(
+                "%s kind:function(%s,size=0x4) addr:0x%s\n" % (name, isa, addr))
+            (cfg / "delinks.txt").write_text(
+                ".init start:0x%s end:0x%08x kind:code\n" % (addr, int(addr, 16) + 4))
+            binary = Path(root, "extract", region,
+                          "arm9/arm9.bin" if mod == "main" else "arm9_overlays/ov017.bin")
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(region.encode() + b"\0")
+
+
+@check("scaffold uses active-region config, pristine bytes and source tags",
+       "JPN scaffolds read USA symbol paths or emitted USA markers and could not enter a JPN wave")
+def _scaffold_region_fixture():
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            ns, _source = _region_functions("scaffold", root, region)
+            for mod, addr in (("main", "02000000"), ("017", "02100000")):
+                blob, base = ns["module_image"](mod)
+                if blob != region.encode() + b"\0" or base != int(addr, 16):
+                    return "%s %s selected the wrong pristine image" % (region, mod)
+                ns["rom_calls"] = lambda *args: []
+                out, count = ns["scaffold"](mod, addr)
+                name = "JpnName" if region == "jpn" else "UsaName"
+                prefix = "func_" if mod == "main" else "func_ov017_"
+                if ("// %s: %s%s" % (region.upper(), prefix, addr) not in out
+                        or name + "(" not in out or count != 0):
+                    return "%s %s emitted the wrong symbol or region tag: %s" % (region, mod, out)
+
+
+@check("autorepair selects active-region symbols and repairs its init/KEEP-NAME tags",
+       "JPN files were repaired against USA symbols or their JPN markers bypassed init/KEEP-NAME repairs")
+def _autorepair_region_fixture():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        for region in ("usa", "jpn"):
+            ns, _source = _region_functions("autorepair", root, region)
+            ns["_emits_symbol"] = lambda *args: (True, "")
+            ns["_text_emits"] = lambda *args: True
+            for mod, addr in (("main", "02000000"), ("017", "02100000")):
+                expected = "JpnName" if region == "jpn" else "UsaName"
+                if ns["_symbols"](mod).get(addr) != expected:
+                    return "%s %s selected the wrong symbols" % (region, mod)
+                path = Path(root, "candidate.cpp")
+                path.write_text('#include <globaldefs.h>\n// %s: func_%s\nARM int %s() { return 0; }\n'
+                                % (region.upper(), addr, expected))
+                with patch("subprocess.run", return_value=SimpleNamespace(stdout="MATCH\n", stderr="")):
+                    applied = ns["repair"](str(path), mod, addr)
+                out = path.read_text()
+                if ("added initcode pragma" not in applied or "marked KEEP-NAME" not in applied
+                        or '__declspec(initcode)' not in out
+                        or "// " + region.upper() + ":" not in out):
+                    return "%s %s missed its tag repairs: %r" % (region, mod, applied)
+
+
+@check("integrate discovers active-region tagged candidates using active config and ROM paths",
+       "JPN candidates were invisible or integration selected the USA module config/pristine binary")
+def _integrate_region_fixture():
+    import glob
+    with tempfile.TemporaryDirectory() as root:
+        _region_files(root)
+        os.mkdir(os.path.join(root, "src"))
+        for region in ("usa", "jpn"):
+            for mod, addr in (("main", "02000000"), ("017", "02100000")):
+                ns, source = _region_functions("integrate", root, region)
+                ns.update(MAIN=mod == "main", MOD=mod, SRCDIR=os.path.join(root, "src"),
+                          glob=glob, tracked=lambda path: True, DELINKED=set(), delinks="")
+                start = source.index("if MAIN:", source.index("# ---- the ONLY module-dependent"))
+                end = source.index("# Per-file compiler override", start)
+                exec(source[start:end], ns)
+                expected_cfg = ns["buildcfg"].config_dir(mod)
+                if ns["CFG"] != expected_cfg or ns["PRISTINE"] != region.encode() + b"\0":
+                    return "%s %s selected wrong config/pristine" % (region, mod)
+                for other in ("usa", "jpn"):
+                    with open(os.path.join(root, "src", other + ".cpp"), "w") as fh:
+                        fh.write("// %s: %s%s\nARM int Fixture() { return 0; }\n" %
+                                 (other.upper(), ns["PREFIX"], addr))
+                ns["symtxt"] = open(os.path.join(root, expected_cfg, "symbols.txt")).read()
+                start = source.index("pending = []")
+                exec(source[start:source.index("TU = {}", start)], ns)
+                want = [(os.path.join(root, "src", region + ".cpp").replace("\\", "/"), addr)]
+                if ns["pending"] != want:
+                    return "%s %s discovered %r, expected %r" % (region, mod, ns["pending"], want)
+
+
+@check("integration shell configure calls preserve JPN and compiler/runner paths with spaces",
+       "finish_wave/integrate_fast configured USA or dropped the existing Linux toolchain environment")
+def _integration_shell_environment():
+    import subprocess
+    for script in ("finish_wave.sh", "integrate_fast.sh"):
+        source = open(f"{KIT}/{script}", encoding="utf-8").read()
+        lines = source.splitlines()
+        idx = next(i for i, line in enumerate(lines) if line.startswith("python tools/configure.py "))
+        start = idx
+        while start and (lines[start - 1].startswith("_compiler_args=") or
+                         lines[start - 1].startswith('[ -n "${DQIX_')):
+            start -= 1
+        snippet = "\n".join(lines[start:idx + 1])
+        with tempfile.TemporaryDirectory() as root:
+            output = os.path.join(root, "arguments")
+            harness = ('python() { printf "%s\\n" "$@" > "$CAPTURE"; }; '
+                       'REGION=jpn; LOG=/dev/null;\n' + snippet)
+            env = dict(os.environ, CAPTURE=output, DQIX_PREINSTALLED_COMPILER="/tools/compiler root",
+                       DQIX_WINE="/tools/wine runner")
+            result = subprocess.run(["bash", "-c", harness], env=env, capture_output=True, text=True)
+            got = open(output).read().splitlines() if os.path.exists(output) else []
+            want = ["tools/configure.py", "jpn", "--no-extract", "--compiler",
+                    "/tools/compiler root", "-w", "/tools/wine runner"]
+            if result.returncode or got != want:
+                return "%s forwarded %r, expected %r: %s" % (script, got, want, result.stderr)
+
 
 
 if __name__ == "__main__":

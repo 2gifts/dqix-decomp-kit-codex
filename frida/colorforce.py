@@ -114,8 +114,8 @@ Interceptor.replace(ptr('0x513a50'), new NativeCallback(colorgraph, 'int', ['poi
 
 
 def run(src, cfg, obj):
-    cc = buildcfg.cc_path(None).replace("/", "\\")
-    argv = [cc] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
+    cc = os.path.normpath(buildcfg.cc_path(None))
+    argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
     events = []
     done = threading.Event()
     device = frida.get_local_device()
@@ -156,7 +156,7 @@ def main():
 
     native = out + "/native.o"
     import subprocess
-    subprocess.run([buildcfg.cc_path(None)] + list(buildcfg.FLAGS) + ["-c", src, "-o", native], cwd=REPO, check=True)
+    subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + list(buildcfg.FLAGS) + ["-c", src, "-o", native], cwd=REPO, check=True)
     ev = run(src, {"kind": "none", "call": -1}, out + "/replay.o")
     if text_of(native) != text_of(out + "/replay.o"):
         print("REPLAY MISMATCH: the JS colouring does not reproduce mwcc")

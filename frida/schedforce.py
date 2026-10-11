@@ -118,7 +118,7 @@ if (TRACE || DROPS.size) {
 
 
 def compile_argv(src, obj):
-    return [buildcfg.cc_path(None).replace("/", "\\")] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
+    return buildcfg.tool_command(os.path.normpath(buildcfg.cc_path(None))) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
 
 
 def run(src, cfg, obj):

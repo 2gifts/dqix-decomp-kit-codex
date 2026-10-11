@@ -195,7 +195,7 @@ def classify(MOD, cands, workdir=None, names=None):
             if keys[addr] in _verdicts():
                 out[addr] = _verdicts()[keys[addr]]; continue
         open(src, 'w', encoding='utf-8').write(txt)
-        r = subprocess.run([_cc] + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
+        r = subprocess.run(buildcfg.tool_command(_cc) + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
                            cwd=REPO)
         if r.returncode != 0:
             out[addr] = 'COMPILE'; continue

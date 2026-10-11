@@ -48,8 +48,8 @@ Interceptor.attach(ptr('0x559dc0'), {
 
 
 def run(src, mode, out_obj):
-    cc = buildcfg.cc_path(None).replace("/", "\\")
-    argv = [cc] + list(buildcfg.FLAGS) + ["-c", src, "-o", out_obj]
+    cc = os.path.normpath(buildcfg.cc_path(None))
+    argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", out_obj]
     done = threading.Event()
     device = frida.get_local_device()
     pid = device.spawn(argv, cwd=REPO)

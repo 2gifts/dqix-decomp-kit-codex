@@ -27,6 +27,8 @@ export DQIX_REPO="$REPO"
 _final() { local rc=$?; wave_lock_release; echo "$(date '+%H:%M') INTEGRATE-END rc=$rc" | tee -a "$LOG"; }
 trap _final EXIT
 cd "$REPO" || exit 2
+REGION="$(python "$KIT/buildcfg.py" --region)" || exit 2
+REGION_TAG="${REGION^^}"
 
 n=$(ls "$SP"/staging/*/*.cpp 2>/dev/null | wc -l)
 [ "$n" -eq 0 ] && { echo "nothing staged"; exit 0; }
@@ -54,7 +56,7 @@ fi
 _stray=0
 for f in $(git ls-files --others --exclude-standard -- src | grep -E '\.(cpp|c)$'); do
   [ -e "$f" ] || continue
-  a=$(grep -oE '// USA: func_(ov[0-9]+_)?[0-9a-fA-F]{8}' "$f" | head -1 | grep -oE '[0-9a-fA-F]{8}$')
+  a=$(grep -oE "// ${REGION_TAG}: func_(ov[0-9]+_)?[0-9a-fA-F]{8}" "$f" | head -1 | grep -oE '[0-9a-fA-F]{8}$')
   d="$SP/hold_main"; case "$f" in *Overlay_*) d="$SP/quarantine";; esac
   mkdir -p "$d"; mv -f "$f" "$d/$(basename "$f")" && _stray=$((_stray + 1))
 done
@@ -97,6 +99,7 @@ SP = sys.argv[1]
 KIT = sys.argv[2]
 sys.path.insert(0, KIT)
 import classify as C
+import buildcfg
 bad = f"{SP}/staging_unclassified"
 os.makedirs(bad, exist_ok=True)
 by = collections.defaultdict(dict)
@@ -104,7 +107,7 @@ paths = {}
 for p in glob.glob(f"{SP}/staging/*/*.cpp"):
     tag = os.path.basename(os.path.dirname(p))
     mod = tag[2:] if tag.startswith("ov") else "main"
-    m = re.search(r"// USA: func_(?:ov\d+_)?([0-9a-fA-F]{8})", open(p, encoding="utf-8", errors="ignore").read())
+    m = re.search(rf"// {buildcfg.REGION.upper()}: func_(?:ov\d+_)?([0-9a-fA-F]{{8}})", open(p, encoding="utf-8", errors="ignore").read())
     if m:
         by[mod][m.group(1).lower()] = open(p, encoding="utf-8", errors="ignore").read()
         paths[(mod, m.group(1).lower())] = p
@@ -150,7 +153,10 @@ done
 # the link fails with "Specified file build/usa/src/.../0200006a.o not found" and the combined build
 # looks like the functions are bad when nothing was ever compiled. finish_wave has always done this;
 # my fast path omitted it, which is what made a set of TRUSTED candidates appear unbuildable.
-python tools/configure.py usa --no-extract >> "$LOG" 2>&1
+_compiler_args=()
+[ -n "${DQIX_PREINSTALLED_COMPILER:-}" ] && _compiler_args=(--compiler "$DQIX_PREINSTALLED_COMPILER")
+[ -n "${DQIX_WINE:-}" ] && _compiler_args+=(-w "$DQIX_WINE")
+python tools/configure.py "$REGION" --no-extract "${_compiler_args[@]}" >> "$LOG" 2>&1
 echo "$(date '+%H:%M') wired $placed modules, configured, building once" >> "$LOG"
 
 green=0
@@ -198,7 +204,7 @@ if [ "$green" = "1" ]; then
     _kept=0
     for f in "$SP"/staging/*/*.cpp; do
       [ -e "$f" ] || continue
-      a=$(grep -oE '// USA: func_(ov[0-9]+_)?[0-9a-fA-F]{8}' "$f" | head -1 \
+      a=$(grep -oE "// ${REGION_TAG}: func_(ov[0-9]+_)?[0-9a-fA-F]{8}" "$f" | head -1 \
           | grep -oE '[0-9a-fA-F]{8}$' | tr 'A-F' 'a-f')
       _m=$(basename "$(dirname "$f")"); _m=${_m#ov}
       if [ -n "$a" ] && ! python "$KIT/delinked.py" "$a" "$_m"; then

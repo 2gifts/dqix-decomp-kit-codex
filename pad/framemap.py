@@ -55,7 +55,7 @@ off = int(ADDR, 16) - base
 rom = list(md.disasm(blob[off:off + slot], int(ADDR, 16)))
 
 obj = f"{SP}/framemap_{os.getpid()}.o"
-r = subprocess.run([CC] + FLAGS + ["-c", os.path.abspath(SRC), "-o", obj],
+r = subprocess.run(buildcfg.tool_command(CC) + FLAGS + ["-c", os.path.abspath(SRC), "-o", obj],
                    capture_output=True, text=True, cwd=REPO)
 if r.returncode:
     print("COMPILE-FAIL", (r.stdout + r.stderr)[-400:])

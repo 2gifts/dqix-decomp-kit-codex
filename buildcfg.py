@@ -23,8 +23,8 @@ def _load():
     sys.argv = ["configure.py", REGION]
     if os.environ.get("DQIX_WINE"):
         sys.argv += ["-w", os.environ["DQIX_WINE"]]
-    if os.environ.get("DQIX_COMPILER_ROOT"):
-        sys.argv += ["--compiler", os.environ["DQIX_COMPILER_ROOT"]]
+    if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
+        sys.argv += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
     sys.path.insert(0, _TOOLS)
     try:
         import configure
@@ -107,6 +107,10 @@ if __name__ == "__main__":
         print(CC)
     elif "--flags" in sys.argv:
         print(" ".join(FLAGS))
+    elif "--region" in sys.argv:
+        print(REGION)
+    elif "--config-dir" in sys.argv:
+        print(config_dir(sys.argv[sys.argv.index("--config-dir") + 1]))
     else:
         print("MWCC", MWCC_VERSION)
         print("CC  ", CC)
