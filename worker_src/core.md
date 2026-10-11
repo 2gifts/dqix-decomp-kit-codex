@@ -391,9 +391,6 @@ CHEAPEST node, cost = number of basic blocks that reference it; the victim takes
 (`fp`). To move the victim from one local to another, change which one a block reads: `lo = 1.0f`
 instead of `lo = hi` (same asm after CSE) shifted one reference and flipped it (`021fa7ec`, 67 -> 6).
 A compound float op (`hi *= 0.8f`) puts the constant in r1; `hi = hi * 0.8f` puts it in r0.
-When a parameter sits one callee-saved register too low, a local the function only writes may be a
-trailing PARAMETER it overwrites: `extern "C" ... (const char* name, char* out)` with `out` reset
-before use moves `name` from r4 to r5 and keeps the symbol (`02184d80`).
 **A FIELD LOAD SCHEDULED BEFORE THE ARGUMENT MOVES = AN INLINE GETTER THAT RETURNS THROUGH A LOCAL**
 (`02157d40`). Under register pressure the scheduler breaks ties by IR order, and call arguments are
 lowered in argument order; `return u->id;` (or a plain local) folds back into the argument, but
@@ -534,12 +531,12 @@ Two spilled values in each other's slots: a named pointer local (`codes = row->c
 in declaration order; deleting it and writing `row->codes[i]` makes the hoisted address a compiler
 temp created later, which swaps the slots (`021d8c30`). For a pair fed from one value, the
 assignment chain is the store order: `keepDefault = textKind = x;` stores `textKind` first.
-A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend split temp, not a
-named field path: `names = (Container*)((u8*)roster + 0x684)` instead of the `+0x284` member's
-`+0x400` field gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`). A register
-that holds a partial sum (`save+0x324`) with `#0x2400` re-added at each use is the same split: one
-`List* list = (List*)(save + 0x2724);` at the top fixes a function-wide callee-saved swap
-(`021adcb0`).
+A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend split temp: the
+source reaches it as ONE member at its full offset (`+0x684`), not through the `+0x284` sub-object's
+`+0x400` field. That gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`). A
+register holding a partial sum (`save+0x324`) with `#0x2400` re-added at each use is the same
+split: one access at the full `+0x2724` fixes a function-wide callee-saved swap (`021adcb0`).
+Prefer a struct member at that offset over raw `(u8*)` arithmetic; both compile the same.
 
 ### A ZERO WRITTEN AFTER CONSTANT STORES TAKES THE OTHER SCRATCH REGISTER
 `generic = 0;` written after `soundId = 3; textKind = 1;` is hoisted above the compare into r1 and
@@ -1033,9 +1030,7 @@ fields, including parameters) and it has been run on your starting artifact befo
 built. Reach for these by hand only when the shape below is one the rules cannot express.
 `volatile` also PINS LOAD ORDER, not just reloads: plain locals let mwcc sink each load to its
 first use and reorder them into use order, where volatile keeps declaration order (`0215b138`,
-two `ldrsh` field reads, 4 bytes). A single-use field read is forward-substituted to its use; a
-`volatile` member read into a local above the test (`u8 threshold = w->threshold_;`) loads it
-first, and the same on two int members puts the int loads ahead of a float load (`021edf54`).
+two `ldrsh` field reads, 4 bytes).
 **A CACHED LOCAL IS A CLAIM THAT NOTHING IN BETWEEN WROTE THAT MEMORY, and the ROM rarely makes it.**
 Re-read instead of caching whenever calls sit between the two uses: a field after three mutating
 calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the function has itself been
