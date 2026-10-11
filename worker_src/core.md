@@ -392,6 +392,8 @@ When the callee-saved registers are over-subscribed, the clique's last optimisti
 CHEAPEST node, cost = number of basic blocks that reference it; the victim takes the last register
 (`fp`). To move the victim from one local to another, change which one a block reads: `lo = 1.0f`
 instead of `lo = hi` (same asm after CSE) shifted one reference and flipped it (`021fa7ec`, 67 -> 6).
+An explicit `else { keep = 1; }` on a flag already initialised to 1 adds a referencing block the
+same way and moved the spill onto the ROM's loop counter (`02190884`, OPERAND 39).
 A compound float op (`hi *= 0.8f`) puts the constant in r1; `hi = hi * 0.8f` puts it in r0.
 **A FIELD LOAD SCHEDULED BEFORE THE ARGUMENT MOVES = AN INLINE GETTER THAT RETURNS THROUGH A LOCAL**
 (`02157d40`). Under register pressure the scheduler breaks ties by IR order, and call arguments are
