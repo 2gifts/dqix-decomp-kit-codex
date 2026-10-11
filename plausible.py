@@ -41,6 +41,18 @@ def findings(text):
         if m and m.group(1) == m.group(2):
             out.append((i + 1, "SELF-ASSIGN", m.group(1)))
 
+        m = re.match(r"^\s+(%s)\s*=\s*0u?\s*-\s*(%s)\s*;\s*$" % (IDENT, IDENT), ln)
+        if m and m.group(1) == m.group(2):
+            name = m.group(1)
+            for j in range(i - 1, max(-1, i - 4), -1):
+                prev = lines[j].strip()
+                if not prev or prev.startswith("//"):
+                    continue
+                if re.match(r"^(?:const\s+)?(?:unsigned\s+|signed\s+)?\w[\w\s]*?\b%s\s*=\s*0u?\s*;"
+                            % re.escape(name), prev):
+                    out.append((i + 1, "ZERO-NEGATE-PAD", name))
+                break
+
     inl = {}
     for m in re.finditer(r"(?m)^(?:static\s+)?inline\s+[^({;]*?\b(%s)\s*\(([^)]*)\)\s*\{([^{}]*)\}" % IDENT, text):
         name, params, fbody = m.group(1), m.group(2), m.group(3).strip()

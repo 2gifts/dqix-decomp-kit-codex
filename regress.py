@@ -67,6 +67,83 @@ def _decomment_keeps_markers():
     return None
 
 
+def _evo_score(sites_list):
+    class _R:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    argv, sys.argv = sys.argv, ["evo_score.py", "main", "02011b68"]
+    try:
+        es = load("pad/evo_score")
+
+        def fake_run(cmd, **kw):
+            n = int((kw.get("env") or {}).get("WDIFF_MAXRUNS") or 12)
+            kept = sites_list[:n]
+            lost = len(sites_list) - len(kept)
+            return _R("BYTEDIFF %d bytes in %d run(s), slot=0x44c isa=thumb\n"
+                      % (len(sites_list), len(sites_list)) + "".join(kept)
+                      + (" ... %d more run(s) suppressed (raise WDIFF_MAXRUNS)\n" % lost if lost else ""))
+
+        es.subprocess = type("_sub", (), {"run": staticmethod(fake_run)})
+        return es
+    finally:
+        sys.argv = argv
+
+
+def _site(off, target, ours):
+    return " *0x%04x  %-34s| %s\n" % (off, target, ours)
+
+
+_HEAD = [_site(o, "ldr r%d,[r3]" % i, "ldr r%d,[r4]" % i)
+         for i, o in enumerate((0x0048, 0x0090, 0x0118, 0x012c, 0x0150, 0x0164, 0x0190,
+                                0x01b0, 0x01d0, 0x01f0, 0x0210, 0x0230, 0x0250, 0x0270))]
+
+
+@check("evo_score's sig separates candidates that are wrong in the same places",
+       "sig was built from the OFFSETS of the differing runs and never from what differs there, so "
+       "c_frameorder.cpp and c_splitframe.cpp scored the same fitness 126 and the same sig "
+       "LOOP-SHAPE@48,90-c4,118,12c-130,150,164-170+3 while emitting different code (the frame "
+       "slots permute: recBase 0->8, fresh 8->0). dqix-evolve.js select() keeps one file per "
+       "signature, so the second residue was discarded unmeasured")
+def _evo_sig_separates_same_offsets():
+    a = _HEAD[:2]
+    b = [_HEAD[0], _site(0x0090, "ldr r0,[r3]", "ldr r0,[r5]")]
+    sa = _evo_score(a).sites("x.cpp")[0]
+    sb = _evo_score(b).sites("x.cpp")[0]
+    if sa == sb:
+        return "same offsets, different instructions, same sig: %s" % sa
+    return None
+
+
+@check("evo_score's sig separates candidates that differ only past the sixth site",
+       "sig named the first 6 differing runs and folded the rest into `+N` -- a count with no "
+       "position and no content -- and wdiff prints only WDIFF_MAXRUNS (12) runs, so two "
+       "candidates wrong in the same first six places but differently after that were one "
+       "signature")
+def _evo_sig_covers_every_site():
+    a = _evo_score(_HEAD).sites("x.cpp")[0]
+    b = _evo_score(_HEAD[:-1] + [_site(0x0270, "ldr r13,[r3]", "ldr r13,[r5]")]).sites("x.cpp")[0]
+    if a == b:
+        return "differing site 14 of 14, sig does not: %s" % a
+    return None
+
+
+@check("evo_score's sig keeps the readable offset prefix boards already carry",
+       "sig is a required field of dqix-evolve.js's scored-file schema and workers' board.tsv "
+       "files hold sigs in the old form; a replacement format would leave every one of them "
+       "unreadable")
+def _evo_sig_keeps_prefix():
+    sig, nbytes = _evo_score(_HEAD).sites("x.cpp")
+    old = "48,90,118,12c,150,164+8"          # the offset list in the format boards already carry
+    if not sig.startswith(old + "~"):
+        return "readable prefix %r lost or reworded: %s" % (old, sig)
+    if not re.fullmatch(r"[0-9a-f]{8}", sig[len(old) + 1:]):
+        return "disambiguator is not a short hex tail: %s" % sig
+    if nbytes != 14:
+        return "BYTEDIFF not parsed: %r" % nbytes
+    return None
+
+
 # ---------------------------------------------------------------- resumable.py
 
 @check("distances() ignores hex tails and size deltas",
@@ -1895,7 +1972,6 @@ def sweep_fingerprint():
     return h.hexdigest()
 
 
-
 @check("recovery delegates Python to the current interpreter and can import its ELF dependency",
        "native Windows child lookup selected a different Python and crashed integrate.py before mutation")
 def _recovery_python_interpreter():
@@ -2410,9 +2486,6 @@ def _gate_slot_address():
             return "%s: got %r, expected %r" % (label, actual, expected)
 
 
-
-
-
 def _region_functions(script, root, region):
     import ast
     import functools
@@ -2557,7 +2630,6 @@ def _integration_shell_environment():
                     "/tools/compiler root", "-w", "/tools/wine runner"]
             if result.returncode or got != want:
                 return "%s forwarded %r, expected %r: %s" % (script, got, want, result.stderr)
-
 
 
 def _fixture_assignments(source, ns, names):
@@ -2812,6 +2884,95 @@ def _forcing_size_arg():
         src = open(f"{KIT}/{tool}", encoding="utf-8").read()
         if "int(sys.argv[4], 0)" not in src:
             return "%s does not parse the size with int(x, 0)" % tool
+    return None
+
+
+@check("schedforce's combo search is not pruned by a flip's standalone score",
+       "the combo loop broke on `len(real) >= len(base_real)`, comparing each flip's score ON ITS "
+       "OWN to the BASELINE, so once one improving flip landed every combination needing a second, "
+       "individually-neutral flip was never compiled -- and the tool reported a finished search. "
+       "On ov008 0218aa24 pick_193 (real 5) closed site B and pick_95..99 (all real 8) each "
+       "attacked site A; 8 >= 7 ended the loop before pick_193+pick_95 was built")
+def _schedforce_combo_not_pruned():
+    src = open(f"{KIT}/frida/schedforce.py", encoding="utf-8").read()
+    i = src.find("combo_real = ")
+    if i < 0:
+        return "schedforce.py no longer initialises combo_real; the combo search moved"
+    body = src[i:i + 2000]
+    for bad in ("len(real) >= len(base_real)", ">= len(base_real)"):
+        if bad in body:
+            return ("the combo loop still prunes on the baseline (%r): a flip that only helps in "
+                    "combination is skipped, and the search reports itself complete" % bad)
+    if "SF_COMBO" not in body:
+        return "the combo loop has no cost bound; add SF_COMBO to cap the extra compiles"
+    return None
+
+
+@check("every .py the worker guide names actually exists in the kit",
+       "core.md's register-pressure recipe named pad/renum/pressforce.py, schedrule.py, "
+       "splitforce.py and irdump.py, and three of the four have never existed in this repository "
+       "-- no deletion in history. core.md is the one document guaranteed in every worker's "
+       "context and WORKFLOW.md tells them to grep it for their symptom, so a recipe pointing at "
+       "tools that cannot be run reads as authoritative and costs turns before it is found out")
+def _coremd_tools_exist():
+    import re as _re
+    text = open(f"{KIT}/worker_src/core.md", encoding="utf-8", errors="replace").read()
+    names = set(_re.findall(r"`([a-z_0-9/]+\.py)`", text))
+    missing = sorted(n for n in names if not os.path.exists(f"{KIT}/{n}"))
+    if missing:
+        return ("core.md names %d .py that do not exist: %s -- a worker following that recipe "
+                "chases a tool that was never written" % (len(missing), ", ".join(missing)))
+    return None
+
+
+@check("the forcing tools accept both the bare and the ov-prefixed module label",
+       "wgate/wdiff/wlist/evo_score/gate.sh take the bare label (006) while frida/ and pad/renum/ "
+       "took ov006, and nothing said so; passing the label the module-baked gate.sh had just "
+       "accepted died as a bare FileNotFoundError on .../overlays/006/delinks.txt. Three workers "
+       "in one tranche lost a run each to it")
+def _forcing_module_forms():
+    import kitpaths as _kp
+    for bare, want in (("006", "ov006"), ("ov006", "ov006"), ("main", "main"), ("15", "ov015")):
+        if _kp.module_label(bare) != want:
+            return ("module_label(%r) is %r, expected %r -- the two module conventions are still "
+                    "a trap somewhere" % (bare, _kp.module_label(bare), want))
+    tools = ("frida/schedforce.py", "frida/colorforce.py", "pad/renum/renum.py",
+             "pad/cf_multi.py", "pad/shiftdiff.py")
+    for t in tools:
+        src = open(f"{KIT}/{t}", encoding="utf-8", errors="replace").read()
+        if "module_label(" not in src:
+            return ("%s does not normalise its module argument through module_label(), so it still "
+                    "accepts only one of the two forms" % t)
+    return None
+
+
+@check("plausible flags a zero-negation that only exists to emit rsb padding",
+       "`zero = 0 - zero;` was invisible to plausible.py, so a candidate whose .text is only exactly "
+       "the slot size because of the invented padding assignment scored fitness 11 with no "
+       "implausible key and no +200 penalty. evo_score's fitness is the selection function for "
+       "every evolve run, so a construct the scorer cannot see is one evolve will select and breed "
+       "from. Live on ov008 02186388, where the honest source scores 985 and the padded one 11")
+def _plausible_zero_negate():
+    p = load("plausible")
+
+    def kinds(src):
+        return [k for _l, k, _w in p.findings(src)]
+
+    head = '// USA: func_ov008_02186388\nextern "C" ARM void f(S* s) {\n'
+    pad = head + "    int zero = 0;\n    zero = 0 - zero;\n    s->out = zero;\n}\n"
+    if "ZERO-NEGATE-PAD" not in kinds(pad):
+        return ("plausible did not flag `zero = 0 - zero;` immediately after `int zero = 0;` "
+                "(got %r): a self-negation of a provably-zero local has no meaning outside the "
+                "`rsb reg, reg, #0` it emits" % kinds(pad))
+
+    real = head + "    unsigned int m = s->m;\n    m = 0u - m;\n    s->out = m;\n}\n"
+    if kinds(real):
+        return ("plausible flagged legitimate unsigned negation of a live value (got %r): "
+                "`0u - m` on a non-constant is ordinary C89 code" % kinds(real))
+    gap = head + "    int v = 0;\n    g();\n    v = 0 - v;\n    s->out = v;\n}\n"
+    if kinds(gap):
+        return ("plausible flagged a negation whose variable may have changed since it was zeroed "
+                "(got %r): the check must require the zero to still hold" % kinds(gap))
     return None
 
 
