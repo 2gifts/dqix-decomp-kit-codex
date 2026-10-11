@@ -2776,6 +2776,26 @@ def _integ_bootstrap():
     return None
 
 
+@check("the cached kit-behind count is dropped when the checkout's HEAD moves",
+       "behind() cached `5` for 10 minutes after a manual pull, so every dispatcher restart saw KIT "
+       "UPDATE WAITING, ran kit_update (up to date) and restarted again, in a loop")
+def _behind_cache_keyed_to_head():
+    K = load("kitpaths")
+    head = __import__("subprocess").run(["git", "-C", KIT, "rev-parse", "HEAD"], capture_output=True,
+                                        text=True).stdout.strip()
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "wlog"))
+        K.SP, K.KIT_URL = d, os.path.join(d, "no-such-remote")
+        stamp = os.path.join(d, "wlog", ".kit_fresh")
+        open(stamp, "w").write("5 " + head)
+        if K.behind() != 5:
+            return "a fresh stamp for the current HEAD was not used"
+        open(stamp, "w").write("5 0000000000000000000000000000000000000000")
+        if K.behind() != 0:
+            return "a stamp written for another HEAD still reported 5 commits behind"
+    return None
+
+
 @check("cov.py reads the newer of the checkout's and the integration tree's build report",
        "waves build in the integration tree, so cov.py and health read a two-day-old report from the "
        "decomp checkout: 90.04% while CI on the same commit said 92.40%")

@@ -86,18 +86,21 @@ def behind():
     import subprocess
     import time
     stamp = os.path.join(SP, "wlog", ".kit_fresh")
+    run = lambda *a: subprocess.run(["git", "-C", KIT, *a], capture_output=True, text=True, timeout=30)
+    head = run("rev-parse", "HEAD").stdout.strip()
     try:
-        count = int(open(stamp, encoding="utf-8").read().strip() or 0)
-        age = time.time() - os.path.getmtime(stamp)
+        count, seen = (open(stamp, encoding="utf-8").read().split() + [""])[:2]
+        count, age = int(count), time.time() - os.path.getmtime(stamp)
     except (OSError, ValueError):
-        count, age = 0, FRESH_EVERY
-    if age >= FRESH_EVERY:
+        count, seen, age = 0, "", FRESH_EVERY
+    if age >= FRESH_EVERY or seen != head:
         os.makedirs(os.path.dirname(stamp), exist_ok=True)
-        open(stamp, "w", encoding="utf-8").write(str(count))
-        run = lambda *a: subprocess.run(["git", "-C", KIT, *a], capture_output=True, text=True, timeout=30)
+        open(stamp, "w", encoding="utf-8").write(f"{count if seen == head else 0} {head}")
         if run("fetch", "-q", KIT_URL, KIT_BRANCH).returncode == 0:
             count = int(run("rev-list", "--count", "HEAD..FETCH_HEAD").stdout.strip() or 0)
-            open(stamp, "w", encoding="utf-8").write(str(count))
+            open(stamp, "w", encoding="utf-8").write(f"{count} {head}")
+        elif seen != head:
+            count = 0
     return count
 
 
