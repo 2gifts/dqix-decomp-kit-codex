@@ -64,7 +64,7 @@ CC = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwccarm.exe"
 AS = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwasmarm.exe"
 AS_FLAGS = _cfg.AS_FLAGS.split()
 FLAGS = (_cfg.CC_FLAGS + " " + _cfg.CC_INCLUDES + " " + _mwcc_defines(_cfg)).split()
-CODEGEN_PRAGMA = re.compile(r"(?m)^[ \t]*#[ \t]*pragma[ \t]+(?!(?:define_section|section|once)\b)(\w+)")
+from pragmas import CODEGEN_PRAGMA
 
 
 def config_dir(mod):

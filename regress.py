@@ -1623,7 +1623,7 @@ def _scaffold_rom_call():
 @check("prready.py refuses a pull request built on a stale kit or decomp, and passes a current one",
        "pull requests built on stale checkouts reverted the CI workflow, re-added a file for an address "
        "another file owned, renamed a symbol in one region only, recorded dead ends for matched "
-       "functions and cited matches that never landed")
+       "functions and cited matches that never landed; one READY pull request added 24 codegen pragma lines")
 def _prready():
     import subprocess
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
@@ -1656,7 +1656,7 @@ def _prready():
             "config/jpn/arm9/symbols.txt": "data_02000040 kind:data(any) addr:0x02000040\n",
             "src/A.cpp": "void Foo() {}\n"})
         commit(pub_kit, {n: open(f"{KIT}/{n}", encoding="utf-8").read()
-                         for n in ("prready.py", "delinked.py", "kitpaths.py")}
+                         for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py")}
                | {"worker_src/deadends.md": "# dead ends\n", "worker_src/core.md": "# core\n"})
         git(d, "clone", "-q", pub_decomp, decomp)
         git(d, "clone", "-q", pub_kit, kit)
@@ -1674,6 +1674,7 @@ def _prready():
                 return f"a current checkout was refused by prready.py {mode}: {out.strip()[-300:]}"
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
                         "src/Dead.cpp": "void Dead() {}\n",
+                        "src/A.cpp": "#pragma optimize_for_size off\nvoid Foo() {}\n#pragma optimize_for_size reset\n",
                         "config/usa/arm9/symbols.txt": "Bar kind:function(arm,size=0x10) addr:0x02000010\n"
                                                        "data_02000030 kind:data(any) addr:0x02000030\n"
                                                        "data_02000040 kind:data(any) addr:0x02000040\n",
@@ -1683,7 +1684,7 @@ def _prready():
         commit(pub_decomp, {"src/A.cpp": "void Foo() { }\n"})
         commit(pub_kit, {"README.md": "x\n"})
         want = {"decomp": ("KIT BEHIND", "DECOMP BEHIND", "OUTSIDE A MATCH .github/workflows/match.yml",
-                           "DEAD FILE src/Dead.cpp", "HALF RENAME Foo"),
+                           "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2"),
                 "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400")}
         for mode, needles in want.items():
             code, out = prready(mode)

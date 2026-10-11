@@ -16,6 +16,7 @@ import sys
 os.environ["DQIX_NO_FRESHNESS"] = "1"
 import delinked
 import kitpaths
+from pragmas import CODEGEN_PRAGMA
 
 KIT, REPO = kitpaths.KIT, kitpaths.REPO
 MATCH_PATHS = ("src/", "include/", "config/")
@@ -108,6 +109,13 @@ def decomp(decomp_tip):
     for path in added:
         if path.endswith(SOURCE) and f"{path}:" not in wired:
             problems.append(f"DEAD FILE {path}: no delinks.txt entry names it; delete it")
+    for path in changed:
+        if path.startswith("src/"):
+            gained = (len(CODEGEN_PRAGMA.findall("\n".join(diff_lines(REPO, decomp_tip, path, "+"))))
+                      - len(CODEGEN_PRAGMA.findall("\n".join(diff_lines(REPO, decomp_tip, path, "-")))))
+            if gained > 0:
+                problems.append(f"CODEGEN PRAGMA {path}: adds {gained}; a match never lands behind one "
+                                f"(AGENTS.md rule 8): remove it and find what the source lacks")
     regions = [p.rstrip("/").split("/")[-1] for p in git(REPO, "ls-tree", "-d", "--name-only", "HEAD", "config/").stdout.split()]
     for path in changed:
         m = SYMBOLS.match(path)
