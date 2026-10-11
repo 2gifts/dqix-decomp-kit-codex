@@ -1008,7 +1008,9 @@ fields, including parameters) and it has been run on your starting artifact befo
 built. Reach for these by hand only when the shape below is one the rules cannot express.
 `volatile` also PINS LOAD ORDER, not just reloads: plain locals let mwcc sink each load to its
 first use and reorder them into use order, where volatile keeps declaration order (`0215b138`,
-two `ldrsh` field reads, 4 bytes).
+two `ldrsh` field reads, 4 bytes). A single-use field read is forward-substituted to its use; a
+`volatile` member read into a local above the test (`u8 threshold = w->threshold_;`) loads it
+first, and the same on two int members puts the int loads ahead of a float load (`021edf54`).
 **A CACHED LOCAL IS A CLAIM THAT NOTHING IN BETWEEN WROTE THAT MEMORY, and the ROM rarely makes it.**
 Re-read instead of caching whenever calls sit between the two uses: a field after three mutating
 calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the function has itself been
