@@ -386,6 +386,9 @@ CHEAPEST node, cost = number of basic blocks that reference it; the victim takes
 (`fp`). To move the victim from one local to another, change which one a block reads: `lo = 1.0f`
 instead of `lo = hi` (same asm after CSE) shifted one reference and flipped it (`021fa7ec`, 67 -> 6).
 A compound float op (`hi *= 0.8f`) puts the constant in r1; `hi = hi * 0.8f` puts it in r0.
+When a parameter sits one callee-saved register too low, a local the function only writes may be a
+trailing PARAMETER it overwrites: `extern "C" ... (const char* name, char* out)` with `out` reset
+before use moves `name` from r4 to r5 and keeps the symbol (`02184d80`).
 **A FIELD LOAD SCHEDULED BEFORE THE ARGUMENT MOVES = AN INLINE GETTER THAT RETURNS THROUGH A LOCAL**
 (`02157d40`). Under register pressure the scheduler breaks ties by IR order, and call arguments are
 lowered in argument order; `return u->id;` (or a plain local) folds back into the argument, but
