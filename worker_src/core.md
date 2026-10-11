@@ -515,7 +515,9 @@ A pointer coalescing onto a base's register (`entries = tbl + 4` sharing `tbl`'s
 fix: share ONE function-scope variable between that case and another loop so it has two
 definitions (`021f2e6c`). Same when two values sit in each other's callee-saved registers and
 declaration position is inert: store the late call result into an EARLIER function-scope local
-(the loop's `node`) instead of a fresh one (`0216033c`).
+(the loop's `node`) instead of a fresh one (`0216033c`). Scratch registers follow the same rule: a
+field re-read into the function's existing `col`/`row` locals, col first, before
+`self->table[row * self->cols + col]` fixes an r2/r3/r4 trio that fresh locals cannot (`021f8e1c`).
 
 ### A LICM TEMP TAKES ITS SPILL SLOT AFTER THE LOCALS DECLARED BEFORE IT
 Two spilled values in each other's slots: a named pointer local (`codes = row->codes;`) is slotted
