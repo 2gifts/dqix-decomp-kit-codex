@@ -1058,7 +1058,7 @@ When the target RE-LOADS a value you are holding in a register:
   `unsigned int` even when discarded; declared `void`, the scheduler reorders (`ov017:0218b688`).
 - A byte store through a pointer loaded from a struct slot that takes the swapped scratch pair is a
   typed accessor plus an inline member setter: `GetBattleHud(res)->SetVisible(1)`, not
-  `*((u8*)res->ptr + 0xa) = 1` (`ov017:021acdf4`).
+  `*((u8*)res->ptr + 0xa) = 1` (`ov017:021acdf4`, `ov017:021b790c`).
 - A register copied to the stack TWICE and then reloaded (`str r1, [sp, #4] ; ldr r3, [sp, #4] ;
   str r3, [sp, #8]`) before bitfield reads is an inline returning the register struct by value:
   `static inline GXDispCnt GX_GetDispCnt(void) { return *(volatile GXDispCnt*)&DISPCNT; }`. Without
