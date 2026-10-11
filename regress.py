@@ -2714,6 +2714,68 @@ def _regionsync_runner_fixture():
             return "configure forwarded %r, expected %r" % (result, want)
 
 
+@check("a cold integration tree configures and fetches its own compiler before sync returns",
+       "a new integration worktree had extract links but no build.ninja or compiler, so classify raised "
+       "FileNotFoundError before the wave configured; a junction to the checkout's compiler would let "
+       "the tree's first ninja rewrite the checkout's mwccarm.exe (kit PR #102)")
+def _integ_bootstrap():
+    import subprocess
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        repo, tree, pre = Path(d, "repo"), Path(d, "tree"), Path(d, "pre")
+        (repo / "tools/mwccarm/2.0/fx").mkdir(parents=True)
+        (repo / "extract").mkdir()
+        (repo / "tools/fetch.py").write_text(
+            "import sys\nfrom pathlib import Path\nopen('events', 'a').write('fetch\\n')\n"
+            "p = Path(sys.argv[1]); p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fetched')\n")
+        (repo / "tools/configure.py").write_text(
+            "import argparse, os, sys\nfrom pathlib import Path\n"
+            "p = argparse.ArgumentParser(); p.add_argument('region'); p.add_argument('--no-extract', "
+            "action='store_true'); p.add_argument('--compiler'); p.add_argument('-w')\n"
+            "a = p.parse_args()\nMWCC_VERSION = '2.0/fx'\nDECOMP_ME_COMPILER = 'fx'\n"
+            "CC_FLAGS = CC_INCLUDES = AS_FLAGS = WINE = ''\n"
+            "mwcc_root = Path(a.compiler) if a.compiler else Path('tools/mwccarm')\n"
+            "if __name__ == '__main__':\n"
+            "    if os.environ.get('FX_CONFIG_FAIL'): sys.exit(17)\n"
+            "    open('events', 'a').write('configure %s\\n' % (a.compiler or '-'))\n"
+            "    t = (mwcc_root / MWCC_VERSION / 'mwccarm.exe').as_posix()\n"
+            "    Path('build.ninja').write_text('rule fetch\\n  command = \"%s\" tools/fetch.py $out\\n"
+            "build %s: fetch\\n' % (sys.executable.replace(os.sep, '/'), t))\n")
+        main_cc = repo / "tools/mwccarm/2.0/fx/mwccarm.exe"
+        main_cc.write_text("checkout compiler")
+        (repo / ".gitignore").write_text("tools/mwccarm/\n")
+        for args in (["init", "-q", "-b", "decomp-matching"], ["add", "."],
+                     ["-c", "user.name=f", "-c", "user.email=f@f", "commit", "-qm", "f"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        env = {k: v for k, v in os.environ.items() if k not in ("DQIX_PREINSTALLED_COMPILER", "DQIX_WINE")}
+        env.update(DQIX_MAIN_REPO=str(repo), DQIX_INTEG=str(tree), DQIX_PUBLISH="local", DQIX_REGION="jpn")
+
+        def sync(**extra):
+            return subprocess.run([sys.executable, f"{KIT}/integ_tree.py", "sync"], capture_output=True,
+                                  text=True, env=dict(env, **extra))
+        cold = sync()
+        if cold.returncode or cold.stdout.strip() != str(tree).replace("\\", "/"):
+            return "cold sync: exit %d, stdout %r, %s" % (cold.returncode, cold.stdout, cold.stderr[-300:])
+        if (tree / "events").read_text().split("\n")[:2] != ["configure -", "fetch"]:
+            return "cold sync did not configure then fetch: %r" % (tree / "events").read_text()
+        subprocess.run(["ninja", "-t", "clean"], cwd=tree, capture_output=True)
+        subprocess.run(["ninja", "tools/mwccarm/2.0/fx/mwccarm.exe"], cwd=tree, capture_output=True)
+        if main_cc.read_text() != "checkout compiler":
+            return "the tree's first build rewrote the checkout's compiler"
+        if sync(FX_CONFIG_FAIL="1").returncode:
+            return "a warm tree was reconfigured"
+        (tree / "build.ninja").unlink()
+        failed = sync(FX_CONFIG_FAIL="1")
+        if failed.returncode == 0 or failed.stdout.strip():
+            return "a failed configure still printed a tree path"
+        (pre / "2.0/fx").mkdir(parents=True)
+        (pre / "2.0/fx/mwccarm.exe").write_text("preinstalled")
+        if sync(DQIX_PREINSTALLED_COMPILER=str(pre)).returncode or \
+                (tree / "events").read_text().split("\n")[-2] != "configure " + str(pre):
+            return "a preinstalled compiler was not passed to configure: %r" % (tree / "events").read_text()
+    return None
+
+
 @check("cov.py reads the newer of the checkout's and the integration tree's build report",
        "waves build in the integration tree, so cov.py and health read a two-day-old report from the "
        "decomp checkout: 90.04% while CI on the same commit said 92.40%")
