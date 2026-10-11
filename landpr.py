@@ -66,8 +66,8 @@ def keep_both_delinks(tree, head):
     return git(tree, "commit", "-q", "--no-edit")[0] == 0
 
 
-def symlinks(tree, tip):
-    raw = git(tree, "diff", "--raw", "--no-renames", tip, "HEAD")[1].splitlines()
+def symlinks(tree, tip, head):
+    raw = git(tree, "diff", "--raw", "--no-renames", tip, head)[1].splitlines()
     return [line.split("\t", 1)[1] for line in raw if line.split()[1] == "120000"]
 
 
@@ -111,16 +111,16 @@ def main():
     git(tree, "checkout", "-q", "-f", "--detach", tip)
     heads = {n: fetch(tree, f"pull/{n}/head") for n in numbers}
     for n, head in heads.items():
+        links = symlinks(tree, tip, head)
+        if links:
+            refuse(f"#{n} adds symbolic links: {', '.join(links)}")
+    for n, head in heads.items():
         code, out = git(tree, "merge", "--no-ff", "-m", f"Merge #{n}", head)
         if code and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
             git(tree, "merge", "--abort")
             git(tree, "checkout", "-q", "-f", "--detach", tip)
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
-    links = symlinks(tree, tip)
-    if links:
-        git(tree, "checkout", "-q", "-f", "--detach", tip)
-        refuse(f"the pull requests add symbolic links: {', '.join(links)}")
     strip_comments(tree, tip)
     code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp", env=dict(os.environ, DQIX_REPO=tree))
     if code:

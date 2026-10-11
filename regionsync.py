@@ -3,7 +3,8 @@
     python regionsync.py [decomp tree]     default: the current directory
 
 First into usa: a file delinked in another region but not in config/usa, owning one `.text` range and
-no data, whose `// USA:` tag names a usa function of that size, gets a usa block at that function.
+no data, whose `// USA:` tag names a usa function, gets a usa block at that function when the function
+has the same size or wgate.py matches the file against it.
 Then from usa to each region with a port tool that has --sync and an extracted ROM: run the sync
 (after building the region first when its tool reads that region's objects). Each port is committed
 when the receiving region's `ninja check` and `ninja sha1` pass. When they do not, restore the config
@@ -70,7 +71,15 @@ def read(path):
         return fh.read()
 
 
-def usa_block(src, body, functions, taken):
+def usa_gate(module, start, src):
+    r = subprocess.run([sys.executable, f"{kitpaths.KIT}/wgate.py", module, f"{start:08x}", os.path.abspath(src)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       env=dict(os.environ, DQIX_REPO=os.getcwd()))
+    lines = (r.stdout + r.stderr).strip().splitlines()
+    return next((l for l in lines if l.startswith(("MATCH", "RESIDUE"))), lines[-1] if lines else "no output")
+
+
+def usa_block(src, body, functions, taken, module):
     text = TEXT.findall(body)
     if not os.path.isfile(src):
         return "the source file is missing"
@@ -85,11 +94,13 @@ def usa_block(src, body, functions, taken):
     if not hit:
         return f"its tag {tag.group(1)} names no usa function in this module"
     start, size = hit
-    lo, hi = (int(v, 16) for v in text[0])
-    if hi - lo != size:
-        return f"{hi - lo:#x} bytes here, {tag.group(1)} is {size:#x} in usa"
     if any(a < start + size and start < b for a, b in taken):
         return f"{tag.group(1)} overlaps a file usa already delinks"
+    lo, hi = (int(v, 16) for v in text[0])
+    if hi - lo != size:
+        verdict = usa_gate(module, start, src)
+        if verdict != "MATCH":
+            return f"{hi - lo:#x} bytes here, {tag.group(1)} is {size:#x} in usa, and the usa gate says {verdict}"
     taken.append((start, start + size))
     lines = [TEXT.sub(f".text start:0x{start:08x} end:0x{start + size:08x}", l) for l in body.splitlines()]
     return [f"{src}:"] + lines
@@ -107,10 +118,12 @@ def into_usa():
                          if os.path.isfile(symbols) else {})
             taken = [(int(a, 16), int(b, 16)) for _, body in BLOCK.findall(targets.get(target, ""))
                      for a, b in TEXT.findall(body)]
+            overlay = re.search(r"/overlays/ov(\d{3})/", target)
+            module = overlay.group(1) if overlay else "main"
             for src, body in BLOCK.findall(read(path)):
                 if src in wired:
                     continue
-                block = usa_block(src, body, functions, taken) if target in targets else f"no {target}"
+                block = usa_block(src, body, functions, taken, module) if target in targets else f"no {target}"
                 if isinstance(block, str):
                     skipped.setdefault(src, f"{region}: {block}")
                     continue

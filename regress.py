@@ -2241,19 +2241,22 @@ def _regionsync_into_usa():
                                            "New kind:function(arm,size=0x20) addr:0x02000100\n"
                                            "Big kind:function(arm,size=0x8) addr:0x02000200\n"
                                            "Data kind:function(arm,size=0x10) addr:0x02000300\n"
-                                           "Curated kind:function(arm,size=0x10) addr:0x02000700\n",
+                                           "Curated kind:function(arm,size=0x10) addr:0x02000700\n"
+                                           "Grown kind:function(arm,size=0x30) addr:0x02000900\n",
             "config/jpn/arm9/delinks.txt": "src/New.cpp:\n    complete\n    .text start:0x02000180 end:0x020001a0\n\n"
                                            "src/Big.cpp:\n    complete\n    .text start:0x02000400 end:0x02000410\n\n"
                                            "src/Data.cpp:\n    complete\n    .text start:0x02000500 end:0x02000510\n"
                                            "    .data start:0x02100000 end:0x02100008\n\n"
                                            "src/Untagged.cpp:\n    complete\n    .text start:0x02000600 end:0x02000620\n\n"
-                                           "src/Raw.cpp:\n    complete\n    .text start:0x02000800 end:0x02000810\n",
+                                           "src/Raw.cpp:\n    complete\n    .text start:0x02000800 end:0x02000810\n\n"
+                                           "src/Grown.cpp:\n    complete\n    .text start:0x02000a00 end:0x02000a20\n",
             "src/Old.cpp": "// USA: Old\nvoid Old() {}\n",
             "src/New.cpp": "// USA: New\nvoid New() {}\n",
             "src/Big.cpp": "// USA: Big\nvoid Big() {}\n",
             "src/Data.cpp": "// USA: Data\nvoid Data() {}\n",
             "src/Untagged.cpp": "void Untagged() {}\n",
-            "src/Raw.cpp": "// USA: func_02000700\nvoid Curated() {}\n"}
+            "src/Raw.cpp": "// USA: func_02000700\nvoid Curated() {}\n",
+            "src/Grown.cpp": "// USA: Grown\nvoid Grown() {}\n"}
         for path, text in files.items():
             os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
             with open(f"{root}/{path}", "w", encoding="utf-8", newline="") as f:
@@ -2264,6 +2267,7 @@ def _regionsync_into_usa():
         real = rs.run
         rs.run = lambda *args: (0, "") if args[0] == "ninja" else real(*args)
         rs.green, rs.configure, rs.kitpaths = (lambda: (True, "")), (lambda region: (0, "")), SimpleNamespace(SP=root)
+        rs.usa_gate = lambda module, start, src: "MATCH" if src.endswith("Grown.cpp") else "RESIDUE SIZE 4"
         cwd = os.getcwd()
         os.chdir(root)
         try:
@@ -2272,18 +2276,20 @@ def _regionsync_into_usa():
             os.chdir(cwd)
         with open(f"{root}/config/usa/arm9/delinks.txt", encoding="utf-8", newline="") as f:
             text = f.read()
-        for name, start, end in (("New", "02000100", "02000120"), ("Raw", "02000700", "02000710")):
+        for name, start, end in (("New", "02000100", "02000120"), ("Raw", "02000700", "02000710"),
+                                 ("Grown", "02000900", "02000930")):
             if f"\r\nsrc/{name}.cpp:\r\n    complete\r\n    .text start:0x{start} end:0x{end}\r\n" not in text:
                 return f"{name}.cpp was not wired at its usa function: {text!r}"
         wrong = [n for n in ("Old", "Big", "Data", "Untagged") if text.count(f"src/{n}.cpp:") != (n == "Old")]
         if wrong:
             return f"wired into usa: {wrong}"
         for code, line in runs:
-            missing = [n for n in ("Big.cpp: jpn: 0x10 bytes here", "Data.cpp: jpn: owns .text, .data",
+            missing = [n for n in ("Big.cpp: jpn: 0x10 bytes here, Big is 0x8 in usa, and the usa gate says RESIDUE",
+                                   "Data.cpp: jpn: owns .text, .data",
                                    "Untagged.cpp: jpn: no `// USA:` tag") if f"NOT IN USA src/{n}" not in line]
             if code != 1 or missing or "in sync" in line:
                 return f"exit {code}, unreported {missing}: {line}"
-        if "Port 2 matched files to USA" not in runs[0][1]:
+        if "Port 3 matched files to USA" not in runs[0][1]:
             return f"the port was not committed: {runs[0][1]}"
     return None
 
@@ -2329,8 +2335,8 @@ def _landpr_merge():
         merged = git("show", "HEAD:delinks.txt")
         if git("log", "-1", "--format=%s") != "Merge #5" or not all(f"src/{n}.cpp:" in merged for n in "A12"):
             return f"the merge lost a side: {merged!r}"
-        if lp.symlinks(root, base) != ["src/link.cpp"]:
-            return f"the symbolic link was not reported: {lp.symlinks(root, base)}"
+        if lp.symlinks(root, base, pr) != ["src/link.cpp"]:
+            return f"the symbolic link was not reported: {lp.symlinks(root, base, pr)}"
     return None
 
 
