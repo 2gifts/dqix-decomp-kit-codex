@@ -2,7 +2,8 @@
 
     bash landpr.sh <number>...
 
-In the integration tree, from the published tip: merges each pull request head as `Merge #N`, strips
+In the integration tree, from the published tip: merges each pull request head as `Merge #N` (a
+conflict only in delinks.txt, where both sides added blocks, keeps both), refuses symbolic links, strips
 comments from the source it changed, requires `prready.py decomp` READY, ports between the regions
 (regionsync.py), requires `ninja check` and `ninja sha1` in every region, refuses a head that moved
 since it was fetched, then publishes. regionsync prints `NOT IN USA <file>: <why>` for each file another
@@ -43,6 +44,31 @@ def fetch(tree, ref):
     if code:
         refuse(f"git fetch {ref}: {out.strip()[-200:]}")
     return git(tree, "rev-parse", "FETCH_HEAD")[1].strip()
+
+
+def keep_both_delinks(tree, head):
+    conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
+    if not conflicts or not all(p.endswith("delinks.txt") for p in conflicts):
+        return False
+    base = git(tree, "merge-base", "HEAD", head)[1].strip()
+    for path in conflicts:
+        ours, theirs, old = (dict(regionsync.BLOCK.findall(git(tree, "show", f"{rev}:{path}")[1]))
+                             for rev in ("HEAD", head, base))
+        if any(src in old and old[src] != body for src, body in theirs.items()) or not old.keys() <= theirs.keys():
+            return False
+        merged = git(tree, "show", f"HEAD:{path}")[1].rstrip("\n")
+        for src, body in theirs.items():
+            if src not in old and src not in ours:
+                merged += f"\n\n{src}:\n{body.rstrip(chr(10))}"
+        with open(f"{tree}/{path}", "w", encoding="utf-8") as fh:
+            fh.write(merged + "\n")
+        git(tree, "add", "--", path)
+    return git(tree, "commit", "-q", "--no-edit")[0] == 0
+
+
+def symlinks(tree, tip):
+    raw = git(tree, "diff", "--raw", "--no-renames", tip, "HEAD")[1].splitlines()
+    return [line.split("\t", 1)[1] for line in raw if line.split()[1] == "120000"]
 
 
 def strip_comments(tree, tip):
@@ -86,11 +112,15 @@ def main():
     heads = {n: fetch(tree, f"pull/{n}/head") for n in numbers}
     for n, head in heads.items():
         code, out = git(tree, "merge", "--no-ff", "-m", f"Merge #{n}", head)
-        if code:
+        if code and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
             git(tree, "merge", "--abort")
             git(tree, "checkout", "-q", "-f", "--detach", tip)
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
+    links = symlinks(tree, tip)
+    if links:
+        git(tree, "checkout", "-q", "-f", "--detach", tip)
+        refuse(f"the pull requests add symbolic links: {', '.join(links)}")
     strip_comments(tree, tip)
     code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp", env=dict(os.environ, DQIX_REPO=tree))
     if code:

@@ -2288,6 +2288,52 @@ def _regionsync_into_usa():
     return None
 
 
+@check("landpr keeps both sides of a delinks.txt conflict and refuses a symbolic link",
+       "#100 conflicted only because both sides appended delinks blocks; a pull request's symlink under src/ "
+       "would have had the comment strip write through it")
+def _landpr_merge():
+    import subprocess
+    lp = load("landpr")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landpr_regress_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        def git(*args):
+            return subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+
+        def commit(name):
+            with open(f"{root}/delinks.txt", "a", encoding="utf-8") as f:
+                f.write(f"\nsrc/{name}.cpp:\n    complete\n    .text start:0x{name} end:0x{name}4\n")
+            git("commit", "-qam", name)
+
+        git("init", "-q", "-b", "main")
+        with open(f"{root}/delinks.txt", "w", encoding="utf-8") as f:
+            f.write("src/A.cpp:\n    complete\n    .text start:0x0 end:0x4\n")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "pr")
+        commit("2")
+        blob = subprocess.run(["git", "-C", root, "hash-object", "-w", "--stdin"], input="/etc/passwd",
+                              capture_output=True, text=True).stdout.strip()
+        git("update-index", "--add", "--cacheinfo", f"120000,{blob},src/link.cpp")
+        git("commit", "-qm", "link")
+        pr = git("rev-parse", "HEAD")
+        git("checkout", "-q", "main")
+        commit("1")
+        if not subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-ff",
+                               "-m", "Merge #5", pr], capture_output=True).returncode:
+            return "the fixture did not conflict"
+        if not lp.keep_both_delinks(root, pr):
+            return f"a delinks.txt conflict where both sides added blocks was not resolved: {git('status', '-s')}"
+        merged = git("show", "HEAD:delinks.txt")
+        if git("log", "-1", "--format=%s") != "Merge #5" or not all(f"src/{n}.cpp:" in merged for n in "A12"):
+            return f"the merge lost a side: {merged!r}"
+        if lp.symlinks(root, base) != ["src/link.cpp"]:
+            return f"the symbolic link was not reported: {lp.symlinks(root, base)}"
+    return None
+
+
 STAMP = f"{SP}/wlog/functional_stamp.txt"
 
 
