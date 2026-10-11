@@ -535,7 +535,9 @@ swaps r0/r1 through the block; written BEFORE them it lands in r0, as in the ROM
 `*(self + 0x195b) |= 1;` written at the use. A copy-modify-store (`int cur = F; cur += step * 16;
 F = cur;`) is an in-place update in the ROM, with the copy's only shift folded into its
 initialiser: `int old = F >> 4; F += step * 16; int n = (F >> 4) - old;` (`02065990`). colorsweep
-`r52_inline_address_local`, `r53_update_in_place`.
+`r52_inline_address_local`, `r53_update_in_place`. A hardware port is its absolute address
+(`*(volatile u32*)0x04000504`), never a negative index off another port's pointer: OVERGEN 8
+(`ov005:02155258`).
 
 ### A MULTIPLY-ACCUMULATE PICKS ITS ACCUMULATOR FROM THE SOURCE — bind the multiplicand
 `int x = A * K + B;` lets mwcc make the ADDEND the accumulator: it loads `B` first and makes `B`'s
@@ -794,6 +796,8 @@ is register NUMBERS around a byte value, retype it before touching anything else
 - `ldrsh` then `lsl`/`lsr #0x10` into an `unsigned short` local is a `(short)` read of a u16 field:
   `value = (short)p->field;`. The plain read emits a predicated `ldrh` and the function comes out
   12 bytes short (`02155d54`).
+- a flag passed to a `bool` parameter is a `bool` local; an `int` converted at the call costs
+  OVERGEN 16 (`ov005:021589f4`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
   truncation; typing the local `unsigned short` emits `lsl`/`lsr #0x10` at every use (`020307d0`).
 - three separate `and rX,sl,#0xff` for ONE integer argument are per-call implicit conversions to an
