@@ -2909,15 +2909,16 @@ def _reserved_skipped():
               {"number": 2, "author": {"login": "me"}, "title": "Fleet claims",
                "body": "| ov024 | `021da9e0` |"}]
     prs = [{"number": 3, "author": {"login": "other"}, "title": "x", "body": "",
-            "files": [{"path": "src/func_ov031_02221f78.cpp"}]}]
+            "files": [{"path": "src/func_ov031_02221f78.cpp"}, {"path": "src/Main/GetData021052b4.cpp"}],
+            "diff": "+    .text start:0x020aa000 end:0x020aa100\n-    .text start:0x020bb000 end:0x020bb100\n"}]
     got = set(R.holders(issues, prs, "me"))
-    want = {"02184d80", "021ce524", "021c0000", "021c1000", "02221f78"}
+    want = {"02184d80", "021ce524", "021c0000", "021c1000", "02221f78", "021052b4", "020aa000"}
     if got != want:
         return "holders() returned %s, want %s" % (sorted(got), sorted(want))
     if set(R.holders(issues, prs, "me", {"someone"})):
         return "holders() honoured a login RESERVED_FROM does not name"
     issues[0]["updatedAt"] = "2020-01-01T00:00:00Z"
-    if set(R.holders(issues, prs, "me")) != {"02221f78"}:
+    if set(R.holders(issues, prs, "me")) != {"02221f78", "021052b4", "020aa000"}:
         return "holders() honoured an issue untouched for longer than STALE_DAYS"
     C = load("claim")
     old, C.reserved._HELD = C.reserved._HELD, {"0dead000"}

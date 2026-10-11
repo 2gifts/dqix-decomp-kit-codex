@@ -2,6 +2,7 @@
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import glob
 import json
 import os
 import re
@@ -23,6 +24,8 @@ STALE_DAYS = 7
 FROM = f"{_kp.SP}/RESERVED_FROM"
 CLAIMS_TITLE = "Fleet claims"
 ADDR = re.compile(r"(?<![0-9A-Za-z])(?:0x)?(0[12][0-9a-fA-F]{6})(?![0-9A-Za-z])")
+STEM_ADDR = re.compile(r"(0[12][0-9a-fA-F]{6})(?=_|$)")
+DIFF_START = re.compile(r"(?m)^\+\s*\.(?:text|init) start:0x(0[12][0-9a-fA-F]{6})\b")
 _HEX = r"`?(?:0x)?(0[12][0-9a-fA-F]{6})`?"
 RANGE = re.compile(r"\[\s*%s\s*,\s*%s\s*[\)\]]|%s\s*(?:-|–|\.\.)\s*%s" % (_HEX, _HEX, _HEX, _HEX))
 
@@ -82,9 +85,11 @@ def holders(issues, prs, login, allow=frozenset(), now=None):
                 continue
             if _age_days(it.get("updatedAt"), now) > STALE_DAYS:
                 continue
-            text = "\n".join([it.get("title") or "", it.get("body") or ""]
-                             + [f.get("path", "") for f in it.get("files") or []])
-            for a in ADDR.findall(starts_only(text)):
+            found = ADDR.findall(starts_only("\n".join([it.get("title") or "", it.get("body") or ""])))
+            for f in it.get("files") or []:
+                found += STEM_ADDR.findall(os.path.splitext(os.path.basename(f.get("path", "")))[0])
+            found += DIFF_START.findall(it.get("diff") or "")
+            for a in found:
                 held.setdefault(a.lower(), f"{repo}#{it['number']}")
     return held
 
@@ -95,6 +100,8 @@ def refresh():
                             "--json", "number,author,title,body,updatedAt"))
     prs = json.loads(_gh("pr", "list", "-R", DECOMP_REPO, "--state", "open", "--limit", "100",
                          "--json", "number,author,title,body,files,updatedAt"))
+    for pr in prs:
+        pr["diff"] = _gh("pr", "diff", str(pr["number"]), "-R", DECOMP_REPO)
     held = holders(issues, prs, login, honoured())
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
     tmp = PATH + ".tmp"
@@ -150,6 +157,12 @@ def claims():
         for a in sorted(os.listdir(d)):
             if re.fullmatch(r"[0-9a-f]{8}", a) and os.path.isdir(os.path.join(d, a)):
                 out.append(("main" if mod == "main" else "ov" + mod, a))
+    for d in sorted(glob.glob(os.path.join(_kp.SP, "staging", "*"))):
+        mod = os.path.basename(d)
+        for f in sorted(glob.glob(os.path.join(d, "*.cpp"))):
+            for a in STEM_ADDR.findall(os.path.splitext(os.path.basename(f))[0])[-1:]:
+                if (mod, a.lower()) not in out:
+                    out.append((mod, a.lower()))
     return out
 
 
