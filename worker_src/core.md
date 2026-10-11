@@ -427,7 +427,8 @@ declaration order, so remove the reuse (hold the narrowed value in a wide local:
 `int key = (short)(idx[i] + 12);`, `021ddf5c`). `x = e` is a temp plus a copy that CSE deletes unless
 a call or a block with 2+ predecessors intervenes. Coalescing merges copy-related vregs and keeps the
 LOWER number, so an unreachable rank is usually a missing or unwanted coalesce:
-`pad/renum/forcemerge.py <src> <mod> <addr> <size> A:B` tests one, `stagedump.py` shows the IR.
+`pad/renum/vdump.py <src> [vreg...]` prints the IR before coalescing (a copy reads `mov =A B`), and
+`pad/renum/forcemerge.py <src> <mod> <addr> <size> A:B` tests merging that pair.
 Write a loop base as a plain expression inside the address, not a variable or helper
 (`(Elem*)(lists + 0x8000) + j`, `021e0638`).
 A counter that ignores declaration order was renumbered below every local by common-subexpression
