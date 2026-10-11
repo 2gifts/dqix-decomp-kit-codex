@@ -94,8 +94,6 @@ def mut_callee(txt, own_addr):
     undefined symbol at all, so the gate rightly says MATCH and the test would report a hole that
     is not there. That false positive is exactly the kind of claim this harness exists to prevent.
     """
-    # A declaration/call in another region's #if is not emitted. Select a callee
-    # from actual relocations so such a no-op cannot be reported as a gate hole.
     import buildcfg
     from elftools.elf.elffile import ELFFile
     with tempfile.TemporaryDirectory(prefix="callee_", dir=f"{SP}/handwork") as work:

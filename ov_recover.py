@@ -28,7 +28,7 @@ if MAIN:
     SUF     = "main"                       # suffix for wlog/hold/stage filenames
     TAGPRE  = "func_"                      # `// USA: func_<addr>` — no `ov` infix
     HEXC    = "[0-9a-fA-F]"                # main's delinks.txt mixes UPPER and lowercase hex
-    CFG     = buildcfg.config_dir(MOD)     # not .../overlays/ovNN
+    CFG     = buildcfg.config_dir(MOD)
     SRCDIR  = srcdir.for_module("main")
     INT     = f"{KIT}/integrate.py"         # one integrator for every module
     INTARGS = ["main"]

@@ -2253,7 +2253,6 @@ def _gate_slot_address():
 
 
 
-# Region fixtures exercise the real lookup/rewriting functions without a ROM or compiler.
 def _region_functions(script, root, region):
     import ast
     import functools

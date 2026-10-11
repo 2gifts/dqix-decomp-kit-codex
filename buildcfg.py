@@ -91,11 +91,6 @@ def cc_path(version):
 
 
 def tool_command(executable):
-    """Invoke a Windows tool through the same runner as configure.py on Linux.
-
-    DQIX_WINE selects the configure -w path; it is one executable path, not shell
-    syntax. Windows has an empty WINE prefix and keeps direct execution.
-    """
     runner = _cfg.WINE
     if runner and not os.path.isabs(runner) and ("/" in runner or "\\" in runner):
         runner = os.path.normpath(os.path.join(REPO, runner))
