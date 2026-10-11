@@ -522,6 +522,9 @@ Two spilled values in each other's slots: a named pointer local (`codes = row->c
 in declaration order; deleting it and writing `row->codes[i]` makes the hoisted address a compiler
 temp created later, which swaps the slots (`021d8c30`). For a pair fed from one value, the
 assignment chain is the store order: `keepDefault = textKind = x;` stores `textKind` first.
+A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend split temp, not a
+named field path: `names = (Container*)((u8*)roster + 0x684)` instead of the `+0x284` member's
+`+0x400` field gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`).
 
 ### A ZERO WRITTEN AFTER CONSTANT STORES TAKES THE OTHER SCRATCH REGISTER
 `generic = 0;` written after `soundId = 3; textKind = 1;` is hoisted above the compare into r1 and

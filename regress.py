@@ -2845,6 +2845,23 @@ def _reserved_skipped():
     return None
 
 
+@check("a hyphenated residue class ranks by its class, and a failed compile never wins",
+       "`RESIDUE \\w+` cannot match LOOP-SHAPE or NO-COMPILE: flagsweep ranked LOOP-SHAPE 308 as `?`, "
+       "and permorder scored NO-COMPILE -1 as 1, ahead of UNDERGEN 4 (kit PR #130)")
+def _hyphenated_residue():
+    F, P = load("flagsweep"), load("pad/permorder")
+    if F.rank("RESIDUE LOOP-SHAPE 308") != (2, 308):
+        return "flagsweep.rank(LOOP-SHAPE 308) = %r" % (F.rank("RESIDUE LOOP-SHAPE 308"),)
+    if not P.score("RESIDUE NO-COMPILE -1") > P.score("RESIDUE UNDERGEN 4"):
+        return "permorder scores a failed compile ahead of UNDERGEN 4"
+    text = "gate output\nRESIDUE LOOP-SHAPE 308 1 branch target(s) differ\n"
+    if load("residue").headline(text) != "RESIDUE LOOP-SHAPE 308":
+        return "residue.headline() dropped a hyphenated class"
+    if load("blocker").residue.parse_verdict(text)[:2] != ("LOOP-SHAPE", 308):
+        return "blocker no longer parses through residue.parse_verdict"
+    return None
+
+
 @check("pull_worker sizes the claimed function from the config",
        "size_of read symbols.txt through a literal \"$REPO\" inside a quoted heredoc, so every claim "
        "logged 0B and got the small doc and the $3 cap: ov016 0218d2f4 (2924B) was served that way")
