@@ -908,6 +908,11 @@ It prints both frame sizes, every stack slot each side touches, and the first ra
 lists diverge -- everything below that rank agrees, so the object just under it is the one whose
 size is wrong.
 
+Every local 0xc too high with an `ldm`/`stm` copy from the lowest slot is a struct RETURNED BY
+VALUE: declare the out-pointer callee `extern "C"` under its mangled name returning the `Vec3` and
+write `Vec3 to = Select(entry);`. The result lands in a compiler temp at the bottom of the frame
+and is copied into the named local (`021b8e8c`).
+
 A `#pragma opt_common_subs off` or `#pragma opt_dead_assignments off` in your file is a SIZE bug
 waiting to be counted, not a lever: it keeps a store the ROM folded away and blocks a reload the ROM
 performs. Delete both before reading any size verdict. On `main:02048e2c` that alone took OVERGEN 4
