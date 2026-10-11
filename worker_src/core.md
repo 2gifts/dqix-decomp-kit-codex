@@ -333,6 +333,11 @@ callback held in a struct, type it varargs and pass the extra value on the ONE p
 The vararg pins `mode` to r2 instead of letting mwcc reuse the dying state pointer's r1, and the
 occupied r2 pushes that block's function-pointer temp to r3. Both "wrong" registers were one absent
 argument (`0223a374`, 264B, REGPERM 5 -> MATCH). No declaration order reaches this.
+A pointer the ROM loads into r1 just before a one-argument call is that call's SECOND argument:
+`func_02046a8c(list, node)` with the loaded node passed, as another committed caller already does.
+Grep committed callers of the callee for its real arity first (`021688dc`, the `+0x370c` load).
+In the same function, a count stored into an unrelated earlier local (`globalBase`) swapped a
+callee-saved pair; its own `int count` closed it, the reverse of reusing a local.
 
 **A CALL RESULT FED STRAIGHT INTO THE NEXT CALL shows no setup at all** (`bl A ; bl B`), yet it
 changes the schedule LATER: written as two statements, `ldr r1, [pc]` / `mov r0, sb` at the next
