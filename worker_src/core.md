@@ -381,7 +381,9 @@ block-scoped locals, move the group to function scope in the order you need (`02
 `python $KIT/pad/renum/renum.py <src> <mod> <addr> <size> X=<rank>` forces a numbering in the real
 compiler (`X=86.5` = between v86 and v87) and tells you which rank closes it. colorforce `order_0` +
 `renum 83=105.5` named a whole-function swap that a bare function-scope `void* root;` declared just
-above the pointer it must outrank closed (`021575dc`).
+above the pointer it must outrank closed (`021575dc`). Loop locals declared bare in reverse colour
+order above the first call result (`int i; int total; Node* node;` then `Events* ev = f();`)
+assign r6/r8/sb/sl in order (`021552a8`).
 Declaration order only moves locals that KEEP their own vreg. Check first with
 `pad/renum/vdump.py`: if a local's number does not change when you move its declaration, the lever
 is dead for it. Two kinds ignore it: loop-body shorts/chars and CSE'd loads that become IR temps (a
