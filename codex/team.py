@@ -52,7 +52,7 @@ PY = sys.executable
 DEFAULTS = {
     "tag": "[Codex]",
     "branch_prefix": "codex/overlay-batch-",
-    "fork_owner": "2gifts",
+    "fork_owner": None,
     "decomp_repo": "ZevyaDev/dqix-decomp",
     "kit_repo": "ZevyaDev/dqix-decomp-kit",
     "base": "decomp-matching",
@@ -93,6 +93,10 @@ def load_config():
     cfg = dict(DEFAULTS)
     if os.path.exists(CONFIG):
         cfg.update(json.load(open(CONFIG, encoding="utf-8")))
+    if not cfg.get("fork_owner"):
+        origin = run(["git", "-C", REPO, "remote", "get-url", "origin"]).stdout.strip()
+        m = re.search(r"github\.com[:/]([^/]+)/", origin)
+        cfg["fork_owner"] = m.group(1) if m else None
     return cfg
 
 
