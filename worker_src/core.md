@@ -526,7 +526,10 @@ temp created later, which swaps the slots (`021d8c30`). For a pair fed from one 
 assignment chain is the store order: `keepDefault = textKind = x;` stores `textKind` first.
 A pointer the ROM spills to the TOP slots, above the LICM temps, is a backend split temp, not a
 named field path: `names = (Container*)((u8*)roster + 0x684)` instead of the `+0x284` member's
-`+0x400` field gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`).
+`+0x400` field gives it a high vreg and the top slot (sp+0x3c, sp+0x38 in `02161380`). A register
+that holds a partial sum (`save+0x324`) with `#0x2400` re-added at each use is the same split: one
+`List* list = (List*)(save + 0x2724);` at the top fixes a function-wide callee-saved swap
+(`021adcb0`).
 
 ### A ZERO WRITTEN AFTER CONSTANT STORES TAKES THE OTHER SCRATCH REGISTER
 `generic = 0;` written after `soundId = 3; textKind = 1;` is hoisted above the compare into r1 and
