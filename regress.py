@@ -1153,6 +1153,40 @@ def _r4_same_type():
     return None
 
 
+@check("r4 preserves struct/class/union layout while reordering local declarations",
+       "ov031:0223de7c colorsweep applied declswap@4 to primaryX/primaryY struct members; "
+       "a smaller byte difference hid a changed input-object layout")
+def _r4_preserves_record_layout():
+    C = load("colorsweep")
+    for kind in ("struct", "class", "union"):
+        record = (kind + " Coordinates\n{\n"
+                  "    unsigned short primaryX;\n    unsigned short primaryY;\n};\n")
+        for nested in (False, True):
+            text = ("void f() {\n" + record if nested else record + "void f() {\n")
+            text += ("    // struct Fake {\n"
+                     "    const char* brace = \"} union Fake {\";\n"
+                     "    int left;\n    int right;\n"
+                     "    if (left) {\n        int innerA;\n        int innerB;\n    }\n}\n")
+            candidates = C.r4_decl_reorder(text)
+            if not candidates:
+                return "lost local declaration swaps for %s, nested=%s" % (kind, nested)
+            for label, candidate in candidates:
+                if record not in candidate:
+                    return "%s changed %s member layout, nested=%s" % (label, kind, nested)
+            if not any("    int right;\n    int left;" in c for _, c in candidates):
+                return "lost function-local pair"
+            if not any("        int innerB;\n        int innerA;" in c for _, c in candidates):
+                return "lost nested-block local pair"
+    method = ("class C {\n    int first;\n    int second;\n"
+              "    void f() {\n        int a;\n        int b;\n    }\n};\n")
+    candidates = C.r4_decl_reorder(method)
+    if not any("        int b;\n        int a;" in c for _, c in candidates):
+        return "lost method-local pair"
+    if any("    int first;\n    int second;" not in c for _, c in candidates):
+        return "changed method owner's member layout"
+    return None
+
+
 @check("r41 folds the -1 form back to 0 as well as away from it",
        "the rule shipped one-way, generating only `x >= 0` -> `x > -1`. The sweep hill-climbs from "
        "OUR source toward the ROM, so the direction it needs most is removing an `mvn` our source "
