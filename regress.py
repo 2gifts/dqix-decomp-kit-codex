@@ -986,7 +986,6 @@ def _r55():
        "landed evolve crack never reached the promotion gate, and an in-memory announced set re-fired "
        "the same lever on every re-arm")
 def _levercheck_boards():
-    import shutil
     import subprocess
     import tempfile
     d = tempfile.mkdtemp()
@@ -1009,7 +1008,7 @@ def _levercheck_boards():
     keys = [ln.split()[0] for ln in r.stdout.splitlines() if ln.strip()]
     if keys != ["02011111"] or r.returncode != 1:
         return "levercheck --keys gave %s (exit %d); expected only the landed uncited 02011111" % (keys, r.returncode)
-    bash = shutil.which("bash") or "bash"
+    bash, env = _kp.bash(env)
     first = subprocess.run([bash, f"{KIT}/leverwatch.sh", "--once", "1"], capture_output=True, text=True,
                            env=env, timeout=60)
     if first.returncode != 0 or first.stdout.count("LEVER NEEDS PROMOTING") != 1 or "02011111" not in first.stdout:
@@ -1365,10 +1364,8 @@ def _staging_sweep_keeps_match():
         os.makedirs(os.path.join(d, "wip"))
         with open(os.path.join(d, "wip", "0201aaaa.cpp"), "w", encoding="utf-8") as fh:
             fh.write("// USA: func_0201aaaa\n")
-        bash = "C:/Program Files/Git/bin/bash.exe"
-        if not os.path.isfile(bash):
-            bash = "bash"
-        r = subprocess.run([bash, "-c", script], capture_output=True, text=True)
+        bash, benv = _kp.bash()
+        r = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=benv)
         if r.returncode != 0:
             return "sweep block failed to run: %s" % (r.stderr or "").strip()[:200]
         left = sorted(n for n in os.listdir(stage) if n.endswith(".cpp"))
@@ -2061,7 +2058,6 @@ def _tracked_snapshot_behaviour():
        "failed, unreadable or truncated snapshots could quarantine tracked source")
 def _finish_bulk_snapshot_behaviour():
     import subprocess
-    import shutil
     src = open(f"{KIT}/finish_wave.sh", encoding="utf-8").read()
     first = src.find("# BULK-TRACKED-BEGIN")
     last = src.find("# BULK-TRACKED-END")
@@ -2074,8 +2070,7 @@ def _finish_bulk_snapshot_behaviour():
     if addr_begin < 0 or addr_end < addr_begin: return "address reader missing"
     address_reader = src[addr_begin:addr_end]
     if 'git ls-files --error-unmatch "$f"' in src: return "per-file Git query remains"
-    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
-    if not bash: return "bash unavailable for behavioural snapshot test"
+    bash, benv = _kp.bash()
     for mode in ("valid","empty","git-error","missing","unreadable","truncated","load-error"):
         os.makedirs(f"{SP}/handwork", exist_ok=True)
         root = tempfile.mkdtemp(prefix="fw_snapshot_",dir=f"{SP}/handwork").replace("\\","/")
@@ -2099,7 +2094,8 @@ def _finish_bulk_snapshot_behaviour():
         if mode == "load-error": body += 'mapfile() { return 1; }\n'
         body += address_reader + duplicate_phase + '\n'
         body += 'echo safe > "$1/phase-entered"\n'
-        r = subprocess.run([bash,"--noprofile","--norc","-c",body,"snapshot-test",root],capture_output=True,text=True)
+        r = subprocess.run([bash,"--noprofile","--norc","-c",body,"snapshot-test",root],capture_output=True,text=True,
+                           env=benv)
         entered = os.path.isfile(root + "/phase-entered")
         success = mode in ("valid","empty")
         if success and (r.returncode != 0 or not entered):
@@ -2540,10 +2536,6 @@ def _integrate_region_fixture():
        "finish_wave/integrate_fast configured USA or dropped the existing Linux toolchain environment")
 def _integration_shell_environment():
     import subprocess
-    import shutil
-    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
-    if not bash:
-        return "bash unavailable for integration environment test"
     for script in ("finish_wave.sh", "integrate_fast.sh"):
         source = open(f"{KIT}/{script}", encoding="utf-8").read()
         lines = source.splitlines()
@@ -2557,8 +2549,8 @@ def _integration_shell_environment():
             output = os.path.join(root, "arguments")
             harness = ('python() { printf "%s\\n" "$@" > "$CAPTURE"; }; '
                        'REGION=jpn; LOG=/dev/null;\n' + snippet)
-            env = dict(os.environ, CAPTURE=output, DQIX_PREINSTALLED_COMPILER="/tools/compiler root",
-                       DQIX_WINE="/tools/wine runner")
+            bash, env = _kp.bash(dict(os.environ, CAPTURE=output, DQIX_WINE="/tools/wine runner",
+                                      DQIX_PREINSTALLED_COMPILER="/tools/compiler root"))
             result = subprocess.run([bash, "-c", harness], env=env, capture_output=True, text=True)
             got = open(output).read().splitlines() if os.path.exists(output) else []
             want = ["tools/configure.py", "jpn", "--no-extract", "--compiler",
@@ -2722,20 +2714,54 @@ def _regionsync_runner_fixture():
             return "configure forwarded %r, expected %r" % (result, want)
 
 
-@check("integration environment fixture uses Git Bash on Windows",
-       "plain bash selected Windows System32 WSL instead of Git Bash")
-def _integration_windows_bash_fixture():
-    import ast
-    from types import SimpleNamespace
-    source = open(f"{KIT}/regress.py", encoding="utf-8").read()
-    fn = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and
-              n.name == "_integration_shell_environment")
-    assignments = [n for n in fn.body if isinstance(n, ast.Assign) and
-                   any(isinstance(t, ast.Name) and t.id == "bash" for t in n.targets)]
-    ns = dict(os=SimpleNamespace(name="nt"), shutil=SimpleNamespace(which=lambda name: "System32/bash.exe"))
-    exec(compile(ast.Module(body=assignments, type_ignores=[]), "bash", "exec"), ns)
-    if ns.get("bash") != "C:/Program Files/Git/bin/bash.exe":
-        return "Windows fixture did not select Git Bash"
+@check("cov.py reads the newer of the checkout's and the integration tree's build report",
+       "waves build in the integration tree, so cov.py and health read a two-day-old report from the "
+       "decomp checkout: 90.04% while CI on the same commit said 92.40%")
+def _cov_newest_report():
+    C = load("cov")
+    with tempfile.TemporaryDirectory() as d:
+        trees = [os.path.join(d, "repo"), os.path.join(d, "integ")]
+        for i, t in enumerate(trees):
+            p = os.path.join(t, "build", C.REGION, "report.json")
+            os.makedirs(os.path.dirname(p))
+            open(p, "w").close()
+            os.utime(p, (1000 + i, 1000 + i))
+        if os.path.normpath(C.newest_report(trees)) != os.path.normpath(
+                os.path.join(trees[1], "build", C.REGION, "report.json")):
+            return "cov.py picked the older report"
+    return None
+
+
+@check("kitpaths.bash() finds Git Bash, never WSL, and its PATH runs coreutils",
+       "PATH-only selection chose System32 WSL bash under native Windows Python, and Git's usr/bin "
+       "bash without usr/bin on PATH failed with `mkdir: command not found` from PowerShell (kit PR #133)")
+def _git_bash():
+    import subprocess
+    from unittest import mock
+    if os.name == "nt":
+        with tempfile.TemporaryDirectory() as d:
+            for p in ("Windows/System32/bash.exe", "Portable/cmd/git.exe", "Portable/usr/bin/bash.exe"):
+                os.makedirs(os.path.dirname(os.path.join(d, p)), exist_ok=True)
+                open(os.path.join(d, p), "w").close()
+            which = {"bash": os.path.join(d, "Windows/System32/bash.exe")}
+            with mock.patch.dict(os.environ, {"PATH": "x"}, clear=True), \
+                    mock.patch.object(_kp.shutil, "which", lambda n: which.get(n)):
+                try:
+                    _kp.bash()
+                    return "kitpaths.bash() accepted WSL's System32 bash"
+                except FileNotFoundError:
+                    pass
+                which["git"] = os.path.join(d, "Portable/cmd/git.exe")
+                sh, env = _kp.bash()
+                if os.path.normcase(sh) != os.path.normcase(_kp._norm(os.path.join(d, "Portable/usr/bin/bash.exe"))):
+                    return "kitpaths.bash() picked %s, not the Git root beside git.exe" % sh
+    sh, env = _kp.bash(dict(os.environ, PATH=os.environ.get("SystemRoot", "/nonexistent")))
+    with tempfile.TemporaryDirectory() as d:
+        r = subprocess.run([sh, "--noprofile", "--norc", "-c", 'mkdir -p "$1/a/b" && find "$1/a" -name b',
+                            "x", d.replace("\\", "/")], capture_output=True, text=True, env=env, timeout=30)
+        if r.returncode or not r.stdout.strip():
+            return "the returned shell cannot run coreutils: " + (r.stderr or r.stdout)[:200]
+    return None
 
 
 @check("compiler sweeps enumerate the configured compiler root",
@@ -2743,13 +2769,9 @@ def _integration_windows_bash_fixture():
 def _compiler_sweep_root_fixture():
     import ast
     import glob
-    import shutil
     import subprocess
     from pathlib import Path
     from types import SimpleNamespace
-    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
-    if not bash:
-        return "bash unavailable for compiler sweep test"
     with tempfile.TemporaryDirectory() as root:
         compiler_root = Path(root, "compiler root")
         compiler = compiler_root / "2.0" / "sp2p2" / "mwccarm.exe"
@@ -2765,8 +2787,8 @@ def _compiler_sweep_root_fixture():
         snippet = source[source.index('cd "$REPO"'):]
         harness = ('python() { case "$1" in */buildcfg.py) printf "%s\\n" "$ROOT";; '
                    '*/wdiff.py) printf "%s\\n" "$MWCC";; esac; };\n' + snippet)
-        result = subprocess.run([bash, "-c", harness], capture_output=True, text=True,
-                                env=dict(os.environ, ROOT=compiler_root.as_posix(), REPO=root, KIT=KIT))
+        bash, env = _kp.bash(dict(os.environ, ROOT=compiler_root.as_posix(), REPO=root, KIT=KIT))
+        result = subprocess.run([bash, "-c", harness], capture_output=True, text=True, env=env)
         if result.returncode or not re.search(r"2\.0/sp2p2\s+2\.0/sp2p2", result.stdout):
             return "ccsweep did not use the configured root: " + result.stdout + result.stderr
         source = Path(KIT, "buildcfg.py").read_text(encoding="utf-8")
@@ -2870,9 +2892,9 @@ def _worker_size_of():
     size, addr = max(load("claim").function_sizes("main"))
     src = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
     fn = re.search(r"(?ms)^size_of\(\) \{.*?^\}\n", src).group(0)
-    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+    bash, env = _kp.bash(dict(os.environ, MARG="main", KIT=KIT))
     r = subprocess.run([bash, "-c", fn + 'size_of "$1"', "x", addr], capture_output=True, text=True,
-                       env=dict(os.environ, MARG="main", KIT=KIT), timeout=60)
+                       env=env, timeout=60)
     if r.stdout.strip() != str(size):
         return "size_of main %s printed %r, want %d (%s)" % (addr, r.stdout.strip(), size,
                                                              r.stderr.strip()[-200:])

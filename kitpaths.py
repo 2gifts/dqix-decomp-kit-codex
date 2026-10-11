@@ -10,11 +10,38 @@
     python kitpaths.py behind             commits the published kit is ahead of this checkout
 """
 import os
+import shutil
 import sys
 
 
 def _norm(p):
     return os.path.abspath(p).replace("\\", "/")
+
+
+def bash(base=None):
+    env = dict(os.environ if base is None else base)
+    if os.name != "nt":
+        found = shutil.which("bash")
+        if not found:
+            raise FileNotFoundError("bash is not on PATH")
+        return found, env
+    roots = [os.path.join(os.environ[k], "Git") for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+             if os.environ.get(k)]
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Programs", "Git"))
+    for exe in (shutil.which("git"), shutil.which("bash")):
+        if exe:
+            d = os.path.dirname(os.path.abspath(exe))
+            while os.path.basename(d).lower() in ("cmd", "bin", "usr", "mingw32", "mingw64"):
+                d = os.path.dirname(d)
+            roots.append(d)
+    for root in roots:
+        sh = os.path.join(root, "usr", "bin", "bash.exe")
+        if os.path.isfile(sh):
+            env["PATH"] = os.pathsep.join([os.path.join(root, "usr", "bin"),
+                                           os.path.join(root, "mingw64", "bin"), env.get("PATH", "")])
+            return _norm(sh), env
+    raise FileNotFoundError("no Git Bash found: install Git for Windows")
 
 
 KIT = _norm(os.path.dirname(os.path.abspath(__file__)))
