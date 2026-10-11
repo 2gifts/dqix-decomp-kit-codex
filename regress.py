@@ -2830,6 +2830,11 @@ def _reserved_skipped():
     want = {"02184d80", "021ce524", "021c0000", "021c1000", "02221f78"}
     if got != want:
         return "holders() returned %s, want %s" % (sorted(got), sorted(want))
+    if set(R.holders(issues, prs, "me", {"someone"})):
+        return "holders() honoured a login RESERVED_FROM does not name"
+    issues[0]["updatedAt"] = "2020-01-01T00:00:00Z"
+    if set(R.holders(issues, prs, "me")) != {"02221f78"}:
+        return "holders() honoured an issue untouched for longer than STALE_DAYS"
     C = load("claim")
     old, C.reserved._HELD = C.reserved._HELD, {"0dead000"}
     try:
@@ -2837,6 +2842,23 @@ def _reserved_skipped():
             return "claim.skiplist() ignores reserved addresses"
     finally:
         C.reserved._HELD = old
+    return None
+
+
+@check("pull_worker sizes the claimed function from the config",
+       "size_of read symbols.txt through a literal \"$REPO\" inside a quoted heredoc, so every claim "
+       "logged 0B and got the small doc and the $3 cap: ov016 0218d2f4 (2924B) was served that way")
+def _worker_size_of():
+    import subprocess
+    size, addr = max(load("claim").function_sizes("main"))
+    src = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
+    fn = re.search(r"(?ms)^size_of\(\) \{.*?^\}\n", src).group(0)
+    bash = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
+    r = subprocess.run([bash, "-c", fn + 'size_of "$1"', "x", addr], capture_output=True, text=True,
+                       env=dict(os.environ, MARG="main", KIT=KIT), timeout=60)
+    if r.stdout.strip() != str(size):
+        return "size_of main %s printed %r, want %d (%s)" % (addr, r.stdout.strip(), size,
+                                                             r.stderr.strip()[-200:])
     return None
 
 

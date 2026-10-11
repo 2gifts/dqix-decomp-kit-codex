@@ -11,6 +11,7 @@ import time
 
 USAGE = """usage: reserved.py [--refresh | --publish]
     (none)      addresses other contributors hold in open kit issues and open decomp pull requests
+                updated within STALE_DAYS; $SP/RESERVED_FROM, when it names logins, limits it to those
     --refresh   re-read them from GitHub now
     --publish   write this fleet's claims into its one open kit issue"""
 
@@ -18,6 +19,8 @@ KIT_REPO = os.environ.get("DQIX_KIT_REPO", "ZevyaDev/dqix-decomp-kit")
 DECOMP_REPO = os.environ.get("DQIX_DECOMP_REPO", "ZevyaDev/dqix-decomp")
 PATH = f"{_kp.SP}/wlog/reserved.txt"
 MAX_AGE = 600
+STALE_DAYS = 7
+FROM = f"{_kp.SP}/RESERVED_FROM"
 CLAIMS_TITLE = "Fleet claims"
 ADDR = re.compile(r"(?<![0-9A-Za-z])(?:0x)?(0[12][0-9a-fA-F]{6})(?![0-9A-Za-z])")
 _HEX = r"`?(?:0x)?(0[12][0-9a-fA-F]{6})`?"
@@ -54,11 +57,30 @@ def me():
     return _gh("api", "user", "--jq", ".login").strip()
 
 
-def holders(issues, prs, login):
+def honoured():
+    try:
+        return {l.strip().lower() for l in open(FROM, encoding="utf-8") if l.strip()}
+    except OSError:
+        return set()
+
+
+def _age_days(stamp, now):
+    try:
+        t = time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
+    except (TypeError, ValueError):
+        return 0
+    return (now - t) / 86400
+
+
+def holders(issues, prs, login, allow=frozenset(), now=None):
+    now = time.time() if now is None else now
     held = {}
     for kind, repo, items in (("issue", KIT_REPO, issues), ("pr", DECOMP_REPO, prs)):
         for it in items:
-            if (it.get("author") or {}).get("login") == login:
+            who = ((it.get("author") or {}).get("login") or "").lower()
+            if who == login.lower() or (allow and who not in allow):
+                continue
+            if _age_days(it.get("updatedAt"), now) > STALE_DAYS:
                 continue
             text = "\n".join([it.get("title") or "", it.get("body") or ""]
                              + [f.get("path", "") for f in it.get("files") or []])
@@ -70,10 +92,10 @@ def holders(issues, prs, login):
 def refresh():
     login = me()
     issues = json.loads(_gh("issue", "list", "-R", KIT_REPO, "--state", "open", "--limit", "200",
-                            "--json", "number,author,title,body"))
+                            "--json", "number,author,title,body,updatedAt"))
     prs = json.loads(_gh("pr", "list", "-R", DECOMP_REPO, "--state", "open", "--limit", "100",
-                         "--json", "number,author,title,body,files"))
-    held = holders(issues, prs, login)
+                         "--json", "number,author,title,body,files,updatedAt"))
+    held = holders(issues, prs, login, honoured())
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
     tmp = PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
