@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Move a batch between a cloud session and the local coordinator.
 
-    python cloud/batch.py load cloud/batches/<id>.tsv     cloud: put the batch's rows in the ledger
+    python cloud/batch.py load cloud/batches/<id>.tsv     cloud: put the batch's rows in the ledger;
+                                                          cloud/batches/<id>/<mod>_<addr>.cpp, when
+                                                          present, seeds the worker's source
     python cloud/batch.py export <id>                     cloud: copy every MATCH and report into
                                                           cloud/results/<id>/ for a commit
     python cloud/batch.py import <id>                     local: copy cloud/results/<id>/ into wip
@@ -26,12 +28,17 @@ sys.argv = _argv
 def load(path):
     rows = team.load_ledger()
     have = {team.key(r): r for r in rows}
+    seeds = os.path.splitext(path)[0]
     added = 0
     for line in open(path, encoding="utf-8"):
         parts = line.split()
         if len(parts) < 3 or line.startswith("#"):
             continue
         mod, addr, size = parts[0].lower().removeprefix("ov"), parts[1].lower(), parts[2]
+        seed = os.path.join(seeds, f"{mod}_{addr}.cpp")
+        if os.path.exists(seed) and not os.path.exists(team.wip(mod, addr)):
+            os.makedirs(os.path.dirname(team.wip(mod, addr)), exist_ok=True)
+            shutil.copy(seed, team.wip(mod, addr))
         r = have.get((mod, addr))
         if r:
             r.update(status="ACTIVE", note="")

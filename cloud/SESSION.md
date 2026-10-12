@@ -34,7 +34,8 @@ Run the DQIX cloud batch <id> by following cloud/SESSION.md exactly.
    - Each line printed is `<label> <addr> <task file>`. A line ending `PREWORK-MATCH` needs no worker.
 4. **Match.**
    - Spawn one background subagent per task file, all in one message, up to 15 at once.
-   - Choose the model by function size (the task file says it):
+   - If `cloud/batches/<id>.model` exists, use the model it names for every worker. Otherwise
+     choose the model by function size (the task file says it):
      - 1100 bytes or more: `opus`
      - 600 to 1099 bytes: `sonnet`
      - smaller: `haiku`
@@ -57,6 +58,8 @@ Run the DQIX cloud batch <id> by following cloud/SESSION.md exactly.
      ```
 
    - When more than 15 tasks are ready, start the rest as workers finish, so 15 run at a time.
+   - A task whose source was seeded from an earlier attempt starts from that near-miss: tell the
+     worker to improve the existing source rather than rewrite it, unless it is far off.
    - Never spawn a second worker on the same address.
 5. **Collect.**
    - When a worker finishes, run `python codex/team.py collect <addr>`. It re-gates and applies the
