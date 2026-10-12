@@ -2311,6 +2311,22 @@ def _plausible_transliterated():
     return None
 
 
+@check("plausible.py catches the mirrored `-1 < x` and the inline split add a worker used to dodge it",
+       "cleanup workers rewrote `index > -1` as `-1 < index` (0204027c) and `p += 0x2c00; p[0x5c]` as "
+       "`((sub + 0x5c) + 0x2c00)` (020abd20)")
+def _plausible_dodges():
+    P = load("plausible")
+    wrap = "void f(void) {\n    %s\n}\n"
+    for bad, kind in (("if (-1 < index) g();", "COMPARE-MINUS-ONE"),
+                      ("x = *(int*)((sub + 0x5c) + 0x2c00);", "SPLIT-POINTER-ADD")):
+        if kind not in repr(P.findings(wrap % bad)):
+            return "plausible.py missed %s in %r" % (kind, bad)
+    for good in ("x = (a - 1 < b);", "y = (p + i) + 0x100;", "z = base + 0x2c5c;"):
+        if P.findings(wrap % good):
+            return "plausible.py flagged %r: %r" % (good, P.findings(wrap % good))
+    return None
+
+
 @check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
        "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
        "rewrite plus one gate settles")

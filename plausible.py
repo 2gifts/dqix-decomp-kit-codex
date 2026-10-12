@@ -541,8 +541,8 @@ LINE_RULES = [
     ("NULL-PTR-DIFF", re.compile(r"-\s*\(\s*(?:const\s+)?(?:unsigned\s+|signed\s+)?%s\s*\*+\s*\)\s*(?:0|NULL)\b"
                                  % IDENT)),
     ("TERNARY-SELF", re.compile(r"(?<![\w.>])(%s)\s*=(?!=)[^;?]*\?\s*(?:\1\s*:|[^:;?]*:\s*\1\s*;)" % LV)),
-    ("COMPARE-MINUS-ONE", re.compile(r"(?:[^->]>|<=)\s*-\s*1\b(?![.\w])")),
-    ("INDEX-CAST", re.compile(r"\[\s*\(\s*(?:(?:unsigned|signed)\s+)?(?:int|long|unsigned)\s*\)\s*(%s)\s*\]"
+    ("COMPARE-MINUS-ONE", re.compile(r"(?:[^->]>|<=)\s*-\s*1\b(?![.\w])|(?:^|[(=,!&|?:])\s*-\s*1\s*(?:<(?![<=])|>=)")),
+    ("SPLIT-POINTER-ADD", re.compile(r"\(\s*%s\s*\+\s*0[xX][0-9a-fA-F]+\s*\)\s*\+\s*0[xX][0-9a-fA-F]+00\b" % IDENT)),    ("INDEX-CAST", re.compile(r"\[\s*\(\s*(?:(?:unsigned|signed)\s+)?(?:int|long|unsigned)\s*\)\s*(%s)\s*\]"
                               % IDENT)),
     ("FNPTR-CAST-CALL", re.compile(r"\(\s*\(\s*[\w\s\*]+\(\s*\*\s*\)\s*\([^()]*\)\s*\)\s*&?\s*(%s)\s*\)\s*\("
                                    % IDENT)),
