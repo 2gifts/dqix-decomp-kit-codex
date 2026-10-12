@@ -39,8 +39,6 @@ re-measure one of those before citing it.
   (`pad/renum/renum.py`) instead of reasoning about it.
 - A local that does not keep its own vreg (loop-body narrow loads, CSE'd loads, offset splits, pool
   loads) ignores declaration order. Check with `pad/renum/vdump.py` before moving declarations.
-- Swapping a callee-saved pair by splitting declaration from definition works only when the two
-  definitions are adjacent; across others it rotates every register in between.
 - Scratch registers (r0-r3, ip) follow operand order of the operation that feeds them; declaration
   order does nothing there. Of two values created in the same pass, the one created later gets the
   lower register.
