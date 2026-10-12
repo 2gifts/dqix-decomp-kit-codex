@@ -17,6 +17,15 @@ Probe scripts, variant generators and disassembly dumps written into the `dqix-s
 pipeline's own inventory check on every run and have to be swept by hand. Put them in
 `$SP/handwork/` — nothing there is read by another tool, and it survives the session.
 
+## WRITE THE SOURCE, NOT A TRANSLATION OF THE LISTING
+Read the listing for its structure: which blocks are `if`/`else`, which back-edges are loops, which
+loads are fields of one object, which `bl`s are calls with real arguments. Then write that C++: typed
+parameters and a struct for each object, named locals, `if`/`while`/`for`, compound assignment. Never
+name a variable after a register (`r0`, `r4`), never copy a flag into a local (`cc = r0 - 0`), never
+label a block by its address (`L1c:`); `plausible.py` refuses all three as TRANSLITERATED. Match the
+structure first, then fix codegen differences with the levers below, never by going back to
+one statement per instruction. The forms under NATURAL FORMS THAT MATCH WHERE A TRICK DID come first.
+
 ## THE GATE NAMES YOUR RESIDUE — ROUTE ON THAT CLASS, NOT ON A GUESS
 Every `wgate` run ends with `RESIDUE <CLASS> <metric> <detail>`. Route on it:
 

@@ -2295,6 +2295,22 @@ def _plausible_mixed_access():
     return None
 
 
+@check("plausible.py flags source transliterated from the listing: register-named variables or address labels",
+       "83 functions were written one instruction per statement (`unsigned int r4 = 0; r4 = r0; ... goto L1c;`); "
+       "a contributor reported his agent doing the same")
+def _plausible_transliterated():
+    P = load("plausible")
+    bad = ("extern \"C\" unsigned int f(unsigned int r0, unsigned int r1) {\n    unsigned int r4 = 0;\n"
+           "    r4 = r0;\n    if (r4 == 0) goto L1c;\n    g(r4);\nL1c:;\n    return r0;\n}\n")
+    good = ("extern \"C\" void f(Obj* self, int id) {\n    if (self->count != 0) {\n        g(self, id);\n"
+            "    }\n}\n")
+    if "TRANSLITERATED" not in repr(P.findings(bad)):
+        return "plausible.py missed register-named variables and an address label"
+    if [k for _, k, _ in P.findings(good) if k == "TRANSLITERATED"]:
+        return "plausible.py flagged natural source as transliterated"
+    return None
+
+
 @check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
        "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
        "rewrite plus one gate settles")

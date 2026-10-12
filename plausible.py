@@ -806,7 +806,20 @@ def _mixed_access(src, out):
             _hit(out, text.count("\n", 0, m.start()) + 1, "ALIAS-REREAD", "%s = %s" % (alias, base))
 
 
-FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access]
+REGISTER_NAME = re.compile(r"\b(?:unsigned\s+int|int|u32|s32|unsigned)\s+(r(?:[0-9]|1[0-2]))\b")
+ADDRESS_LABEL = re.compile(r"(?m)^\s*(L[0-9a-fA-F]{1,4})\s*:")
+
+
+def _transliterated(src, out):
+    regs = sorted(set(REGISTER_NAME.findall(src.text)), key=lambda r: int(r[1:]))
+    labels = ADDRESS_LABEL.findall(src.text)
+    if len(regs) >= 2 or labels:
+        line = src.text.count("\n", 0, (REGISTER_NAME.search(src.text) or ADDRESS_LABEL.search(src.text)).start()) + 1
+        _hit(out, line, "TRANSLITERATED", "registers %s, labels %s" % (",".join(regs) or "-", ",".join(labels) or "-"))
+
+
+FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access,
+              _transliterated]
 
 
 def _body_start(lines):
