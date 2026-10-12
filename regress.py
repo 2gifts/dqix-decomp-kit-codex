@@ -2412,6 +2412,42 @@ def _landpr_merge():
     return None
 
 
+@check("landclean keeps every green rewrite and drops only the ones that red a region",
+       "a cleaned source lands into a file already on decomp-matching; one bad rewrite in a batch must "
+       "not cost the others, and a file that changed since its rewrite must not be overwritten")
+def _landclean_settle():
+    import subprocess
+    lc = load("landclean")
+    entries = [(f"src/{n}.cpp", "b", "") for n in "abcdef"]
+    bad = {"src/c.cpp", "src/f.cpp"}
+    got = lc.settle(entries, lambda part: not bad & {rel for rel, _, _ in part})
+    if [rel for rel, _, _ in got] != ["src/a.cpp", "src/b.cpp", "src/d.cpp", "src/e.cpp"]:
+        return "settle() kept %s" % [rel for rel, _, _ in got]
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landclean_regress_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        def git(*args):
+            return subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+
+        git("init", "-q", "-b", "main")
+        for name in ("x", "y"):
+            with open(f"{root}/{name}.cpp", "w", encoding="utf-8") as fh:
+                fh.write(name)
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        x, y = git("rev-parse", "HEAD:x.cpp"), git("rev-parse", "HEAD:y.cpp")
+        old = lc.CLEAN
+        lc.CLEAN = root
+        try:
+            fresh, stale = lc.split_stale(root, [("x.cpp", x, ""), ("y.cpp", x, "")])
+        finally:
+            lc.CLEAN = old
+        if [r for r, _, _ in fresh] != ["x.cpp"] or [r for r, _, _ in stale] != ["y.cpp"]:
+            return "split_stale() kept %s and dropped %s" % (fresh, stale)
+    return None
+
+
 @check("landpr leaves the integration tree on the published tip when it refuses",
        "a prready refusal left Merge #106 checked out; integrate_fast built on it and published the "
        "codegen pragma landpr had refused")
