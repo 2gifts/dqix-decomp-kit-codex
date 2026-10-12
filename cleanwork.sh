@@ -77,7 +77,8 @@ Target listing: python $KIT/wlist.py $MOD $ADDR
 Gate after every edit: python $KIT/wgate.py $MOD $ADDR $F
 Shell commands are allowlisted one at a time: run each command exactly as written above, alone,
 with these absolute paths -- no cd, no &&, no ;, no pipes, no cat. Read files with the Read tool.
-Edit only $F. When the gate prints STOP, stop.
+Edit only $F. When the gate prints STOP, stop. Do not rename functions, fields, parameters or locals
+the fix does not need, and add no comments: naming is a separate, later pass.
 If real source replaced an invented construct, append ONE tab-separated line to $SP/wlog/levers.tsv:
 ${ADDR}<TAB><size><TAB><bytes off without the invented construct><TAB><the source that replaced it>
 Reply with exactly one line:
