@@ -391,7 +391,8 @@ compiler (`X=86.5` = between v86 and v87) and tells you which rank closes it. co
 `renum 83=105.5` named a whole-function swap that a bare function-scope `void* root;` declared just
 above the pointer it must outrank closed (`021575dc`). Loop locals declared bare in reverse colour
 order above the first call result (`int i; int total; Node* node;` then `Events* ev = f();`)
-assign r6/r8/sb/sl in order (`021552a8`). When renum shows an index product (`i*6`, an IR CSE
+assign r6/r8/sb/sl in order (`021552a8`). A loop index declared bare above the initialised flag it
+rides with (`int x; int picked = 0;`) swaps their callee-saved pair (`021dd3dc`). When renum shows an index product (`i*6`, an IR CSE
 variable because it spans blocks) numbered too early, and every member spelling (`a[i].f`) leaves
 it there, bind the element first and name the byte offset: `Val* v = &vals[i]; int off = i *
 sizeof(Obj);`, then address the parallel arrays through `off` (`021d2d64`). Last resort only.
@@ -844,6 +845,8 @@ is register NUMBERS around a byte value, retype it before touching anything else
 - a spilled `str` of a parameter at the very front of the prologue means the parameter is `short`;
   a 0..3 range test on it as its own `static inline` taking `short` keeps the 0/1 result in r0
   instead of a conversion temp (`021da9e0`).
+- a byte array read whose `ldrb` the ROM schedules before a neighbouring array address: the element
+  is a struct of one `unsigned char count : 8;` bitfield, read as `data->rank[i].count` (`0218aa24`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
   truncation; typing the local `unsigned short` emits `lsl`/`lsr #0x10` at every use (`020307d0`).
 - three separate `and rX,sl,#0xff` for ONE integer argument are per-call implicit conversions to an
