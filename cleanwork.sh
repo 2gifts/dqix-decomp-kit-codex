@@ -20,7 +20,7 @@ land() {
 
 mkdir -p "$WORK" "$SP/clean"
 git -C "$REPO" fetch -q origin decomp-matching
-while IFS=$'\t' read -r -u 3 MOD ADDR REL NOTE; do
+while IFS=$'\t' read -r -u 3 MOD ADDR REL PRIVATE HINT; do
   { [ -e "$SP/STOP_CLEAN" ] || [ -e "$SP/FLEET_STOPPED" ]; } && break
   [ -n "$ADDR" ] || continue
   finished "$ADDR" && continue
@@ -32,12 +32,14 @@ while IFS=$'\t' read -r -u 3 MOD ADDR REL NOTE; do
     continue
   fi
   git -C "$REPO" show "origin/decomp-matching:$REL" > "$F"
+  cp "$F" "$F.orig"
   before=$(vcount "$F")
   pbefore=$(pcount "$F")
   if [ "$before" -eq 0 ] 2>/dev/null; then
     echo "$(date '+%H:%M') SKIP $ADDR no volatile left outside hardware" >> "$LOG"
     continue
   fi
+  SITES=$(python -c "import sys;t=open(sys.argv[1],encoding='utf-8',errors='ignore').read().split('\n');print('\n'.join('  line %s: %s' % (n, t[int(n)-1].strip()) for n in sys.argv[2].split(',') if n.strip() and int(n) <= len(t)))" "$F" "$PRIVATE")
   DOC=$(python "$KIT/recipe_select.py" "$MOD" "$ADDR" --lean 2>/dev/null | tr -d '\r' | tr '\\' '/' | head -1)
   MODEL=$(_knob "$SP/CLEAN_MODEL" 'a-z0-9.-' opus)
   CAP=$(_knob "$SP/CLEAN_CAP" '0-9.' 4)
@@ -47,12 +49,15 @@ while IFS=$'\t' read -r -u 3 MOD ADDR REL NOTE; do
   WGATE_SESSION="clean_$(date +%s)" timeout -k 30 "${HANG_GUARD:-7200}" claude -p "DQIX cleanup worker, module $MOD.
 $F is a byte-exact source of $ADDR that already landed on decomp-matching. Make it read like the
 source the original developers wrote, and keep it byte-exact.
-It uses volatile $before time(s) on data that is not a hardware register or memory shared with the
-ARM7. There, volatile almost always stands in for a construct nobody found yet: a field the source
-really reads twice, an inline accessor, a different field type, a struct copy, a different
-declaration or statement order. Remove each such volatile and find that construct.
-Keep a volatile only on a hardware register, on memory shared with the ARM7, or on a variable an
-interrupt handler or another thread writes while this code waits on it, and say which.
+Static analysis proved the volatile on these lines invented -- nothing else writes that data, so
+the developers never declared it volatile:
+$SITES
+There, volatile stands in for a construct nobody found yet: a field the source really reads twice,
+an inline accessor, a different field type, a struct copy, a different declaration or statement
+order. Remove each of these volatile and find that construct.
+${HINT:+Analysis hint: $HINT}
+Every OTHER volatile in the file is real (hardware register, ARM7-shared memory, data an interrupt
+handler or another thread writes): leave those lines exactly as they are.
 Never introduce another construct the developers could not have written: no parameter the callers
 never pass, no self-assignment, no zero-negation padding, no dead address-taking local, no codegen
 #pragma. python $KIT/plausible.py $F must not report anything it did not report before.
@@ -80,7 +85,8 @@ Reply with exactly one line:
   cost=$(python -c "import json,sys;print('%.4f' % json.load(open(sys.argv[1]))['total_cost_usd'])" "$OUT" 2>/dev/null || echo "$CAP")
   said=$(python -c "import json,sys;print((json.load(open(sys.argv[1])).get('result') or '').strip().splitlines()[-1])" "$OUT" 2>/dev/null)
   after=$(vcount "$F")
-  if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | tail -1 | grep -q "^MATCH" && [ "$after" -lt "$before" ] \
+  if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | tail -1 | grep -q "^MATCH" \
+     && python "$KIT/cleancheck.py" "$F.orig" "$F" "$PRIVATE" > /dev/null \
      && [ "$(pcount "$F")" -le "$pbefore" ]; then
     mkdir -p "$SP/clean/$(dirname "$REL")"
     cp "$F" "$SP/clean/$REL"

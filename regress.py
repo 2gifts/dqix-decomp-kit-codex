@@ -2448,6 +2448,21 @@ def _landclean_settle():
     return None
 
 
+@check("cleancheck accepts dropping only the invented volatile and refuses touching a real one",
+       "0205e330's queue counts are written by a VCount interrupt consumer; a cleanup that strips every "
+       "volatile in a file would remove the real ones with the invented")
+def _cleancheck():
+    C = load("cleancheck")
+    before = ["struct Q { volatile int count; };", "    x = *(volatile int*)&e->id;", "    y = 1;"]
+    good = ["struct Q { volatile int count; };", "    x = e->id;", "    y = 1;"]
+    bad = ["struct Q { int count; };", "    x = *(volatile int*)&e->id;", "    y = 1;"]
+    if C.check(before, good, {2})[0] or C.check(before, good, {2})[2] >= 2:
+        return "cleancheck refused a rewrite that dropped only the invented volatile"
+    if not C.check(before, bad, {2})[0]:
+        return "cleancheck accepted a rewrite that dropped a real volatile"
+    return None
+
+
 @check("landpr leaves the integration tree on the published tip when it refuses",
        "a prready refusal left Merge #106 checked out; integrate_fast built on it and published the "
        "codegen pragma landpr had refused")
