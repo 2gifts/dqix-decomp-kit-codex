@@ -9,6 +9,8 @@ import collections
 import re
 import sys
 
+import mangle
+
 HWADDR = r"0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b"
 HWTARGET = re.compile(r"[\s(]*(?:%s|&?\s*[A-Z][A-Z0-9_]+\b(?!\s*(?:\.|->|\[)))" % HWADDR)
 HW = re.compile(r"\(\s*volatile[^)]*\*\s*\)\s*" + HWADDR)
@@ -755,7 +757,26 @@ def _symbol_alias(src, out):
 
 FN_RULES = [_split_pointer_add, _pointer_round_trip, _int_pun_null_test, _noop_addr_cast,
             _member_addr_null_test, _self_store]
-FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias]
+MANGLED_DECL = re.compile(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()]*?\b(_Z\w+)\s*\(([^()]*)\)\s*;')
+
+
+def _mangle_arity(src, out):
+    for m in MANGLED_DECL.finditer(src.text):
+        name, params = m.group(1), m.group(2).strip()
+        if "..." in params:
+            continue
+        declared = 0 if params in ("", "void") else params.count(",") + 1
+        mangled = mangle.mangled_arity(name)
+        if mangled is None:
+            continue
+        member = name.startswith("_ZN")
+        allowed = (mangled + 1,) if name.startswith("_ZNK") else (mangled, mangled + 1) if member else (mangled,)
+        if declared not in allowed:
+            line = src.text.count("\n", 0, m.start(1)) + 1
+            _hit(out, line, "MANGLE-ARITY-MISMATCH", "%s mangled %d declared %d" % (name, mangled, declared))
+
+
+FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity]
 
 
 def _body_start(lines):

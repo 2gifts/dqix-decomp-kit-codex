@@ -2244,6 +2244,22 @@ def _cleancheck():
     return None
 
 
+@check("plausible.py flags an extern \"C\" mangled declaration whose parameter count the mangling contradicts",
+       "a 020709ec cleanup replaced a volatile local with a fourth argument to InitListBuffers02070a30, "
+       "whose mangled name and definition take three")
+def _plausible_mangle_arity():
+    P = load("plausible")
+    name = "_Z23InitListBuffers02070a30P14Struct02070a30P13SafeAllocatorPv"
+    bad = 'extern "C" void %s(void*, void*, void*, unsigned int);\n' % name
+    good = 'extern "C" void %s(void*, void*, void*);\n' % name
+    member = 'extern "C" void _ZN16BackgroundLoader13AddLockGlobalEv(void*);\n'
+    if "MANGLE-ARITY-MISMATCH" not in repr(P.findings(bad)):
+        return "plausible.py missed a fourth argument to a three-parameter mangled function"
+    if P.findings(good) or P.findings(member):
+        return "plausible.py flagged a declaration that matches its mangling: %r" % (P.findings(good) + P.findings(member))
+    return None
+
+
 @check("landpr leaves the integration tree on the published tip when it refuses",
        "a prready refusal left Merge #106 checked out; integrate_fast built on it and published the "
        "codegen pragma landpr had refused")
