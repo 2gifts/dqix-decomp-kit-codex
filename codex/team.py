@@ -887,7 +887,8 @@ def provision_integ(integ):
             die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
     target = "/".join(("tools", "mwccarm", buildcfg.MWCC_VERSION, "mwccarm.exe"))
     print(f"fetching the compiler and tools into {integ}", flush=True)
-    n = run(["ninja", target, "dsd.exe", "objdiff-cli.exe"], cwd=integ)
+    exe = ".exe" if os.name == "nt" else ""
+    n = run(["ninja", target, "dsd" + exe, "objdiff-cli" + exe] + ([] if os.name == "nt" else ["wibo"]), cwd=integ)
     if n.returncode != 0 or not os.path.exists(cc):
         die(f"could not fetch the compiler into {integ}: {(n.stdout + n.stderr).strip()[-400:]}")
 

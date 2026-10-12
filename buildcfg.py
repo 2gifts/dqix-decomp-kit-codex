@@ -53,10 +53,34 @@ def _mwcc_defines(configure):
 
 _cfg = _load()
 
+EXE = ".exe" if os.name == "nt" else ""
+
+
+def native(tool):
+    """An argv[0] that runs a Windows toolchain binary here. On Linux the build runs them through
+    wibo, so callers get a wrapper script that does the same."""
+    if os.name == "nt":
+        return tool
+    import hashlib
+    import shutil
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(tool))))
+    wibo = os.path.join(root, "wibo") if os.path.exists(os.path.join(root, "wibo")) else shutil.which("wibo")
+    if not wibo:
+        sys.exit(f"wibo not found next to {tool} or on PATH; run ninja in the decomp checkout first")
+    wrap = os.path.join(_kp.SP, "bin", hashlib.sha1(tool.encode()).hexdigest()[:12] + "-" + os.path.basename(tool))
+    body = f'#!/bin/sh\nexec "{wibo}" "{tool}" "$@"\n'
+    if not os.path.exists(wrap) or open(wrap).read() != body:
+        os.makedirs(os.path.dirname(wrap), exist_ok=True)
+        with open(wrap, "w") as fh:
+            fh.write(body)
+        os.chmod(wrap, 0o755)
+    return wrap
+
+
 MWCC_VERSION = _cfg.MWCC_VERSION
 DECOMP_ME_COMPILER = _cfg.DECOMP_ME_COMPILER
-CC = f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwccarm.exe"
-AS = f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwasmarm.exe"
+CC = native(f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwccarm.exe")
+AS = native(f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwasmarm.exe")
 AS_FLAGS = _cfg.AS_FLAGS.split()
 FLAGS = (_cfg.CC_FLAGS + " " + _cfg.CC_INCLUDES + " " + _mwcc_defines(_cfg)).split()
 CODEGEN_PRAGMA = re.compile(r"(?m)^[ \t]*#[ \t]*pragma[ \t]+(?!(?:define_section|section|once)\b)(\w+)")
@@ -82,7 +106,7 @@ def lcf_symbols():
 
 
 def cc_path(version):
-    return f"{REPO}/tools/mwccarm/{version}/mwccarm.exe" if version else CC
+    return native(f"{REPO}/tools/mwccarm/{version}/mwccarm.exe") if version else CC
 
 
 if __name__ == "__main__":
