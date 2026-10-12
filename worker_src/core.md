@@ -886,7 +886,8 @@ is register NUMBERS around a byte value, retype it before touching anything else
   the symbol, so the link is unchanged. Inert for this: `volatile` (reloads everywhere), address-taken
   (loads once), a narrow ternary assigned into an `int`. colorsweep `r51_short_spill`. A spill
   `str` scheduled ahead of an argument `mov` is the same lever: a `short` flag from a callee
-  declared returning `short` (`021e4c04`).
+  declared returning `short` (`021e4c04`). The reverse also happens: a spilled `unsigned char`
+  table index whose spill store lands before the indexed `ldr` wants `int` (`021f454c`).
 - **a local that copies a field takes the FIELD's type** (`0219e384`): `unsigned char kind`,
   `unsigned short value`, `unsigned char tag = detail[1]`, and the callee assigned into `value`
   declared returning `unsigned short`, put a spilled store ahead of the next load at two sites.
@@ -1099,6 +1100,8 @@ When the target RE-LOADS a value you are holding in a register:
 - A pool-literal load scheduled AFTER a neighbouring `ldrh`/`sub` pair when the ROM has it first is
   a wrong prototype on a nearby SDK call: `GX_DisableBankFor*` / `Disable*VRAMBanks` return
   `unsigned int` even when discarded; declared `void`, the scheduler reorders (`ov017:0218b688`).
+  A discarded `int` return also adds pcodes that move the ~100-pcode block split one statement,
+  which changes the next block's schedule (`0218b5c4`, `EncodeSignFlaggedHalfword`).
 - A byte store through a pointer loaded from a struct slot that takes the swapped scratch pair is a
   typed accessor plus an inline member setter: `GetBattleHud(res)->SetVisible(1)`, not
   `*((u8*)res->ptr + 0xa) = 1` (`ov017:021acdf4`, `ov017:021b790c`).
@@ -1309,7 +1312,9 @@ together. A switch arm that does only what "no arm" does should not be written.
 - **EARLY RETURN vs SINGLE EXIT decides WHERE a returned constant is materialised — both directions
   are levers.** It also moves a call argument: `if (flag != 0) { stores; func(self); } else
   { counter++; } return;` schedules `mov r0, sl` after the state store where the guard
-  `if (flag == 0) { counter++; return; }` does not (`02164400`). Single exit keeps it live past the
+  `if (flag == 0) { counter++; return; }` does not (`02164400`). The same goes for a two-arm guard:
+  positive-first `if (inParty) { calls; state++; } else { state += 2; }` splits a block the
+  negated form keeps under register pressure (`021f0a5c`). Single exit keeps it live past the
   test so it must be materialised first
   (`020a1bb4` + its twin `020a1ccc`); early return out of the success branch instead makes the FAIL
   path materialise its `NULL` before the cleanup calls rather than sinking it to the final return
