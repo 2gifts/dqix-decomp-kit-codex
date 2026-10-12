@@ -229,7 +229,8 @@ inline` accessors, whose return value mwcc does not fold into the arithmetic tha
 * A derived pointer the ROM forms ONCE (`add r6, r5, #0x9c`, then `mov r1, r6` at every use) is an
   array element reached through an index: `&res->allocator_array_38[index]` in a `static inline` called
   with `5`. `res + 0x9c`, `&res->allocator_array_38[5]`, a member, a named offset local, a round trip
-  and every pragma are re-formed at each use (`ov023:021eeaac`). A member-function accessor on a pad
+  and every pragma are re-formed at each use (`ov023:021eeaac`; `&saved->records_.clears_[i]` called
+  with `0` in `02186388`). A member-function accessor on a pad
   struct over the base works the same: `struct H { char pad[0x164 - sizeof(SafeAllocator)];
   SafeAllocator allocs[2]; SafeAllocator* GetAllocator(int i) { return &allocs[i]; } };` then
   `((H*)g)->GetAllocator(1)` keeps `add r7, r5, #0x164` live across calls (`main:0206f81c`).
@@ -741,7 +742,7 @@ Declared scalars are numbered in reverse declaration order, and the busiest ones
 registers highest number first: declared earlier = lower register. `x++` inside an index
 (`ids[count++] = c;`) splits `x` into a new, late-numbered variable that is coloured after every
 declared one; write `ids[count] = c; count++;`. Two loops that share one counter share its register;
-if the ROM gives them different registers, give each loop its own counter (`02169b4c`). A flag
+if the ROM gives them different registers, give each loop its own counter (`02169b4c`, `021dce34`). A flag
 accumulated alongside a call (`mask |= N;`) goes BEFORE the `Store(g, count++, ...)` call when the
 ROM sets it first; same for a local assigned in an arm before its call, and for two increments
 ahead of a call taking `&idx`: `count++; idx++;` puts the plain counter first (`02192700`). Hoist the block's
