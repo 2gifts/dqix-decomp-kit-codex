@@ -2275,6 +2275,26 @@ def _plausible_mangle_arity():
     return None
 
 
+@check("plausible.py flags an accessor or alias used beside the direct access it re-reads",
+       "cleanup workers swapped volatile for `GetSize(s) < s->count; s->size <<= 1;` (0203e6c8) and "
+       "`counts = data; if (counts[1]) return x[data[1] - 1];` (020a1fd4): the same reload, a new disguise")
+def _plausible_mixed_access():
+    P = load("plausible")
+    mixed = ("static inline unsigned short GetSize(const L* s) { return s->size; }\n"
+             "void f(L* s) {\n    if (GetSize(s) < s->count) s->size <<= 1;\n}\n")
+    alias = ("extern unsigned char data[];\nint f(void) {\n    const unsigned char* counts = data;\n"
+             "    if (counts[1] != 0) return x[data[1] - 1];\n    return 0;\n}\n")
+    plain = ("static inline unsigned short GetSize(const L* s) { return s->size; }\n"
+             "void f(L* s) {\n    if (GetSize(s) < s->count) Grow(s);\n}\n")
+    if "MIXED-ACCESS-RELOAD" not in repr(P.findings(mixed)):
+        return "plausible.py missed an accessor beside a direct access to the same field"
+    if "ALIAS-REREAD" not in repr(P.findings(alias)):
+        return "plausible.py missed a one-use alias beside the global it aliases"
+    if [k for _, k, _ in P.findings(plain) if k in ("MIXED-ACCESS-RELOAD", "ALIAS-REREAD")]:
+        return "plausible.py flagged an accessor used alone: %r" % P.findings(plain)
+    return None
+
+
 @check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
        "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
        "rewrite plus one gate settles")

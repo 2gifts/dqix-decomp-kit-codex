@@ -776,7 +776,33 @@ def _mangle_arity(src, out):
             _hit(out, line, "MANGLE-ARITY-MISMATCH", "%s mangled %d declared %d" % (name, mangled, declared))
 
 
-FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity]
+ACCESSOR = re.compile(r"inline\s+[^;{}()]*?\b([A-Za-z_]\w*)\s*\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*\s*"
+                      r"(?:const\s+)?([A-Za-z_]\w*)\s*\)\s*(?:const\s*)?\{\s*return\s+\2\s*->\s*([A-Za-z_]\w*)\s*;\s*\}")
+ALIAS = re.compile(r"(?m)^\s*(?:(?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*\s*\*\s*)?([A-Za-z_]\w*)\s*=\s*"
+                   r"(&?)\s*([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*)\s*;")
+
+
+def _mixed_access(src, out):
+    text = src.text
+    for m in ACCESSOR.finditer(text):
+        name, field = m.group(1), m.group(3)
+        for call in re.finditer(r"\b%s\s*\(\s*(&?)\s*([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*)\s*\)" % re.escape(name), text):
+            amp, arg = call.group(1), call.group(2)
+            direct = r"\b%s\s*%s\s*%s\b" % (re.escape(arg), r"\." if amp else "->", re.escape(field))
+            if re.search(direct, text):
+                line = text.count("\n", 0, call.start()) + 1
+                _hit(out, line, "MIXED-ACCESS-RELOAD", "%s(%s%s) beside %s" % (name, amp, arg, field))
+                break
+    for m in ALIAS.finditer(text):
+        alias, base = m.group(1), m.group(3)
+        rest = text[m.end():]
+        b = re.escape(base)
+        if alias != base and len(re.findall(r"\b%s\b" % re.escape(alias), rest)) == 1 and re.search(
+                r"\b%s\s*\[" % re.escape(alias), rest) and re.search(r"\b%s\s*(?:\[|\.)|\(\s*&\s*%s\s*\)\s*\[" % (b, b), rest):
+            _hit(out, text.count("\n", 0, m.start()) + 1, "ALIAS-REREAD", "%s = %s" % (alias, base))
+
+
+FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access]
 
 
 def _body_start(lines):
