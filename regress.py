@@ -2824,6 +2824,148 @@ def _plausible_volatile_cast():
     return None
 
 
+@check("plausible.py scans static inline helpers defined above the `// USA:` line",
+       "a volatile read inside a helper above the tag passed plausible.py, which only scanned from "
+       "the tag down, while a hardware register struct or extern there must stay unflagged")
+def _plausible_helpers_above_tag():
+    P = load("plausible")
+    tail = '// USA: func_02000000\nextern "C" ARM int f(struct S* s) {\n    return Count(s);\n}\n'
+    bad = "static inline int Count(struct S* s) { return *(volatile int*)&s->count; }\n" + tail
+    good = ("struct Regs {\n    volatile unsigned int ctrl;\n};\n"
+            "extern volatile unsigned int gVBlankCount;\n"
+            "static inline unsigned int GetDispCnt(void) { return *(volatile unsigned int*)&DISPCNT; }\n"
+            "static inline int Count(struct S* s) { return s->count; }\n" + tail)
+    if (1, "VOLATILE-CAST") not in [(l, k) for l, k, _w in P.findings(bad)]:
+        return "plausible.py did not flag the volatile cast in the helper above the tag: %r" % P.findings(bad)
+    if P.findings(good):
+        return "plausible.py flagged hardware or plain code above the tag: %r" % P.findings(good)
+    return None
+
+
+PLAUSIBLE_CASES = [
+    ("NULL-PTR-DIFF",
+     "`(int)(p - (char *)0)` exists only to emit `sub Rd, Rs, #0`",
+     'extern "C" ARM int f(char* p) {\n    int i = (int)(p - (char *)0);\n    return i + 1;\n}\n',
+     'extern "C" ARM int f(char* p, char* base) {\n    int i = p - base;\n    return i + 1;\n}\n'),
+    ("TERNARY-SELF",
+     "`w = c ? 0 : w;` stores a variable back into itself only to move its spill slot",
+     'extern "C" ARM void f(S* e, T* obj) {\n    int w = 1;\n'
+     '    if (e->mode == 1) w = obj->f311 != 0 ? 0 : w;\n    g(w);\n}\n',
+     'extern "C" ARM void f(S* e, T* obj) {\n    int w = 1;\n'
+     '    if (e->mode == 1 && obj->f311 != 0) w = 0;\n    g(w);\n}\n'),
+    ("COMPARE-MINUS-ONE",
+     "`x > -1` written for `x >= 0` only to keep an `mvn`",
+     'extern "C" ARM int f(S* o) {\n    if (o->timer > -1) {\n        return 1;\n    }\n    return 0;\n}\n',
+     'extern "C" ARM int f(S* o) {\n    if (o->timer >= 0) {\n        return 1;\n    }\n    return 0;\n}\n'),
+    ("INDEX-CAST",
+     "`tbl[(int)j]` widens an index only to break CSE",
+     'extern "C" ARM int f(const short* tbl, unsigned char j) {\n    return tbl[(int)j];\n}\n',
+     'extern "C" ARM int f(const short* tbl, unsigned char j, int x) {\n'
+     '    return tbl[j] + tbl[(unsigned char)x];\n}\n'),
+    ("FNPTR-CAST-CALL",
+     "a named function called through a cast to another signature passes an argument it does not take",
+     'extern "C" void _Z5Resetv();\nextern "C" ARM void f(char* base) {\n'
+     '    ((void (*)(char*))_Z5Resetv)(base);\n}\n',
+     'void Reset(char* base);\nextern "C" ARM void f(char* base, void* cb) {\n    Reset(base);\n'
+     '    ((void (*)(char*))cb)(base);\n}\n'),
+    ("LONGLONG-MASK",
+     "`(int)((long long)x | 0x100000000LL)` truncates a 64-bit op straight back to keep `orr Rd, Rs, #0`",
+     'extern "C" ARM int f(int x) {\n    return (int)((long long)x | 0x100000000LL);\n}\n',
+     'extern "C" ARM long long f(int x) {\n    return (long long)x | 0x100000000LL;\n}\n'),
+    ("CC-FLAG-EMULATION",
+     "a variable standing in for the CPSR flags is a transliterated listing, not C",
+     'extern "C" ARM int f(int r0) {\n    int cc;\n    cc = (int)(r0) - (int)(0x0);\n'
+     '    if (cc != 0) {\n        return 1;\n    }\n    return 0;\n}\n',
+     'extern "C" ARM int f(int value) {\n    if (value != 0) {\n        return 1;\n    }\n    return 0;\n}\n'),
+    ("ABS-ADDRESS-CAST",
+     "a data symbol replaced by its absolute address forces a second pool word and bakes in a USA address",
+     'extern int data_02249b54;\nextern "C" ARM void f(void) {\n'
+     '    g(((__typeof__(&data_02249b54))0x02249B54));\n}\n',
+     'extern int data_02249b54;\nextern "C" ARM void f(void) {\n    g(&data_02249b54);\n'
+     '    *(volatile unsigned int*)0x04000208 = 0;\n}\n'),
+    ("SPLIT-POINTER-ADD",
+     "a pointer bound and then bumped by a constant on the next statement only moves an `add`",
+     'extern "C" ARM void f(char* obj) {\n    char* p = obj;\n    p += 0x10;\n    g(p);\n}\n',
+     'extern "C" ARM void f(char* obj) {\n    char* p = obj + 0x10;\n    while (*p != 0) {\n'
+     '        p++;\n    }\n    g(p);\n}\n'),
+    ("POINTER-ROUND-TRIP",
+     "`p++; (p - 1)->x` cancels out and exists only to defeat copy propagation",
+     'struct S { int x; };\nextern "C" ARM void f(struct S* s) {\n    struct S* p = s;\n    p++;\n'
+     '    (p - 1)->x = 0;\n}\n',
+     'struct S { int x; };\nextern "C" ARM void f(struct S* s, int n) {\n    struct S* end = s + n;\n'
+     '    (end - 1)->x = 0;\n}\n'),
+    ("INT-PUN-NULL-TEST",
+     "a struct's pointer member null-tested through `*(int*)p` only changes the CSE key",
+     'struct Inner;\nstruct Outer { struct Inner* inner; };\nextern "C" ARM void f(struct Outer* p) {\n'
+     '    if (*(int*)p != 0) {\n        g(p->inner);\n    }\n}\n',
+     'struct Inner;\nstruct Outer { struct Inner* inner; };\nextern "C" ARM void f(struct Outer* p) {\n'
+     '    if (p->inner != 0) {\n        g(p->inner);\n    }\n}\n'),
+    ("NOOP-ADDR-CAST",
+     "`*(unsigned char*)&e->id` on an `unsigned char` member is an address-taken read that only breaks CSE",
+     'struct E { unsigned char id; };\nextern "C" ARM int f(struct E* e) {\n'
+     '    unsigned char v = *(unsigned char*)&e->id;\n    return v;\n}\n',
+     'struct E { unsigned char id; };\nextern "C" ARM int f(struct E* e) {\n'
+     '    unsigned char v = e->id;\n    return v;\n}\n'),
+    ("MEMBER-ADDR-NULL-TEST",
+     "the address of a member is never null, so testing it exists only for its codegen",
+     'struct Task { int active; };\nstruct Ctx { int pad; struct Task task; };\n'
+     'extern "C" ARM int f(struct Ctx* ctx) {\n    struct Task* task = &ctx->task;\n'
+     '    if (!(task != 0 && task->active != 0)) {\n        return 1;\n    }\n    return 0;\n}\n',
+     'struct Task { int active; };\nstruct Ctx { int pad; struct Task task; };\n'
+     'extern "C" ARM int f(struct Ctx* ctx) {\n    struct Task* task = &ctx->task;\n'
+     '    if (task->active == 0) {\n        return 1;\n    }\n    return 0;\n}\n'),
+    ("SELF-STORE",
+     "`p->f = p->f;` stores a member back into itself",
+     'struct Obj { int position; };\nextern "C" ARM void f(struct Obj* obj) {\n'
+     '    obj->position = obj->position;\n}\n',
+     'struct Obj { int position; };\nextern "C" ARM void f(struct Obj* obj, int x) {\n'
+     '    obj->position = x;\n}\n'),
+    ("INLINE-LOCAL-RETURN",
+     "an inline getter that copies into a local and returns it exists only to reorder a load",
+     'struct U { int id; };\nstatic inline int UnitId(struct U* u) { int id = u->id; return id; }\n'
+     '// USA: func_02000000\nextern "C" ARM int f(struct U* u) {\n    return UnitId(u);\n}\n',
+     'struct U { int id; };\nstatic inline int UnitId(struct U* u) { return u->id; }\n'
+     '// USA: func_02000000\nextern "C" ARM int f(struct U* u) {\n    return UnitId(u);\n}\n'),
+    ("INLINE-OFFSET-ADD",
+     "an inline helper that only adds a constant to a pointer splits an offset the struct should carry",
+     'static inline char* Off2400(char* p) { return p + 0x2400; }\n// USA: func_02000000\n'
+     'extern "C" ARM void f(char* p) {\n    g(Off2400(p));\n}\n',
+     'struct Obj { int pad[0x900]; int field; };\n'
+     'static inline int GetField(struct Obj* o) { return o->field; }\n'
+     'static inline int Next(int id) { return id + 1; }\n// USA: func_02000000\n'
+     'extern "C" ARM void f(struct Obj* o) {\n    g(Next(GetField(o)));\n}\n'),
+    ("INLINE-IDENTITY",
+     "an inline that returns its own parameter, cast, only adds an inline boundary",
+     'struct A;\nstruct B;\nstatic inline struct A* AsA(struct B* b) { return (struct A*)b; }\n'
+     '// USA: func_02000000\nextern "C" ARM void f(struct B* b) {\n    g(AsA(b));\n}\n',
+     'struct A;\nstruct B;\ninline void* operator new(unsigned int, void* p) { return p; }\n'
+     '// USA: func_02000000\nextern "C" ARM void f(struct B* b) {\n    g((struct A*)b);\n}\n'),
+    ("SYMBOL-ALIAS",
+     "a `_dup`/`_arg` extern names one address twice only to force a second pool word",
+     'extern int data_ov031_02249b54;\nextern int data_ov031_02249b54_arg;\nextern "C" ARM void f(void) {\n'
+     '    g(data_ov031_02249b54, &data_ov031_02249b54_arg);\n}\n',
+     'extern int data_ov031_02249b54;\nextern "C" ARM void f(int start_arg) {\n'
+     '    g(data_ov031_02249b54, &data_ov031_02249b54, start_arg);\n}\n'),
+]
+
+
+def _plausible_case(kind, bad, good):
+    def run():
+        P = load("plausible")
+        got = [k for _l, k, _w in P.findings(bad)]
+        if kind not in got:
+            return "plausible.py did not flag %s (got %r)" % (kind, got)
+        if P.findings(good):
+            return "plausible.py flagged the natural form: %r" % P.findings(good)
+        return None
+    return run
+
+
+for _kind, _fault, _bad, _good in PLAUSIBLE_CASES:
+    check("plausible.py flags %s and passes the natural form" % _kind, _fault)(
+        _plausible_case(_kind, _bad, _good))
+
+
 @check("colorforce, schedforce and renum read the size argument the same way",
        "schedforce parsed the size as hex while colorforce took decimal, so the plan's 'same "
        "arguments' run read 2816 as 0x2816 and crashed in struct.unpack on ov000:02165490")
