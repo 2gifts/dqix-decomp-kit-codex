@@ -55,6 +55,7 @@ Run the DQIX cloud batch <id> by following cloud/SESSION.md exactly.
      or speed-built library code, stop early and report RESIDUE with that note.
      ```
 
+   - When more than 15 tasks are ready, start the rest as workers finish, so 15 run at a time.
    - Never spawn a second worker on the same address.
 5. **Collect.**
    - When a worker finishes, run `python codex/team.py collect <addr>`. It re-gates and applies the
