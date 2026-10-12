@@ -2275,6 +2275,27 @@ def _plausible_mangle_arity():
     return None
 
 
+@check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
+       "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
+       "rewrite plus one gate settles")
+def _mechclean_rewrites():
+    M = load("mechclean")
+    cases = [
+        (["COMPARE-MINUS-ONE"], "    if (obj->count > -1) f();", "    if (obj->count >= 0) f();"),
+        (["NOOP-ADDR-CAST"], "    v = *(unsigned char*)&e->field24;", "    v = e->field24;"),
+        (["TERNARY-SELF"], "    s = s->bit0 ? s : NULL;", "    if (!(s->bit0)) s = NULL;"),
+        (["SELF-ASSIGN"], "    a = a;\n    b = 1;", "    b = 1;"),
+        (["INLINE-LOCAL-RETURN"], "static inline int Get(S* s) { int v = s->hp; return v; }",
+         "static inline int Get(S* s) { return s->hp; }"),
+        (["NOOP-ADDR-CAST"], "    x = y > -1;", "    x = y > -1;"),
+    ]
+    for kinds, before, want in cases:
+        got = M.rewrite(before, kinds)
+        if got != want:
+            return "%s: %r became %r, want %r" % (kinds, before, got, want)
+    return None
+
+
 @check("landpr leaves the integration tree on the published tip when it refuses",
        "a prready refusal left Merge #106 checked out; integrate_fast built on it and published the "
        "codegen pragma landpr had refused")

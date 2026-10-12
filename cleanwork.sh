@@ -16,19 +16,28 @@ pcount() {
 }
 export WGATE_ALLOW_COMMITTED=1
 finished() { grep -qE " (CLEAN|KEEP|BLOCKED|SKIP) $1 " "$LOG" 2>/dev/null; }
+CLAIMS="$SP/clean/claims"
+SIMPLE='^(CC-FLAG-EMULATION|INT-PUN-NULL-TEST|NOOP-ADDR-CAST|TERNARY-SELF|COMPARE-MINUS-ONE|SELF-STORE|SELF-ASSIGN|SPLIT-POINTER-ADD|INLINE-LOCAL-RETURN|INLINE-IDENTITY)$'
 next_row() {
   local m a rest
   while IFS=$'\t' read -r m a rest; do
-    [ -n "$a" ] && ! finished "$a" && { printf '%s\t%s\t%s\n' "$m" "$a" "$rest"; return 0; }
+    [ -n "$a" ] && ! finished "$a" && mkdir "$CLAIMS/$a" 2>/dev/null && { printf '%s\t%s\t%s\n' "$m" "$a" "$rest"; return 0; }
   done < "$QUEUE"
   return 1
+}
+model_for() {
+  local k kinds
+  kinds=$(printf '%s\n' "$1" | grep -oE '[A-Z][A-Z0-9-]+[A-Z]:' | tr -d ':' | sort -u)
+  [ -n "$kinds" ] || { echo opus; return; }
+  for k in $kinds; do [[ "$k" =~ $SIMPLE ]] || { echo opus; return; }; done
+  echo sonnet
 }
 land() {
   [ -s "$MANIFEST" ] && [ ! -e "$SP/CLEAN_HOLD" ] || return 0
   LANDCLEAN_TRIES=180 bash "$KIT/landclean.sh" 2>&1 | sed "s/^/$(date '+%H:%M') landclean: /" >> "$LOG"
 }
 
-mkdir -p "$WORK" "$SP/clean"
+mkdir -p "$WORK" "$SP/clean" "$CLAIMS"
 git -C "$REPO" fetch -q origin decomp-matching
 while :; do
   { [ -e "$SP/STOP_CLEAN" ] || [ -e "$SP/FLEET_STOPPED" ]; } && break
@@ -50,7 +59,7 @@ while :; do
   fi
   SITES=$(python -c "import sys;t=open(sys.argv[1],encoding='utf-8',errors='ignore').read().split('\n');print('\n'.join('  line %s: %s' % (n, t[int(n)-1].strip()) for n in sys.argv[2].split(',') if n.strip() and int(n) <= len(t)))" "$F" "$PRIVATE")
   DOC=$(python "$KIT/recipe_select.py" "$MOD" "$ADDR" --lean 2>/dev/null | tr -d '\r' | tr '\\' '/' | head -1)
-  MODEL=$(_knob "$SP/CLEAN_MODEL" 'a-z0-9.-' opus)
+  MODEL=$(_knob "$SP/CLEAN_MODEL" 'a-z0-9.-' "$(model_for "$HINT")")
   CAP=$(_knob "$SP/CLEAN_CAP" '0-9.' 4)
   OUT="$SP/wlog/clean_${MOD}_${ADDR}.json"
   echo "$(date '+%H:%M') claim $ADDR $MOD $(basename "$REL") volatile=$before findings=$pbefore [$MODEL] cap \$$CAP" >> "$LOG"
@@ -112,6 +121,7 @@ Reply with exactly one line:
     v=BLOCKED
   fi
   echo "$(date '+%H:%M') $v $ADDR \$$cost volatile $before->$after | ${said:0:200}" >> "$LOG"
+  rmdir "$CLAIMS/$ADDR" 2>/dev/null
   [ "$(wc -l < "$MANIFEST" 2>/dev/null || echo 0)" -ge "$(_knob "$SP/CLEAN_BATCH" '0-9' 8)" ] && land
 done
 land
