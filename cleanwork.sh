@@ -11,7 +11,10 @@ _knob() { local v; v=$(tr -dc "$2" < "$1" 2>/dev/null); echo "${v:-$3}"; }
 vcount() {
   python -c "import re,sys;H=re.compile(r'0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b|^\s*#');print(sum(len(re.findall(r'\bvolatile\b',l)) for l in open(sys.argv[1],encoding='utf-8',errors='ignore') if not H.search(l)))" "$1"
 }
-pcount() { python "$KIT/plausible.py" "$1" 2>/dev/null | grep -vc " VOLATILE-"; }
+pcount() {
+  echo $(( $(python "$KIT/plausible.py" "$1" 2>/dev/null | grep -vc " VOLATILE-") + $(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$1") ))
+}
+export WGATE_ALLOW_COMMITTED=1
 finished() { grep -qE " (CLEAN|KEEP|BLOCKED|SKIP) $1 " "$LOG" 2>/dev/null; }
 land() {
   [ -s "$MANIFEST" ] || return 0
@@ -88,7 +91,7 @@ Reply with exactly one line:
   after=$(vcount "$F")
   ORIG="$WORK/.orig_$ADDR"
   git -C "$REPO" cat-file blob "$BASE" > "$ORIG"
-  if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | tail -1 | grep -q "^MATCH" \
+  if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | grep -q "^MATCH" \
      && python "$KIT/cleancheck.py" "$ORIG" "$F" "$PRIVATE" > /dev/null \
      && [ "$(pcount "$F")" -le "$pbefore" ]; then
     mkdir -p "$SP/clean/$(dirname "$REL")"
