@@ -7,7 +7,7 @@ LOG="$SP/wlog/clean.log"
 WORK="$SP/handwork/clean"
 MANIFEST="$SP/clean/manifest.tsv"
 
-_knob() { local v; v=$(tr -dc "$2" < "$1" 2>/dev/null); echo "${v:-$3}"; }
+_knob() { local v; v=$(tr -dc "$2" 2>/dev/null < "$1"); echo "${v:-$3}"; }
 vcount() {
   python -c "import re,sys;H=re.compile(r'0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b|^\s*#');print(sum(len(re.findall(r'\bvolatile\b',l)) for l in open(sys.argv[1],encoding='utf-8',errors='ignore') if not H.search(l)))" "$1"
 }
@@ -16,6 +16,13 @@ pcount() {
 }
 export WGATE_ALLOW_COMMITTED=1
 finished() { grep -qE " (CLEAN|KEEP|BLOCKED|SKIP) $1 " "$LOG" 2>/dev/null; }
+next_row() {
+  local m a rest
+  while IFS=$'\t' read -r m a rest; do
+    [ -n "$a" ] && ! finished "$a" && { printf '%s\t%s\t%s\n' "$m" "$a" "$rest"; return 0; }
+  done < "$QUEUE"
+  return 1
+}
 land() {
   [ -s "$MANIFEST" ] || return 0
   LANDCLEAN_TRIES=180 bash "$KIT/landclean.sh" 2>&1 | sed "s/^/$(date '+%H:%M') landclean: /" >> "$LOG"
@@ -23,10 +30,10 @@ land() {
 
 mkdir -p "$WORK" "$SP/clean"
 git -C "$REPO" fetch -q origin decomp-matching
-while IFS=$'\t' read -r -u 3 MOD ADDR REL PRIVATE HINT; do
+while :; do
   { [ -e "$SP/STOP_CLEAN" ] || [ -e "$SP/FLEET_STOPPED" ]; } && break
-  [ -n "$ADDR" ] || continue
-  finished "$ADDR" && continue
+  ROW=$(next_row) || break
+  IFS=$'\t' read -r MOD ADDR REL PRIVATE HINT < <(printf '%s\n' "$ROW")
   F="$WORK/$MOD/$(basename "$REL")"
   mkdir -p "$(dirname "$F")"
   BASE=$(git -C "$REPO" rev-parse "origin/decomp-matching:$REL" 2>/dev/null)
@@ -105,6 +112,6 @@ Reply with exactly one line:
   fi
   echo "$(date '+%H:%M') $v $ADDR \$$cost volatile $before->$after | ${said:0:200}" >> "$LOG"
   [ "$(wc -l < "$MANIFEST" 2>/dev/null || echo 0)" -ge "$(_knob "$SP/CLEAN_BATCH" '0-9' 8)" ] && land
-done 3< "$QUEUE"
+done
 land
 echo "$(date '+%H:%M') cleanwork done" >> "$LOG"
