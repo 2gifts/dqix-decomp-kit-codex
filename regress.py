@@ -2339,9 +2339,22 @@ def _implausible_blocks():
         return "prready did not report a finding the change adds: %r" % pr.gained(clean, pun)
     if pr.gained(pun, pun):
         return "prready blamed a change for a finding the tip already had"
-    human = "void G3B_PolygonAttr(Info* d, u32 r1, u32 r2, u32 r3) {\n    if (r1 > -1) d->p = r1 | r2 << 4;\n}\n"
-    if pr.gained("", human):
-        return "an advisory kind seen in human-written code blocks: %r" % pr.gained("", human)
+    regs = "// USA: func_0202c9ac\nvoid f(Info* d, u32 r1, u32 r2) {\n    d->p = r1 | r2 << 4;\n}\n"
+    if pr.gained("", regs) != ["TRANSLITERATED"]:
+        return "register-named variables do not block: %r" % pr.gained("", regs)
+    natural = "void f(int* p) {\n    int ret = *p;\n    ret = (ret < 0) ? -ret : ret;\n    *p = ret;\n}\n"
+    if pr.gained("", natural):
+        return "a construct real game code uses blocks: %r" % pr.gained("", natural)
+    old = pr.ALLOW_FILE
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+        fh.write("0202c9ac TRANSLITERATED reviewer the SDK names these r1/r2\n")
+    pr.ALLOW_FILE = fh.name
+    try:
+        if pr.gained("", regs):
+            return "an approved exception in plausible_allow.txt still blocks"
+    finally:
+        pr.ALLOW_FILE = old
+        os.unlink(fh.name)
     worker = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
     if "hold_plausible" not in worker or 'if [ -n "$_held" ]; then' not in worker:
         return "pull_worker.sh still stages a match plausible.py flags after its cleanup"

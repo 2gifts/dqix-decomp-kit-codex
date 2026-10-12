@@ -6,6 +6,7 @@ blocker.py records a miss on a flagged file as IMPLAUSIBLE; pad/evo_score.py pen
 """
 import bisect
 import collections
+import os
 import re
 import sys
 
@@ -918,13 +919,28 @@ def findings(text):
     return out
 
 
-ADVISORY = {"TRANSLITERATED", "VOLATILE-CAST", "VOLATILE-LOCAL", "COMPARE-MINUS-ONE", "ALIAS-REREAD",
-            "DEAD-ADDRESS-LOCAL", "SPLIT-POINTER-ADD", "MEMBER-ADDR-NULL-TEST", "SELF-ASSIGN", "MIXED-ACCESS-RELOAD",
-            "NOOP-ADDR-CAST", "SELF-STORE", "INLINE-IDENTITY", "MANGLE-ARITY-MISMATCH", "TERNARY-SELF"}
+ADVISORY = {"VOLATILE-CAST", "VOLATILE-LOCAL", "TERNARY-SELF", "ALIAS-REREAD", "MIXED-ACCESS-RELOAD",
+            "DEAD-ADDRESS-LOCAL"}
+ALLOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plausible_allow.txt")
+USA_ADDR = re.compile(r"//\s*USA:\s*\S*?([0-9a-fA-F]{8})\b")
+
+
+def allowed():
+    out = set()
+    try:
+        for ln in open(ALLOW_FILE, encoding="utf-8"):
+            parts = ln.split()
+            if len(parts) >= 3 and not ln.startswith("#"):
+                out.add((parts[0].lower(), parts[1]))
+    except OSError:
+        pass
+    return out
 
 
 def blocking(text):
-    return [h for h in findings(text) if h[1] not in ADVISORY]
+    addrs = {a.lower() for a in USA_ADDR.findall(text)}
+    ok = allowed()
+    return [h for h in findings(text) if h[1] not in ADVISORY and not any((a, h[1]) in ok for a in addrs)]
 
 
 def gained(before, after):
