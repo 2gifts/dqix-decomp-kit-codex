@@ -2848,6 +2848,32 @@ def _integ_bootstrap():
     return None
 
 
+@check("both integrators skip sha1 without an ARM7 BIOS and still require it with one",
+       "finish_wave exited 5 at `RED: sha1 mismatch` on every module for a contributor without the "
+       "BIOS dump, so countfix, regionsync and the push never ran; CONTRIBUTING.md asks for sha1 only "
+       "when you have the BIOS")
+def _sha1_without_bios():
+    import subprocess
+    for script in ("integrate_fast.sh", "finish_wave.sh"):
+        src = open(f"{KIT}/{script}", encoding="utf-8").read()
+        i, j = src.find("sha1_ok() {"), src.find("\n}\n", src.find("sha1_ok() {"))
+        if i < 0 or j < 0:
+            return "%s has no sha1_ok()" % script
+        if 'ninja sha1 2>&1 | grep -q "OK"' in src[j:]:
+            return "%s still runs a raw sha1 check outside sha1_ok()" % script
+        bash, env = _kp.bash(dict(os.environ, LOG="/dev/null"))
+        with tempfile.TemporaryDirectory() as d:
+            harness = src[i:j + 3] + 'ninja() { echo MISMATCH; }\nsha1_ok && echo PASS || echo FAIL\n'
+            r = subprocess.run([bash, "-c", harness], cwd=d, capture_output=True, text=True, env=env)
+            if "PASS" not in r.stdout:
+                return "%s sha1_ok fails without arm7_bios.bin: %r" % (script, r.stdout + r.stderr)
+            open(os.path.join(d, "arm7_bios.bin"), "w").close()
+            r = subprocess.run([bash, "-c", harness], cwd=d, capture_output=True, text=True, env=env)
+            if "FAIL" not in r.stdout:
+                return "%s sha1_ok passed a mismatch with the BIOS present" % script
+    return None
+
+
 @check("both integrators build objdiff.json before countfix and report a countfix failure",
        "on a cold integration tree countfix read a missing objdiff.json, raised, corrected nothing, "
        "and integrate_fast still reported GREEN because only exit 3 was handled (kit issue #233)")
