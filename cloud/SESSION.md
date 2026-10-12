@@ -35,14 +35,15 @@ Run the DQIX cloud batch <id> by following cloud/SESSION.md exactly.
 4. **Match.**
    - Spawn one background subagent per task file, all in one message, up to 15 at once.
    - Choose the model by function size (the task file says it):
-     - 1000 bytes or more: `opus`
-     - 600 to 999 bytes: `sonnet`
+     - 1100 bytes or more: `opus`
+     - 600 to 1099 bytes: `sonnet`
      - smaller: `haiku`
    - Give each worker this prompt:
 
      ```
-     Read <absolute task file> and do exactly what it says. Up to 80 gate runs (opus) or 50
-     (sonnet/haiku); stop early after 15 runs in a row with no reduction. Print the full target
+     Read <absolute task file> and do exactly what it says. Up to 50 gate runs (opus) or 40
+     (sonnet/haiku); stop early after 10 runs in a row with no reduction. Do not write permutation
+     or search scripts that compile hundreds of variants; one colorsweep --apply pass is enough. Print the full target
      with `"<runner>" wlist.py <mod> <addr>` and build section by section: size first, then shape,
      then registers. Keep temp files only in /tmp/<label>/. Quality bar for MATCH:
      - the first line is `#include <globaldefs.h>`
