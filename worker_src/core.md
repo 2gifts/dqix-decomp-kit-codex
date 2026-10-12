@@ -369,6 +369,9 @@ same register or order shift, one block in the source carries a redundant store 
 elimination removes but that still moves the per-block schedule: `messages->unk_19b0 = 1;` written
 again just before the `DRAW_LINE` macro that also sets it, in the third block only (`0218f794`,
 SCHED 119 -> 0). Declaration, type and inline changes cannot reach it.
+An eliminated store also keeps its constant's load: a constant the ROM derives from a neighbouring
+one (`sub r2, r3, #0x1d` where you emit a second pool word) is a dead store of that neighbour just
+before the real one, `p->msgId2 = 0x7936; p->msgId2 = -1;` (`02157634`, SHAPE 912 without it).
 
 **CHECK THE FUNCTION'S OWN RETURN TYPE, NOT JUST ITS CALLEES** (`ov017:021ce5b4`).
 A scaffold's `void` is a guess: if the target leaves a derived pointer in r0 on
