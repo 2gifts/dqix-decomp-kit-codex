@@ -94,6 +94,15 @@ def holders(issues, prs, login, allow=frozenset(), now=None):
     return held
 
 
+def pr_diff(number):
+    try:
+        return _gh("pr", "diff", str(number), "-R", DECOMP_REPO)
+    except RuntimeError as e:
+        if "too_large" not in str(e):
+            raise
+    return _gh("api", "--paginate", f"repos/{DECOMP_REPO}/pulls/{number}/files", "--jq", ".[].patch")
+
+
 def refresh():
     login = me()
     issues = json.loads(_gh("issue", "list", "-R", KIT_REPO, "--state", "open", "--limit", "200",
@@ -101,7 +110,7 @@ def refresh():
     prs = json.loads(_gh("pr", "list", "-R", DECOMP_REPO, "--state", "open", "--limit", "100",
                          "--json", "number,author,title,body,files,updatedAt"))
     for pr in prs:
-        pr["diff"] = _gh("pr", "diff", str(pr["number"]), "-R", DECOMP_REPO)
+        pr["diff"] = pr_diff(pr["number"])
     held = holders(issues, prs, login, honoured())
     os.makedirs(os.path.dirname(PATH), exist_ok=True)
     tmp = PATH + ".tmp"

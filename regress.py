@@ -3273,6 +3273,31 @@ def _reserved_skipped():
     return None
 
 
+@check("reserved.py reads a pull request too large for gh pr diff from its file patches",
+       "#117 changed 900 files; gh pr diff refused it (HTTP 406 too_large) and every refresh fell back "
+       "to the last list, so no reservation changed while it was open")
+def _reserved_large_pr():
+    R = load("reserved")
+
+    def gh(*args):
+        if args[:2] == ("pr", "diff"):
+            raise RuntimeError("HTTP 406: the diff exceeded the maximum number of files\nPullRequest.diff too_large")
+        if args[0] == "api" and "pulls/117/files" in " ".join(args):
+            return "@@ -1 +1,3 @@\n+src/x.cpp:\n+    .text start:0x021fe000 end:0x021fe100\n"
+        raise RuntimeError("unexpected gh %s" % (args,))
+
+    old, R._gh = R._gh, gh
+    try:
+        diff = R.pr_diff(117) if hasattr(R, "pr_diff") else ""
+    except RuntimeError as e:
+        return "pr_diff raised on a too-large pull request: %s" % e
+    finally:
+        R._gh = old
+    if R.DIFF_START.findall(diff) != ["021fe000"]:
+        return "a too-large pull request's delink starts were not read: %r" % diff
+    return None
+
+
 @check("a hyphenated residue class ranks by its class, and a failed compile never wins",
        "`RESIDUE \\w+` cannot match LOOP-SHAPE or NO-COMPILE: flagsweep ranked LOOP-SHAPE 308 as `?`, "
        "and permorder scored NO-COMPILE -1 as 1, ahead of UNDERGEN 4 (kit PR #130)")
