@@ -2412,6 +2412,36 @@ def _landpr_merge():
     return None
 
 
+@check("landpr leaves the integration tree on the published tip when it refuses",
+       "a prready refusal left Merge #106 checked out; integrate_fast built on it and published the "
+       "codegen pragma landpr had refused")
+def _landpr_refuse_resets():
+    import contextlib
+    import io
+    import subprocess
+    lp = load("landpr")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landpr_refuse_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        def git(*args):
+            return subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+
+        git("init", "-q", "-b", "main")
+        git("commit", "-q", "--allow-empty", "-m", "base")
+        tip = git("rev-parse", "HEAD")
+        git("commit", "-q", "--allow-empty", "-m", "Merge #5")
+        getattr(lp, "UNDO", []).append((root, tip))
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                lp.refuse("prready")
+        except SystemExit:
+            pass
+        if git("rev-parse", "HEAD") != tip:
+            return "refuse() left the merged commits checked out for the next integration to publish"
+    return None
+
+
 STAMP = f"{SP}/wlog/functional_stamp.txt"
 
 

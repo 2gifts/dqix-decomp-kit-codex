@@ -22,6 +22,7 @@ import regionsync
 
 KIT, URL, BRANCH = kitpaths.KIT, kitpaths.DECOMP_URL, kitpaths.DECOMP_BRANCH
 REGIONS = ("usa", "jpn", "eur")
+UNDO = []
 
 
 def run(cwd, *args, env=None):
@@ -35,6 +36,9 @@ def git(tree, *args):
 
 
 def refuse(message):
+    for tree, tip in UNDO:
+        git(tree, "merge", "--abort")
+        git(tree, "checkout", "-q", "-f", "--detach", tip)
     print(f"REFUSED: {message}")
     sys.exit(1)
 
@@ -109,6 +113,7 @@ def main():
     os.chdir(tree)
     tip = fetch(tree, BRANCH)
     git(tree, "checkout", "-q", "-f", "--detach", tip)
+    UNDO.append((tree, tip))
     heads = {n: fetch(tree, f"pull/{n}/head") for n in numbers}
     for n, head in heads.items():
         links = symlinks(tree, tip, head)
@@ -118,8 +123,6 @@ def main():
         code, out = git(tree, "merge", "--no-ff", "-m", f"Merge #{n}", head)
         if code and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
-            git(tree, "merge", "--abort")
-            git(tree, "checkout", "-q", "-f", "--detach", tip)
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
     strip_comments(tree, tip)
     code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp", env=dict(os.environ, DQIX_REPO=tree))
