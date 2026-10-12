@@ -43,6 +43,7 @@ while IFS=$'\t' read -r -u 3 MOD ADDR REL NOTE; do
   CAP=$(_knob "$SP/CLEAN_CAP" '0-9.' 4)
   OUT="$SP/wlog/clean_${MOD}_${ADDR}.json"
   echo "$(date '+%H:%M') claim $ADDR $MOD $(basename "$REL") volatile=$before [$MODEL] cap \$$CAP" >> "$LOG"
+  cd "$WORK" || exit 1
   WGATE_SESSION="clean_$(date +%s)" timeout -k 30 "${HANG_GUARD:-7200}" claude -p "DQIX cleanup worker, module $MOD.
 $F is a byte-exact source of $ADDR that already landed on decomp-matching. Make it read like the
 source the original developers wrote, and keep it byte-exact.
@@ -55,7 +56,8 @@ interrupt handler or another thread writes while this code waits on it, and say 
 Never introduce another construct the developers could not have written: no parameter the callers
 never pass, no self-assignment, no zero-negation padding, no dead address-taking local, no codegen
 #pragma. python $KIT/plausible.py $F must not report anything it did not report before.
-Codegen levers: grep -n '^##' $KIT/worker_src/core.md and read only the sections you need.
+Codegen levers: grep -n '^##' $KIT/worker_src/core.md, then read only the sections you need with
+grep -n -A60 '<heading>' $KIT/worker_src/core.md.
 ${DOC:+Module recipes: $DOC.}
 Target listing: python $KIT/wlist.py $MOD $ADDR
 Gate after every edit: python $KIT/wgate.py $MOD $ADDR $F
@@ -69,9 +71,10 @@ Reply with exactly one line:
     --model "$MODEL" --permission-mode dontAsk --safe-mode --autocompact auto \
     --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \
     --max-budget-usd "$CAP" --output-format json \
-    --allowedTools "Bash" "Write" "Read" "Edit" "Grep" "Glob" \
-    --add-dir "$SP" --add-dir "$KIT" \
+    --allowedTools "Bash(python:*)" "Bash(grep:*)" "Write" "Read" "Edit" "Grep" "Glob" \
+    --add-dir "$SP" \
     > "$OUT" 2>/dev/null < /dev/null
+  cd "$KIT" || exit 1
   cost=$(python -c "import json,sys;print('%.4f' % json.load(open(sys.argv[1]))['total_cost_usd'])" "$OUT" 2>/dev/null || echo "$CAP")
   said=$(python -c "import json,sys;print((json.load(open(sys.argv[1])).get('result') or '').strip().splitlines()[-1])" "$OUT" 2>/dev/null)
   after=$(vcount "$F")
