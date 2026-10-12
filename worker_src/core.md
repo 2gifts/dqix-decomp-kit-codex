@@ -855,7 +855,8 @@ is register NUMBERS around a byte value, retype it before touching anything else
   OVERGEN 16 (`ov005:021589f4`).
 - a spilled `str` of a parameter at the very front of the prologue means the parameter is `short`;
   a 0..3 range test on it as its own `static inline` taking `short` keeps the 0/1 result in r0
-  instead of a conversion temp (`021da9e0`).
+  instead of a conversion temp (`021da9e0`). Its reloads from that slot then carry memory edges
+  that hold the next store and a following `mov` above them; as `int` it is SCHED 11 (`021df924`).
 - a byte array read whose `ldrb` the ROM schedules before a neighbouring array address: the element
   is a struct of one `unsigned char count : 8;` bitfield, read as `data->rank[i].count` (`0218aa24`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
