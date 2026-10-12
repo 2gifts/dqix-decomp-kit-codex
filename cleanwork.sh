@@ -44,8 +44,8 @@ while :; do
   git -C "$REPO" show "origin/decomp-matching:$REL" > "$F"
   before=$(vcount "$F")
   pbefore=$(pcount "$F")
-  if [ "$before" -eq 0 ] 2>/dev/null; then
-    echo "$(date '+%H:%M') SKIP $ADDR no volatile left outside hardware" >> "$LOG"
+  if [ "$before" -eq 0 ] 2>/dev/null && [ "$pbefore" -eq 0 ] 2>/dev/null; then
+    echo "$(date '+%H:%M') SKIP $ADDR nothing invented left" >> "$LOG"
     continue
   fi
   SITES=$(python -c "import sys;t=open(sys.argv[1],encoding='utf-8',errors='ignore').read().split('\n');print('\n'.join('  line %s: %s' % (n, t[int(n)-1].strip()) for n in sys.argv[2].split(',') if n.strip() and int(n) <= len(t)))" "$F" "$PRIVATE")
@@ -53,20 +53,20 @@ while :; do
   MODEL=$(_knob "$SP/CLEAN_MODEL" 'a-z0-9.-' opus)
   CAP=$(_knob "$SP/CLEAN_CAP" '0-9.' 4)
   OUT="$SP/wlog/clean_${MOD}_${ADDR}.json"
-  echo "$(date '+%H:%M') claim $ADDR $MOD $(basename "$REL") volatile=$before [$MODEL] cap \$$CAP" >> "$LOG"
+  echo "$(date '+%H:%M') claim $ADDR $MOD $(basename "$REL") volatile=$before findings=$pbefore [$MODEL] cap \$$CAP" >> "$LOG"
   cd "$WORK" || exit 1
   WGATE_SESSION="clean_$(date +%s)" timeout -k 30 "${HANG_GUARD:-7200}" claude -p "DQIX cleanup worker, module $MOD.
 $F is a byte-exact source of $ADDR that already landed on decomp-matching. Make it read like the
 source the original developers wrote, and keep it byte-exact.
-Static analysis proved the volatile on these lines invented -- nothing else writes that data, so
-the developers never declared it volatile:
+These lines carry constructs the original developers did not write -- each exists only to steer the
+compiler (a volatile on data nothing else writes, a cast, a pun, an extra local, an identity):
 $SITES
-There, volatile stands in for a construct nobody found yet: a field the source really reads twice,
-an inline accessor, a different field type, a struct copy, a different declaration or statement
-order. Remove each of these volatile and find that construct.
-${HINT:+Analysis hint: $HINT}
-Every OTHER volatile in the file is real (hardware register, ARM7-shared memory, data an interrupt
-handler or another thread writes): leave those lines exactly as they are.
+Each stands in for real source nobody found yet: an inline accessor, the real struct field and its
+type, one shared prototype, a different declaration or statement order, a struct copy. Find it.
+${HINT:+Hint: $HINT}
+python $KIT/plausible.py $F names most such constructs: your result must report fewer than now and
+no new kind. Every volatile on a hardware register, ARM7-shared memory, or data an interrupt
+handler or another thread writes is real: leave those lines exactly as they are.
 Never introduce another construct the developers could not have written: no parameter the callers
 never pass, no self-assignment, no zero-negation padding, no dead address-taking local, no codegen
 #pragma. python $KIT/plausible.py $F must not report anything it did not report before.
@@ -78,11 +78,11 @@ Gate after every edit: python $KIT/wgate.py $MOD $ADDR $F
 Shell commands are allowlisted one at a time: run each command exactly as written above, alone,
 with these absolute paths -- no cd, no &&, no ;, no pipes, no cat. Read files with the Read tool.
 Edit only $F. When the gate prints STOP, stop.
-If a construct replaced a volatile, append ONE tab-separated line to $SP/wlog/levers.tsv:
-${ADDR}<TAB><size><TAB><bytes off without the volatile><TAB><the construct that replaced it>
+If real source replaced an invented construct, append ONE tab-separated line to $SP/wlog/levers.tsv:
+${ADDR}<TAB><size><TAB><bytes off without the invented construct><TAB><the source that replaced it>
 Reply with exactly one line:
   CLEAN $ADDR
-  KEEP $ADDR <which data, and why it is really volatile>
+  KEEP $ADDR <why that construct is what the developers wrote>
   BLOCKED $ADDR <CLASS> <metric>" \
     --model "$MODEL" --permission-mode dontAsk --safe-mode --autocompact auto \
     --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \

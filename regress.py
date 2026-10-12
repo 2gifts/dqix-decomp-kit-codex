@@ -2234,6 +2234,13 @@ def _cleancheck():
         return "cleancheck refused a rewrite that dropped only the invented volatile"
     if not C.check(before, bad, {2})[0]:
         return "cleancheck accepted a rewrite that dropped a real volatile"
+    pun = ["void f(S* p) {", "    if (*(int*)p == 0) return;", "    g(p->ptr);", "}"]
+    plain = ["void f(S* p) {", "    if (p->ptr == 0) return;", "    g(p->ptr);", "}"]
+    swap = ["void f(S* p) {", "    S* q = p; q++;", "    if ((q - 1)->ptr == 0) return;", "    g(p->ptr);", "}"]
+    if not C.accepted(pun, plain, {2})[0]:
+        return "cleancheck refused a rewrite that removed an integer-read null test"
+    if C.accepted(pun, swap, {2})[0]:
+        return "cleancheck accepted a rewrite that swapped one invented construct for another"
     return None
 
 
