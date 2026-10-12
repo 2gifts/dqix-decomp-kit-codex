@@ -868,6 +868,23 @@ in the wrong place, the lever is whether the value has a name at all:
 
 Ask "does the target keep this in a register or on the stack?" and add or remove the NAME to match.
 
+## NATURAL FORMS THAT MATCH WHERE A TRICK DID
+Each was a byte-exact replacement for an invented construct; write these first.
+- A flag local copied from a compare (`cc = r0 - 0; if (cc == 0) goto L;`) is a structured `if`/`else`
+  on the value itself (`02158038`, `02186dc8`, `021dcc8c`, `02184324`).
+- An 8-byte `{fn, locator}` pair copied whole and dispatched by testing `locator & 1` is a C++
+  pointer to member function: `typedef int (Obj::*Handler)();`, `table[8] = handler;`,
+  `(obj->*table[i])()` (`021dc488`, `021b228c`).
+- A null test the ROM re-reads is an inline predicate on the owner,
+  `static inline bool HasInner(const Outer* o) { return o->f0 != NULL; }` (`020bc158`, `020bc1ac`).
+- An offset added to reach an embedded sub-object is a member accessor, `Sub* GetSub() { return &sub; }`
+  (`021e62a8`, `0215707c`).
+- Shift-and-mask on one field is a real bitfield (`int field58 : 3;`, `02087e6c`; `021eb3e0`).
+- Adjacent globals indexed together are one struct (`struct InputLog { u8 countA, countB; s8 logB[8],
+  logA[8]; }`, `020a1df8`, `020a1ef0`).
+- Register and OAM bit access is the NitroSDK inline or union (`G2_GetOBJPosition`, `02225c90`;
+  `GXBg01Control`, `02074b64`).
+
 ## BREAKING CSE — re-read what the ROM re-reads
 **A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's
 result to a local before the call (`BaseCombatStats* stats = GetBaseStats(c);`, `02069158`,
