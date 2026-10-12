@@ -424,6 +424,9 @@ A compound float op (`hi *= 0.8f`) puts the constant in r1; `hi = hi * 0.8f` put
 lowered in argument order; `return u->id;` (or a plain local) folds back into the argument, but
 `inline int UnitId(U* u) { int id = u->id; return id; }` is its own statement ahead of the moves, so
 the load wins the tie: `InitObj(p->obj8, UnitId(comb))`, `SetIndexedName(msg, 2, UnitName(target))`.
+When the ROM loads the argument above an earlier test in the same block, declare it at the block's
+top: `{ Random* battle = ctx->battle; if (*state == 0) { if (!f(battle, *b)) ...` (`021e9f68`,
+SCHED 11 as `f(ctx->battle, *b)`).
 
 **A NARROWING `and` SCHEDULED AFTER A RUN OF TABLE LOADS = INITIALIZER-ARRAY COPIES IN THE SOURCE**
 (`021eb578`). Each initializer-array copy lowers with a throwaway stack-address instruction that
