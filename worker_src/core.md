@@ -889,7 +889,10 @@ flag set by the first test and read by a SECOND `if` makes mwcc re-load the poin
 equal path. Same address: a constant already live in a register changes how a NEIGHBOURING constant
 is materialised — with `int missing = 1;` in scope above the bind, `-1` came out as `sub r1, r3, #2`
 instead of `mvn r3, #0`. If a materialisation is one instruction off, look at what is live, not at
-the expression.
+the expression. A constant that does not fit one instruction is built by add/sub from the constant
+assigned most recently in source order, so assignment order picks each base: reorder the constant
+assignments to the ROM's derivation chain (`hdr - 0x1c4` needs `group` assigned first) before
+touching the expressions (`02177dd4`, UNDERGEN 4 -> MATCH).
 
 When the target RE-LOADS a value you are holding in a register:
 - A register restored from a saved field, `ldr r0, [base] ; ldr r3, =mask ; ldr ip, [self, #off] ;
