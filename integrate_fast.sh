@@ -174,8 +174,11 @@ if [ "$green" = "1" ]; then
     git clean -fdq src/ >> "$LOG" 2>&1
     exit 0
   fi
+  ninja objdiff.json >> "$LOG" 2>&1
   python "$KIT/countfix.py" >> "$LOG" 2>&1
-  if [ $? -eq 3 ] && ! { ninja check >/tmp/if_countfix.log 2>&1 && ninja sha1 2>&1 | grep -q "OK"; }; then
+  _cf=$?
+  [ "$_cf" -ne 0 ] && [ "$_cf" -ne 3 ] && echo "$(date '+%H:%M') WARN countfix failed (exit $_cf): landed function counts were not corrected" | tee -a "$LOG"
+  if [ "$_cf" -eq 3 ] && ! { ninja check >/tmp/if_countfix.log 2>&1 && ninja sha1 2>&1 | grep -q "OK"; }; then
     python "$KIT/countfix.py" --restore >> "$LOG" 2>&1
     ninja check >/dev/null 2>&1
   fi

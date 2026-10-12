@@ -2848,6 +2848,21 @@ def _integ_bootstrap():
     return None
 
 
+@check("both integrators build objdiff.json before countfix and report a countfix failure",
+       "on a cold integration tree countfix read a missing objdiff.json, raised, corrected nothing, "
+       "and integrate_fast still reported GREEN because only exit 3 was handled (kit issue #233)")
+def _countfix_prereq():
+    for script in ("integrate_fast.sh", "finish_wave.sh"):
+        src = open(f"{KIT}/{script}", encoding="utf-8").read()
+        i = src.find('countfix.py"')
+        pre = src.rfind("ninja objdiff.json", 0, i)
+        if i < 0 or pre < 0 or src.count("\n", pre, i) > 2:
+            return "%s does not build objdiff.json right before countfix" % script
+        if "WARN countfix failed" not in src:
+            return "%s does not report an unexpected countfix exit" % script
+    return None
+
+
 @check("a worker MATCH with an invented construct goes back to the worker before it is staged",
        "021f9874, 021edf54 and 02184d80 were staged and landed with a volatile alias, volatile "
        "struct members and an invented parameter, because nothing checked a MATCH for constructs "

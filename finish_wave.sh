@@ -170,8 +170,11 @@ fi
 ninja rom >/dev/null 2>&1
 if ! ninja sha1 2>&1 | grep -q "OK"; then echo "RED: sha1 mismatch — NOT pushing"; exit 5; fi
 if [ "$(git rev-parse --short HEAD)" != "$H0" ]; then
+  ninja objdiff.json >/dev/null 2>&1
   python "$KIT/countfix.py" --since="$H0"
-  if [ $? -eq 3 ]; then
+  _cf=$?
+  [ "$_cf" -ne 0 ] && [ "$_cf" -ne 3 ] && echo "WARN countfix failed (exit $_cf): landed function counts were not corrected"
+  if [ "$_cf" -eq 3 ]; then
     if ninja check >/tmp/fw_countfix.log 2>&1 && ninja sha1 2>&1 | grep -q "OK"; then
       git add config/ && git commit -q -m "Align config with landed functions"
     else
