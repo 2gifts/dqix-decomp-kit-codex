@@ -2445,6 +2445,9 @@ def _landclean_settle():
             lc.CLEAN = old
         if [r for r, _, _ in fresh] != ["x.cpp"] or [r for r, _, _ in stale] != ["y.cpp"]:
             return "split_stale() kept %s and dropped %s" % (fresh, stale)
+    src = open(f"{KIT}/landclean.py", encoding="utf-8").read()
+    if 'write_rows(MANIFEST, [], "w")' in src or "not in done" not in src:
+        return "landclean empties the whole manifest, dropping rows cleanwork appended while it ran"
     return None
 
 

@@ -124,7 +124,8 @@ def main():
             return 1
         write_rows(LANDED, good, "a")
     write_rows(REJECTED, stale + red, "a")
-    write_rows(MANIFEST, [], "w")
+    done = set(entries)
+    write_rows(MANIFEST, [e for e in rows() if e not in done], "w")
     print(f"LANDED {len(good)} of {len(entries)} at {git(tree, 'rev-parse', '--short', 'HEAD')[1].strip()}")
     return 0
 
