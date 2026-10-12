@@ -24,7 +24,7 @@ next_row() {
   return 1
 }
 land() {
-  [ -s "$MANIFEST" ] || return 0
+  [ -s "$MANIFEST" ] && [ ! -e "$SP/CLEAN_HOLD" ] || return 0
   LANDCLEAN_TRIES=180 bash "$KIT/landclean.sh" 2>&1 | sed "s/^/$(date '+%H:%M') landclean: /" >> "$LOG"
 }
 
