@@ -391,7 +391,10 @@ compiler (`X=86.5` = between v86 and v87) and tells you which rank closes it. co
 `renum 83=105.5` named a whole-function swap that a bare function-scope `void* root;` declared just
 above the pointer it must outrank closed (`021575dc`). Loop locals declared bare in reverse colour
 order above the first call result (`int i; int total; Node* node;` then `Events* ev = f();`)
-assign r6/r8/sb/sl in order (`021552a8`).
+assign r6/r8/sb/sl in order (`021552a8`). When renum shows an index product (`i*6`, an IR CSE
+variable because it spans blocks) numbered too early, and every member spelling (`a[i].f`) leaves
+it there, bind the element first and name the byte offset: `Val* v = &vals[i]; int off = i *
+sizeof(Obj);`, then address the parallel arrays through `off` (`021d2d64`). Last resort only.
 Declaration order only moves locals that KEEP their own vreg. Check first with
 `pad/renum/vdump.py`: if a local's number does not change when you move its declaration, the lever
 is dead for it. Two kinds ignore it: loop-body shorts/chars and CSE'd loads that become IR temps (a
