@@ -140,7 +140,9 @@ while :; do
   # keeps the procedure plus the recipes whose instruction shapes appear in THIS function's listing,
   # and indexes the rest up top with a fetch command. Costs no model tokens. Falls back to the static
   # doc if selection fails, because a truncated doc still beats no doc.
-  _sel=$(python "$KIT/recipe_select.py" "$MARG" "$ADDR" 2>/dev/null | tr -d '\r' | tr '\\' '/')
+  _lean=""
+  [ "$((RANDOM % 100))" -lt "$(_knob "$SP/PULL_LEAN" '0-9' 0)" ] && _lean="--lean"
+  _sel=$(python "$KIT/recipe_select.py" "$MARG" "$ADDR" $_lean 2>/dev/null | tr -d '\r' | tr '\\' '/')
   if [ -n "$_sel" ] && [ -f "$_sel" ]; then
     DOC="doc_cache/${_sel##*/}"
   else
@@ -207,7 +209,7 @@ while :; do
       fi
     fi
   fi
-  echo "$(date '+%H:%M') s$SLOT claim $ADDR ${FSIZE}B -> $DOC [$MODEL] cap \$$cap" >> "$LOG"
+  echo "$(date '+%H:%M') s$SLOT claim $ADDR ${FSIZE}B -> $DOC [$MODEL${_lean:+ lean}] cap \$$cap" >> "$LOG"
 
   OUT="$SP/wlog/pull_${MOD}_s${SLOT}_${ADDR}.json"
   SESS="s${SLOT}_$(date +%s)"
@@ -302,6 +304,31 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$STAGE" 2>/dev/null | head -1)
   if [ -n "$f" ] && python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
     matched=$((matched+1)); v=MATCH
+    _imp=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | sort -u | tr '\n' ' ')
+    _sid=$(python -c "import json;print(json.load(open(r'$OUT')).get('session_id',''))" 2>/dev/null)
+    if [ -n "$_imp" ] && [ -n "$_sid" ]; then
+      echo "$(date '+%H:%M') s$SLOT $ADDR MATCH carries invented constructs ($_imp) -- worker cleanup" >> "$LOG"
+      WGATE_SESSION="$SESS" timeout -k 30 "${HANG_GUARD:-7200}" claude -p "Your file $f MATCHES, but it uses constructs the original developers could not have written: $_imp. Remove every one of them -- no volatile outside hardware-register defines, no parameter the callers never pass, no self-assignment, no zero-negation padding, no dead address-taking local -- and find a natural form that still MATCHES. Gate with python $KIT/wgate.py $MARG $ADDR $f after every edit. If no natural form matches, put the matching file back exactly as it was." \
+        --resume "$_sid" --model "$MODEL" --permission-mode dontAsk --safe-mode \
+        --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \
+        --max-budget-usd "${CLEAN_CAP:-4}" --output-format json \
+        --allowedTools "Bash" "Write" "Read" "Edit" "Grep" "Glob" \
+        --add-dir "$SP" --add-dir "$KIT" \
+        > "$OUT.clean" 2>/dev/null < /dev/null
+      _cc=$(python -c "import json;print('%.4f' % json.load(open(r'$OUT.clean'))['total_cost_usd'])" 2>/dev/null || echo "${CLEAN_CAP:-4}")
+      spent=$(python -c "print(round($spent + $_cc, 4))")
+      _gsuf=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")
+      if ! python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
+        cp "$SP/gated/$_gsuf/$ADDR.cpp" "$f" 2>/dev/null
+      fi
+      _left=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | sort -u | tr '\n' ' ')
+      if [ -n "$_left" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$(date +%F)" "$MARG" "$ADDR" "$_left" >> "$SP/wlog/suspect.tsv"
+        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- staged, listed in wlog/suspect.tsv" >> "$LOG"
+      else
+        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: natural form MATCHES" >> "$LOG"
+      fi
+    fi
     # A MATCH THE INTEGRATOR CANNOT SEE IS NOT A MATCH. Workers write into $SRCDIR (inside the
     # repo), but pull_all picks the module to integrate by counting files in staging/<module>/ --
     # so a match left only in src/ never triggers integration, and the next wave for a DIFFERENT

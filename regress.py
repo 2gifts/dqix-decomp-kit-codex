@@ -2848,6 +2848,43 @@ def _integ_bootstrap():
     return None
 
 
+@check("a worker MATCH with an invented construct goes back to the worker before it is staged",
+       "021f9874, 021edf54 and 02184d80 were staged and landed with a volatile alias, volatile "
+       "struct members and an invented parameter, because nothing checked a MATCH for constructs "
+       "the developers could not have written until after it had landed")
+def _match_quality_gate():
+    src = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
+    i = src.find("matched=$((matched+1)); v=MATCH")
+    j = src.find('cp "$f" "$STAGE/', i)
+    if i < 0 or j < 0:
+        return "the MATCH branch or its staging copy moved"
+    block = src[i:j]
+    for need in ('plausible.py" "$f"', "--resume", "suspect.tsv"):
+        if need not in block:
+            return "the MATCH branch no longer has %r before staging" % need
+    return None
+
+
+@check("recipe_select --lean keeps only the procedure and indexes every recipe",
+       "the per-function doc runs to 55 KB and is re-sent on every worker turn; 2gifts' workers read "
+       "a 3-8 KB brief and look recipes up on demand, so the lean arm must stay that small")
+def _lean_doc():
+    import subprocess
+    out = subprocess.run([sys.executable, f"{KIT}/recipe_select.py", "main", "02000c9c", "--lean"],
+                         capture_output=True, text=True).stdout.strip().replace("\\", "/")
+    if not out or not os.path.exists(out):
+        return "recipe_select --lean produced no doc"
+    doc = open(out, encoding="utf-8").read()
+    subprocess.run([sys.executable, f"{KIT}/recipe_select.py", "main", "02000c9c"], capture_output=True)
+    if len(doc) > 20000:
+        return "the lean doc is %d bytes" % len(doc)
+    if "RECIPES NOT INCLUDED" not in doc:
+        return "the lean doc has no recipe index"
+    if "PULL_LEAN" not in open(f"{KIT}/pull_worker.sh", encoding="utf-8").read():
+        return "pull_worker has no PULL_LEAN arm"
+    return None
+
+
 @check("an evolve run reserves its address against worker claims",
        "evolve ran on ov009 02185634 while a worker claimed the same address, paying twice for one "
        "function: nothing put an evolve target in wlog/evolve_queue.txt, the list claim.py skips")
