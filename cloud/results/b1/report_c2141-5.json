@@ -1,0 +1,3 @@
+{"functions":[{"module":"000","addr":"021620f0","verdict":"MATCH","residue":"","size":1180,
+"file":"/home/user/dqix-kit-state/wip/ov000/021620f0.cpp","description":"spawn battle formation combatants from tables",
+"lever":"pass the Random arg through a static inline getter with a local (GetRandom) so mwcc loads scene->data before reloading spilled entry; earlier: getter-with-local for stats->slot shift, int key local for ldrsh+asr, kind/id/c declared first, for (g = 0, id = 0; ...; j++, id++)","lever_bytes":6,"notes":"Structs copied from func_ov000_02161380 (Formation/Group/Pair/Combatant layout). Data tables data_ov000_02182ff8 (short[][3], -1 terminated kinds) and data_ov000_02182fd4 (signed char[][3] counts). 35 gate runs."}]}

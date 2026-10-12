@@ -1,0 +1,4 @@
+{"functions":[{"module":"000","addr":"02166e5c","verdict":"MATCH","residue":"","size":1248,
+"file":"/home/user/dqix-kit-state/wip/ov000/02166e5c.cpp","description":"load and register battle guest combatant",
+"lever":"declare data_0211e33c with __attribute__((aligned(4))) (dropping the FileIO.h include) so mwcc skips IR optimisation, plus an int codeLength = 2 local before the 4-byte RegionCode struct copy so the constant is staged in r1 ahead of the copy loop; earlier, a bare forward declaration of the blocks pointer fixed an r6/r7 swap","lever_bytes":28,
+"notes":"The function-wide IRO-off signature (add r6,#0x150 recomputed at each use, constant not propagated) matched what opt_propagation-off showed in a diagnostic probe. The same lever is already used in func_ov000_021688dc. 27 gate runs."}]}

@@ -1,0 +1,4 @@
+{"functions":[{"module":"main","addr":"0201afd0","verdict":"MATCH","residue":"","size":1464,
+"file":"/home/user/dqix-kit-state/wip/main/0201afd0.cpp","description":"grotto floor chest placement and loot generation",
+"lever":"declare the first loop counter `int i;` between grotto and map locals (colorsweep hoist) to swap r6/r7","lever_bytes":12,
+"notes":"Stack byte stores at sp+0x18..0x1b come from inline helpers returning small structs by value (TilePoint/AdjacencyBits); floor loaded before GetActiveGrottoSeed via inline GetFloorSeed(grotto, floor) storing seed in a local; z-square-first schedule via neighbour-style FxSquare inline; separate counters for the rank and loot loops; 11-byte narc name copied from data_020e6df0 as a struct."}]}

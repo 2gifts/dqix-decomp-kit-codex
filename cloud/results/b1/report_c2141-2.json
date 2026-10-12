@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"020200c0","verdict":"MATCH","residue":"","size":1120,
+"file":"/home/user/dqix-kit-state/wip/main/020200c0.cpp","description":"party member status panel sub-OBJ VRAM render",
+"lever":"declare color, messageKey, vocation, col, row, revocations (in that order) before the record load so the loop counters and vocation take r7/r8 and revocations takes sb; vocation fixups placed before color = 0xf; party-slot test materialized as a flag","lever_bytes":17,"notes":"20 gate runs. colorsweep found nothing; the register residue closed by declaration order alone."}]}

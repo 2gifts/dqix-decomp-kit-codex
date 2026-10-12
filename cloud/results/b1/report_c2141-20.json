@@ -1,0 +1,3 @@
+{"functions":[{"module":"004","addr":"02161c18","verdict":"MATCH","residue":"","size":1264,
+"file":"/home/user/dqix-kit-state/wip/ov004/02161c18.cpp","description":"Builds two-column menu page and button states",
+"lever":"reuse the first branch's loop counter j for the else-branch 0x65 node loop (r5 vs r6 REGPERM)","lever_bytes":5,"notes":"Sibling of func_ov004_02162108 (same structs). Earlier fixes: pass side+0xd straight to the unsigned short param instead of a short local (sign-extension and hoisted lsr); st as if (idx!=tbl && idx<=0xe) st=3; else st=0xf; 6 gate runs."}]}

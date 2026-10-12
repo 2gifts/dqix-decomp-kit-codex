@@ -1,0 +1,3 @@
+{"functions":[{"module":"017","addr":"021d1118","verdict":"MATCH","residue":"","size":1176,
+"file":"/home/user/dqix-kit-state/wip/ov017/021d1118.cpp","description":"Send link identifier, battle record and link block packets",
+"lever":"C89-style bare local declarations at function top: block pointer (gs+0x569c) declared last, flag declared before value with zero-inits in the same order (REGPERM r5/r6/r7 rotation)","lever_bytes":47,"notes":"Packet layout matches func_ov017_021d15b0 receiver; record packing mirrors func_ov004_02168b44. Double identifier copy comes from an inline by-value getter. Shared src pointer across both send loops gives the mov r6,r7 copy."}]}

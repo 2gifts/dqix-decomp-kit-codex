@@ -1,0 +1,4 @@
+{"functions":[{"module":"main","addr":"0204956c","verdict":"MATCH","residue":"","size":1288,
+"file":"/home/user/dqix-kit-state/wip/main/0204956c.cpp","description":"combatant orbit movement step around target",
+"lever":"wait-table index written as `base = unk4; base = base + GetByteWithFallback(obj) + orbit->cycle;` (same single-expression form as the first phase sum) instead of split +=/named cycle; fixed r4/r5 swap","lever_bytes":4,
+"notes":"Duplicate pool word for bss data_02107850 needed the core.md _dup alias: enabled byte read via data_02107850, start/end/radius via a pointer to data_02107850_dup (integration adds the alias symbols line). Vector copies must be initializations, not assignments (Vector3i has a declared operator=, used only for the final position store). 13 gate runs + 1 colorsweep."}]}

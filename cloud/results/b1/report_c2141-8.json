@@ -1,0 +1,4 @@
+{"functions":[{"module":"017","addr":"021975e4","verdict":"MATCH","residue":"","size":1152,
+"file":"/home/user/dqix-kit-state/wip/ov017/021975e4.cpp","description":"player path-node transition block setup",
+"lever":"statement order in both block-fill branches: angles, reversed flag, control-point offsets, end.y, then startAngle -= 0x3243 and wrap last; hold counter written as if (hold <= 1) {...} else if (hold > 1) {...} to get the predicated strhgt/movgt tail","lever_bytes":185,
+"notes":"One raw offset read (Vector3i at GameResources+0x4438, a field the shared header leaves as padding). The redundant 'else if (holdFrames > 1)' is needed for the predicated block layout. The block-fill statement order was found by a scripted permutation search (about 70 wdiff compiles in /tmp/c2141-8) and then gated with wgate."}]}
