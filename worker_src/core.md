@@ -886,7 +886,9 @@ is register NUMBERS around a byte value, retype it before touching anything else
   so an inline reuses it (`ldrle` reload), its store sinks below the neighbouring `mov`, and a reset
   that writes `0.0f` emits the `mov r0,r0` copy. Retype flag locals when those three symptoms show.
   A flag passed only as the last argument of a call also wants it: `unsigned char n = 0;` keeps its
-  `[sp,#8]` reload below the global store and closes UNDERGEN 4 (`02161514`).
+  `[sp,#8]` reload below the global store and closes UNDERGEN 4 (`02161514`). `bool` works the same
+  for a spilled per-iteration flag: its word-sized spill is a worst-case alias, so each arm's field
+  loads schedule after it (`021fd954`, SCHED 64 -> 0).
   Same for a predicated loop flag (`021dcf14`, `02159900`): as `int` its `streq` lands before the adjacent
   conditional store; `unsigned char` puts it after. A global whose store pins later loads there
   was the inline-accessor static (see "A CONSTANT HOISTED ABOVE A GLOBAL'S POOL LOAD").
