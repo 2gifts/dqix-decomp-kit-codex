@@ -358,7 +358,9 @@ local holding a literal is propagated into every block, so the call gets `mov rN
 the pass-1 tie to an address `add`. An enum-typed local defined in an earlier block is not propagated
 across blocks: its uses become register copies that win the tie, as the ROM's `mov r1, #0xc00`
 ahead of `add r0, r4, #0x800` shows. `enum PairTableSize { kPairTableSize = 0xc00 };` then
-`PairTableSize size = kPairTableSize;` passed to the call (`02185634`).
+`PairTableSize size = kPairTableSize;` passed to the call (`02185634`). A field read into an
+enum-typed local before a range test (`Kind cur = (Kind)actor->kind; if ((unsigned)(cur - KIND_3)
+<= 2)`) swaps an r0/r1 pair that an `int` local leaves (`02162dc4`).
 
 **CHECK THE FUNCTION'S OWN RETURN TYPE, NOT JUST ITS CALLEES** (`ov017:021ce5b4`).
 A scaffold's `void` is a guess: if the target leaves a derived pointer in r0 on
