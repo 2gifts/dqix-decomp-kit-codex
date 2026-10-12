@@ -1,0 +1,26 @@
+003	021737e4	784	RESIDUE	RESIDUE REGPERM 6 r7->ip r3->r5 r5->r3
+main	0206e748	820	RESIDUE	RESIDUE SCHED 44 same instructions, different order over 23 site(s)
+main	0208a03c	820	RESIDUE	RESIDUE SCHED 18 same instructions, different order over 5 site(s)
+017	021b4a88	832	MATCH	
+015	0218dbec	800	RESIDUE	RESIDUE UNDERGEN 4 0x31c vs slot 0x320
+main	02082064	896	RESIDUE	RESIDUE SHAPE 87 0x30 str ip, [r2, #0x10] | strh r1, [sp, #4]; 0x34 strh r1, [sp, #4] | str ip, [r2, #0x10]; 0x1ac ldr r1, [pc, #0x1bc] | lsl r0, r0, #0x10
+main	020930d0	856	MATCH	
+main	020b0a1c	868	RESIDUE	RESIDUE UNDERGEN 52 0x330 vs slot 0x364
+000	021677fc	856	RESIDUE	RESIDUE OPERAND 12 0x10 str r0, [sp] | str r0, [sp, #4]; 0x34 str r0, [sp, #8] | str r0, [sp]; 0x50 str r0, [sp, #4] | str r0, [sp, #8]
+000	021723a8	888	RESIDUE	QUALITY: volatile outside an MMIO register define: volatile short v0, v1;
+017	02193dc4	892	MATCH	
+017	021cb5f8	892	MATCH	
+004	02157a28	912	MATCH	
+017	021986fc	932	MATCH	
+main	02025f28	996	RESIDUE	RESIDUE OVERGEN 8 0x3ec vs slot 0x3e4
+main	02038138	968	RESIDUE	RESIDUE SHAPE 83 0x18c mov r2, #0 | ldr r0, [sp]; 0x190 ldr ip, [sp, #4] | lsl r3, r1, #0xc; 0x194 ldr r1, [r0, #0x30] | lsl r0, r0, #0xc
+main	0203a0b4	952	RESIDUE	RESIDUE OVERGEN 4 0x3bc vs slot 0x3b8
+main	0204f41c	972	RESIDUE	RESIDUE SHAPE 16 0x34 cmp r0, #0xc | str r0, [sp, #0x14]; 0x4c ldrb r0, [sp, #0x58] | ldr r0, [sp, #0x14]; 0x50 moveq r5, #1 | cmp r0, #0xc
+main	02069234	960	MATCH	
+main	02069fec	980	RESIDUE	RESIDUE OVERGEN 4 0x3d8 vs slot 0x3d4
+main	020def98	988	RESIDUE	RESIDUE OVERGEN 4 0x3e0 vs slot 0x3dc
+003	0215b964	976	RESIDUE	RESIDUE SHAPE 27 0x1b0 cmp fp, r0 | ldr r2, [r7, #0x134]; 0x1b4 bne #0x1c8 | cmp fp, r0; 0x1b8 ldr r1, [r7, #0x134] | bne #0x1cc
+003	0217a764	976	DROPPED	already landed on decomp-matching
+004	0215e5fc	992	RESIDUE	RESIDUE REGPERM 41 sb->r6 r8->r7 r7->r8 r6->sb r6->r8
+004	02166bd8	952	MATCH	
+017	02197a64	968	RESIDUE	RESIDUE SCHED 47 same instructions, different order over 39 site(s)

@@ -1,0 +1,3 @@
+{"functions":[{"module":"017","addr":"02193dc4","verdict":"MATCH","residue":"","size":892,
+"file":"/home/user/dqix-kit-state/wip/ov017/02193dc4.cpp","description":"Terrain probe collision and material lookup",
+"lever":"declare probe before pos so the stack slots swap (modelled on func_ov017_02192b48 body)","lever_bytes":0,"notes":"2 gate runs; loop body mirrors matched sibling func_ov017_02192b48 with shared TerrainGrid layout"}]}

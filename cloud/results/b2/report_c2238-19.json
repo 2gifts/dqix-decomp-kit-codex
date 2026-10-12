@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"02069234","verdict":"MATCH","residue":"","size":960,
+"file":"/home/user/dqix-kit-state/wip/main/02069234.cpp","description":"Markup tag expander for battle text",
+"lever":"single shared handled flag, local copy of the option table struct from the data symbol, top-tested option loop, goto copy_char placed after the skip-bracket block","lever_bytes":0,"notes":"callees FindUnescapedAngleBracket/IsPrefixMatch020d857c/StringLength are C++ mangled, not extern C"}]}

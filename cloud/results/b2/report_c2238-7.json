@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"020930d0","verdict":"MATCH","residue":"","size":856,
+"file":"/home/user/dqix-kit-state/wip/main/020930d0.cpp","description":"battle phase state machine update",
+"lever":"hoist locals to bare declarations in target register order (list declared after party), reuse one unsigned int counter for table count and found count with (n+1)&0xff, declare next before c0/c5, callee Count returns unsigned and Find result passed as int","lever_bytes":0,"notes":"callees must mangle as (int,int): CountMatchingTableEntries02092cd0ii, FindMatchingTableIndex02092d18ii"}]}

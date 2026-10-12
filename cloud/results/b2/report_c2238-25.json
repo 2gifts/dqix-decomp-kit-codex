@@ -1,0 +1,3 @@
+{"functions":[{"module":"004","addr":"02166bd8","verdict":"MATCH","residue":"","size":952,
+"file":"/home/user/dqix-kit-state/wip/ov004/02166bd8.cpp","description":"refresh eight-slot paged entry list UI",
+"lever":"loop id counters as separate ints declared before the lists pointer, short page/field5e, update order idA,idB,idC,idD,i, case order 4,3,5","lever_bytes":0,"notes":"SetCellIfInBounds declared extern C with unsigned short first param; TestBitInByteArray via mangled extern C name."}]}

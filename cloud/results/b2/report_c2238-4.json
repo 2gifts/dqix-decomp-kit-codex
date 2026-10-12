@@ -1,0 +1,1 @@
+{"functions":[{"module":"017","addr":"021b4a88","verdict":"MATCH","residue":"","size":832,"file":"/home/user/dqix-kit-state/wip/ov017/021b4a88.cpp","description":"Grotto floor load and zone script setup","lever":"re-derive the grotto pointer from the zone base for the generator and floor-map calls, and declare size before data","lever_bytes":4,"notes":"gated MATCH 3 gate runs"}]}

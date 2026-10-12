@@ -1,0 +1,3 @@
+{"functions":[{"module":"017","addr":"021cb5f8","verdict":"MATCH","residue":"","size":892,
+"file":"/home/user/dqix-kit-state/wip/ov017/021cb5f8.cpp","description":"Send packed tactics stat messages per entry",
+"lever":"copied the func_ov017_021caea8 structure with a message struct holding a fields pointer, low 10x3-bit and high 4x3+1x4-bit bitfields, and a mode byte","lever_bytes":0,"notes":"3 gate runs; no raw offset reads"}]}

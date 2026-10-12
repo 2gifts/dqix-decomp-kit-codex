@@ -1,0 +1,4 @@
+{"functions":[{"module":"000","addr":"021723a8","verdict":"MATCH","residue":"","size":888,
+"file":"/home/user/dqix-kit-state/wip/ov000/021723a8.cpp","description":"Combat menu state constructor and initializer",
+"lever":"volatile short locals latching the sub BG0/BG1 control reads (strh sp / ldrsh sp pairs), field184 zeroed before them, flags = 0 then flags |= 2, slot pointer declared outside the final loop","lever_bytes":0,
+"notes":"Byte-exact (wgate MATCH), 11 gate/diff runs. QUALITY BAR DEVIATION: the two dead ldrsh/strh stack pairs and sub sp,#8 are only produced by `volatile short v0, v1;` locals read as `v0;` statements after the BG0CNTSUB/BG1CNTSUB latch (same idiom as merged Overlay_1 func_ov001_0216297c). Without them the function is 0x360 vs 0x378 bytes. No natural non-volatile form found (plain locals, inline setters, direct macro copy all emit no stack traffic). Reviewer may reject on the volatile-local rule."}]}

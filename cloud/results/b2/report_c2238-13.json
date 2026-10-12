@@ -1,0 +1,3 @@
+{"functions":[{"module":"004","addr":"02157a28","verdict":"MATCH","residue":"","size":912,
+"file":"/home/user/dqix-kit-state/wip/ov004/02157a28.cpp","description":"equip item swap and bag update handler",
+"lever":"signed int category local and short return type on func_ov004_02157128 fixed register allocation","lever_bytes":22,"notes":"colorsweep found short id; category as int closed the rest"}]}
