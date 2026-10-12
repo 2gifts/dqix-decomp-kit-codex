@@ -272,7 +272,8 @@ without the pragma is the right basin, a better one with it is not.
 ### PREFER THE POINTER ROUND-TRIP TO `opt_propagation off`
 When the target materialises `&global` early and keeps that pointer live, but your build folds the
 address into the use, a pragma is not the only answer — and it is not what the developers wrote.
-Give the pointer a pending increment and take it back at the use:
+First route every access in that section through a plain local (`page = &data_ov004_02170dd0;
+page->cursor`, `02162108`, 1024 -> 25). If the address still folds, give the pointer a pending increment and take it back at the use:
 
 ```c
 Struct* instance = &data_020fdc20;
@@ -467,7 +468,7 @@ Write a loop base as a plain expression inside the address, not a variable or he
 (`(Elem*)(lists + 0x8000) + j`, `021e0638`).
 A counter that ignores declaration order was renumbered below every local by common-subexpression
 elimination re-reading a dominated `ids.v[i]`: type the counters and the count `long` (SDK `s32`)
-so the conversion is not merged (`0215d63c`, 185 -> 0). A leftover `cmp a; cmpne b` is operand
+so the conversion is not merged (`0215d63c`, 185 -> 0; `0215440c`). A leftover `cmp a; cmpne b` is operand
 order, not colouring: sweep the condition spelling.
 
 ### TWO SCRATCH VALUES SWAPPED WITH NO OPERATOR BETWEEN THEM — the value created LAST gets the LOWER register
@@ -755,7 +756,7 @@ Declared scalars are numbered in reverse declaration order, and the busiest ones
 registers highest number first: declared earlier = lower register. `x++` inside an index
 (`ids[count++] = c;`) splits `x` into a new, late-numbered variable that is coloured after every
 declared one; write `ids[count] = c; count++;`. Two loops that share one counter share its register;
-if the ROM gives them different registers, give each loop its own counter (`02169b4c`, `021dce34`). A flag
+if the ROM gives them different registers, give each loop its own counter (`02169b4c`, `021dce34`, `02162108`). A flag
 accumulated alongside a call (`mask |= N;`) goes BEFORE the `Store(g, count++, ...)` call when the
 ROM sets it first; same for a local assigned in an arm before its call, and for two increments
 ahead of a call taking `&idx`: `count++; idx++;` puts the plain counter first (`02192700`). Hoist the block's
