@@ -675,6 +675,7 @@ def cmd_prep(a):
     with open(runner, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(f'#!/bin/bash\ncd "{KIT.replace(chr(92), "/")}" && PYTHONUTF8=1 DQIX_NO_FRESHNESS=1 '
                  f'exec "{PY.replace(chr(92), "/")}" "$@"\n')
+    os.chmod(runner, 0o755)
     rk = runner.replace("\\", "/")
     brief = open(os.path.join(HERE, "WORKER_LEAN.md"), encoding="utf-8").read()
     brief = brief.replace("Tools: Bash runs only `python ...` from the kit directory.",

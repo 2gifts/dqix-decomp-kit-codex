@@ -35,6 +35,16 @@ if [ ! -f "$ROM" ] || [ "$(sha1sum "$ROM" | cut -d' ' -f1)" != "$ROM_SHA1" ]; th
     url="https://drive.usercontent.google.com/download?id=$id&export=download&confirm=t"
   fi
   curl -fsSL -o "$ROM" "$url"
+  if [ "$(head -c 2 "$ROM")" = "PK" ]; then
+    "$PY" - "$ROM" <<'PYZIP'
+import sys, zipfile
+rom = sys.argv[1]
+with zipfile.ZipFile(rom) as z:
+    name = next(n for n in z.namelist() if n.lower().endswith(".nds"))
+    data = z.read(name)
+open(rom, "wb").write(data)
+PYZIP
+  fi
   got=$(sha1sum "$ROM" | cut -d' ' -f1)
   if [ "$got" != "$ROM_SHA1" ]; then
     echo "ROM sha1 is $got, expected $ROM_SHA1 (wrong file, or the link returned a web page)" >&2

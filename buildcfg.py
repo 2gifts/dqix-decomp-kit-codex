@@ -63,8 +63,11 @@ def native(tool):
         return tool
     import hashlib
     import shutil
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(tool))))
-    wibo = os.path.join(root, "wibo") if os.path.exists(os.path.join(root, "wibo")) else shutil.which("wibo")
+    wibo, d = None, os.path.dirname(tool)
+    while not wibo and os.path.dirname(d) != d:
+        wibo = os.path.join(d, "wibo") if os.path.isfile(os.path.join(d, "wibo")) else None
+        d = os.path.dirname(d)
+    wibo = wibo or shutil.which("wibo")
     if not wibo:
         sys.exit(f"wibo not found next to {tool} or on PATH; run ninja in the decomp checkout first")
     wrap = os.path.join(_kp.SP, "bin", hashlib.sha1(tool.encode()).hexdigest()[:12] + "-" + os.path.basename(tool))
