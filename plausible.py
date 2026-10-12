@@ -784,12 +784,16 @@ ALIAS = re.compile(r"(?m)^\s*(?:(?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]
 
 def _mixed_access(src, out):
     text = src.text
-    for m in ACCESSOR.finditer(text):
+    accessors = list(ACCESSOR.finditer(text))
+    body = text
+    for m in reversed(accessors):
+        body = body[:m.start()] + " " * (m.end() - m.start()) + body[m.end():]
+    for m in accessors:
         name, field = m.group(1), m.group(3)
-        for call in re.finditer(r"\b%s\s*\(\s*(&?)\s*([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*)\s*\)" % re.escape(name), text):
+        for call in re.finditer(r"\b%s\s*\(\s*(&?)\s*([A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*)*)\s*\)" % re.escape(name), body):
             amp, arg = call.group(1), call.group(2)
             direct = r"\b%s\s*%s\s*%s\b" % (re.escape(arg), r"\." if amp else "->", re.escape(field))
-            if re.search(direct, text):
+            if re.search(direct, body):
                 line = text.count("\n", 0, call.start()) + 1
                 _hit(out, line, "MIXED-ACCESS-RELOAD", "%s(%s%s) beside %s" % (name, amp, arg, field))
                 break
