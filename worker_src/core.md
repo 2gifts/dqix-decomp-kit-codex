@@ -218,7 +218,6 @@ move on the large band; treat "find the sibling" as step one, not a fallback.
 The ROM was built with propagation on; the developers kept values materialised with small `static
 inline` accessors, whose return value mwcc does not fold into the arithmetic that follows it.
 
-* `SubB(SubA(b)) + 0xa4` (each returning `p + k`) emits three adds; `b + 0x104 + 0x7400 + 0xa4` folds to two.
 * An `int`-returning accessor over a `u16` load keeps `/ 2` signed (`add r,r,r,lsr #31; asr`); the raw load gives `lsr`.
 * A `u8` field read through an accessor is loaded before the call's argument setup, which restores the ROM's staging order.
 * `&((struct Blk *)p)[1]` leaves a stride temp mwcc cannot fold; it is materialised once and coloured first.
@@ -261,35 +260,18 @@ without the pragma is the right basin, a better one with it is not.
 - **`opt_propagation off` closes it:** propagation sank a constant past a store the ROM puts it
   before, staged nothing where the ROM holds a constant in a callee-saved register across a call,
   folded a variable index into the base add (ROM: two immediate adds and a register-offset load), or
-  folded an accessor's result into the next constant. Use a small inline accessor (above), the
-  pointer round-trip (below, `r27`), or a re-read (`reread`).
+  folded an accessor's result into the next constant. Use a small inline accessor (above), a plain
+  local (below), or a re-read (`reread`).
 - **`opt_common_subs off` closes it:** CSE cached a value the ROM re-loads. Re-read it at the second
   use (`reread`) or read it through an accessor.
 - **`opt_dead_assignments off` closes it:** the ROM kept a store mwcc deletes, often the one that
-  puts an extra callee-saved register in the `push`. Make that store non-eliminable
-  (`r44_volatile_split_store`) or give the value a later reader.
+  puts an extra callee-saved register in the `push`. Find the later reader the original gave that
+  value.
 
-### PREFER THE POINTER ROUND-TRIP TO `opt_propagation off`
+### ROUTE A FOLDED `&global` THROUGH A PLAIN LOCAL, NOT `opt_propagation off`
 When the target materialises `&global` early and keeps that pointer live, but your build folds the
-address into the use, a pragma is not the only answer — and it is not what the developers wrote.
-First route every access in that section through a plain local (`page = &data_ov004_02170dd0;
-page->cursor`, `02162108`, 1024 -> 25). If the address still folds, give the pointer a pending increment and take it back at the use:
-
-```c
-Struct* instance = &data_020fdc20;
-instance++;
-(instance - 1)->warp->CreateOpcode6aEntry(entry);
-```
-
-Propagation cannot fold `&g` through the increment; a later pass cancels `++` against `- 1`, so the
-arithmetic emitted is unchanged and only the address formation moves. Two ZoneFeatures functions
-that previously matched only under a file-wide `off` match byte-exact at the `-O2` default this way.
-`colorsweep` r27 generates both this and the `instance--` / `(instance + 1)` mirror, so run the sweep
-before reaching for the pragma. When the base's two adds must stay separate, the lever is the
-pointer formed one element past the object, `l = (T *)(base + off) + 1;`. Which read then keeps the
-add differs per function, so try both: `l--; l->f` (`0215d864`, where `(l - 1)->f` folds `#0xc00`)
-and `(l - 1)->f` (`02164d14`). The same trick on an integer (`v++` … `v - 1`) does NOT survive —
-that folds at propagation time; it is pointer arithmetic that outlives the pass.
+address into the use, the pragma is not what the developers wrote. Route every access in that
+section through a plain local (`page = &data_ov004_02170dd0; page->cursor`, `02162108`, 1024 -> 25).
 
 Caching a field in a local is the same lever pointed the other way: re-reading `p->b` at its second
 use site, instead of holding it in a named local, is what settles a callee-saved swap between the
@@ -298,54 +280,16 @@ sweep reaches this without a hand edit.
 
 ## A DEAD ARGUMENT SETUP MEANS THE CALLEE TAKES MORE PARAMETERS THAN IT USES
 Target sets up an argument register the callee never reads (`mvn r1, #0` before a one-parameter
-call)? The source passed it anyway. Declare the callee `extern "C"` under its exact mangled symbol
-with the extra parameter — `extern "C"` fixes the symbol as written, so the signature is free:
+call)? The source passed it anyway: the callee's real prototype takes that parameter. Give the
+callee one prototype that its definition and every caller share; a per-file redeclaration with a
+different parameter list, or a call through a cast function pointer, is not what the developers wrote.
 
-    extern "C" void _Z29ProcessRefAndDispatch0204ffc0P11Obj0204ffc0(struct Obj0204ffc0* a, int b);
-    _Z29ProcessRefAndDispatch0204ffc0P11Obj0204ffc0((struct Obj0204ffc0*)entry, -1);
-
-Adding a parameter to a normally-declared C++ callee re-mangles it and gates UNDEF-SYM. Copy the
-name from `symbols.txt` by callee ADDRESS — the number in `_ZNN` is the identifier's LENGTH, so a
-retyped name gates UNDEF-SYM and looks like the approach failed.
-
-The VALUE matters as much as the arity. Passing `0` where a nearby block store also writes zero lets
-the two share one constant: the store's zero CSEs into the argument register and pushes the object
-pointer off r1, which is the whole residue (`021d9340`, 2332B, 8 bytes). Read what the surrounding
-code already materialises before choosing the extra argument.
-
-When `symbols.txt` already binds the void mangling, cast at the call instead of redeclaring it.
-A new declaration would change the committed symbol:
-
-    ((int (*)(char*))_Z33CheckAndClearEntryStatus_0215b7d0v)(base);
-
-`021631e8` keeps `base` in r0 that way. `02160068` passes the extra `0` through the same kind of
-cast, on a two-parameter symbol.
-
-**The reverse: a STALE argument register means the call passes FEWER arguments** (`02178910`). If r1
-still holds an unrelated pointer at the call and the value you expected there lives only in r2 (for
-an adjacent `strb`), the source passed ONE argument to a callee whose real signature takes two.
-Declare the callee `extern "C"` under its mangled name with the one parameter, as above.
-
-**A TWO-REGISTER REGPERM CAN BE A MISSING CALL ARGUMENT — check the arity before permuting.** For a
-callback held in a struct, type it varargs and pass the extra value on the ONE path that has it:
-
-    void (*Report)(int, const char*, ...);      // was void(*)(int, const char*)
-    ctx->Report(0x8000000, str520, mode);       // busy path only
-
-The vararg pins `mode` to r2 instead of letting mwcc reuse the dying state pointer's r1, and the
-occupied r2 pushes that block's function-pointer temp to r3. Both "wrong" registers were one absent
-argument (`0223a374`, 264B, REGPERM 5 -> MATCH). No declaration order reaches this.
+**A TWO-REGISTER REGPERM CAN BE A MISSING CALL ARGUMENT — check the arity before permuting.**
 A pointer the ROM loads into r1 just before a one-argument call is that call's SECOND argument:
 `func_02046a8c(list, node)` with the loaded node passed, as another committed caller already does.
 Grep committed callers of the callee for its real arity first (`021688dc`, the `+0x370c` load).
 In the same function, a count stored into an unrelated earlier local (`globalBase`) swapped a
 callee-saved pair; its own `int count` closed it, the reverse of reusing a local.
-
-**A CALL RESULT FED STRAIGHT INTO THE NEXT CALL shows no setup at all** (`bl A ; bl B`), yet it
-changes the schedule LATER: written as two statements, `ldr r1, [pc]` / `mov r0, sb` at the next
-three-argument call came out swapped. `B(A())` with `B` re-declared `extern "C"` taking one argument
-closed it (`ov017:021abba8`, 8 -> 0). When a `bl` follows a `bl` with nothing between, try passing
-the first result.
 
 **AN ARRAY ELEMENT INITIALISED FIELD BY FIELD** addresses each store as `add r1, sp, #(base+field) ;
 str rV, [r1, rOff]` with `rOff = k * size`, and materialises `&arr[k]` only afterwards for bitfields
@@ -362,16 +306,6 @@ ahead of `add r0, r4, #0x800` shows. `enum PairTableSize { kPairTableSize = 0xc0
 `PairTableSize size = kPairTableSize;` passed to the call (`02185634`). A field read into an
 enum-typed local before a range test (`Kind cur = (Kind)actor->kind; if ((unsigned)(cur - KIND_3)
 <= 2)`) swaps an r0/r1 pair that an `int` local leaves (`02162dc4`).
-
-**IDENTICAL REPEATED BLOCKS THAT DRIFT OUT OF PHASE = A STORE THE ROM ELIMINATED.** When a run of
-identical blocks (nine print calls) matches for the first few and then every later block has the
-same register or order shift, one block in the source carries a redundant store that dead-store
-elimination removes but that still moves the per-block schedule: `messages->unk_19b0 = 1;` written
-again just before the `DRAW_LINE` macro that also sets it, in the third block only (`0218f794`,
-SCHED 119 -> 0). Declaration, type and inline changes cannot reach it.
-An eliminated store also keeps its constant's load: a constant the ROM derives from a neighbouring
-one (`sub r2, r3, #0x1d` where you emit a second pool word) is a dead store of that neighbour just
-before the real one, `p->msgId2 = 0x7936; p->msgId2 = -1;` (`02157634`, SHAPE 912 without it).
 
 **CHECK THE FUNCTION'S OWN RETURN TYPE, NOT JUST ITS CALLEES** (`ov017:021ce5b4`).
 A scaffold's `void` is a guess: if the target leaves a derived pointer in r0 on
@@ -422,11 +356,6 @@ instead of `lo = hi` (same asm after CSE) shifted one reference and flipped it (
 An explicit `else { keep = 1; }` on a flag already initialised to 1 adds a referencing block the
 same way and moved the spill onto the ROM's loop counter (`02190884`, OPERAND 39).
 A compound float op (`hi *= 0.8f`) puts the constant in r1; `hi = hi * 0.8f` puts it in r0.
-**A FIELD LOAD SCHEDULED BEFORE THE ARGUMENT MOVES = AN INLINE GETTER THAT RETURNS THROUGH A LOCAL**
-(`02157d40`). Under register pressure the scheduler breaks ties by IR order, and call arguments are
-lowered in argument order; `return u->id;` (or a plain local) folds back into the argument, but
-`inline int UnitId(U* u) { int id = u->id; return id; }` is its own statement ahead of the moves, so
-the load wins the tie: `InitObj(p->obj8, UnitId(comb))`, `SetIndexedName(msg, 2, UnitName(target))`.
 When the ROM loads the argument above an earlier test in the same block, declare it at the block's
 top: `{ Random* battle = ctx->battle; if (*state == 0) { if (!f(battle, *b)) ...` (`021e9f68`,
 SCHED 11 as `f(ctx->battle, *b)`).
@@ -436,16 +365,6 @@ SCHED 11 as `f(ctx->battle, *b)`).
 delays the `and` past the loads, which keeps `screen` live across them so it colours r0. Write the
 copies `*(Bytes2*)priorities = *(Bytes2*)&data_ov023_021fd844[8];` and store an int `screen` straight
 into the bitfield; no separate narrowed `screen8` local.
-
-**THE ROM RECOMPUTES EVERYTHING AFTER EVERY CALL = THE IR OPTIMIZER WAS OFF FOR THAT FUNCTION**
-(`0218cc24`, decompiled 0x4f4110 / 0x545a20; a local `char buf[0x80]` in `0207568c`). mwcc skips ALL IRO passes (global CSE, copy/const
-propagation, LICM) for a function containing inline asm or touching any object whose type carries an
-alignment qualifier. Signature: an index product like `mov #0xac; mla` re-done after each call,
-constants re-materialised, nothing hoisted, only per-block CSE. Source: the buffer it uses is
-declared `__attribute__((aligned(4)))` on the object (`extern int data_0211e33c __attribute__((aligned(4)));`, consistent with its 0x...33c address). Any N works, on the object or via `typedef T A __attribute__((aligned(N)))`; on a STRUCT type it does nothing. colorsweep r62 tries it.
-Try that FIRST when a function shows this signature; every other lever is inert until it is right.
-The same buffer as an array, `extern unsigned char data_0211e33c[0x30000] __attribute__((aligned(4)));`,
-closed UNDERGEN 8 in a LoadFileIntoMemory caller (`021f1868`).
 
 **A load that cannot move past a store = an alias edge mwcc added** (`021de124`, decompiled). An
 access through an unresolved pointer is worst-case; an access to a known object (local static,
@@ -511,35 +430,6 @@ The second load then stays live across the first transform, whose temp is colour
 takes the lower register. Loading and transforming x before loading y does not do it. colorsweep
 `r55_load_then_transform`.
 
-### A VALUE/ADDRESS SCRATCH PAIR THAT OPERAND ORDER CANNOT SWAP — define the address twice
-A loaded value and a computed address in r1/r2, swapped against the ROM, with every operand order
-inert: write the address, or its offset, as a variable with a SECOND definition (`0219e384`):
-
-    int off = entry->slotIndex;
-    off *= sizeof(struct GrottoSlot);
-    struct GrottoSlot* slot = (struct GrottoSlot*)(ov + 0x3a9c + off);
-
-    unsigned short* warpSlot = (unsigned short*)(ov + 0xae);
-    warpSlot = (unsigned short*)((char*)warpSlot + 0x4400);
-
-Inert: plain `+=` on a `char*`, a named index or base local, casts, struct/array views.
-colorsweep `r54_two_def_offset` does the indexed form.
-
-### AN OPERAND ORDER THAT DRAGS ITS REGISTERS ALONG — read the value through a getter WITH A LOCAL
-When swapping `a == b` also swaps which operand gets the higher register (the `cmp` still wrong,
-now at double the bytes), read one side through a static inline that copies into a local and
-returns it. The local decouples the operand's position from its register (`0205faf4`, four
-`cmp` sites, 8 -> MATCH):
-
-    static inline int Field950(struct C* c) { int v = *(int*)(SUB150(c) + 0x950); return v; }
-    return CU16(2) == Field950(c);
-
-The same getter WITHOUT the local is inert (12), as are named locals at the call site, casts, a
-struct view, `!(a != b)` and an inline `Eq(a, b)`. The same idiom orders a stack argument's store
-after a register argument's field load (`0219e384`):
-
-    short GetId() const { short id = s4; return id; }      Call(c->GetId(), x, y, z, 0);
-
 ### TWO STRUCT COPIES THE ROM INTERLEAVES — the destinations are in two stack objects
 The ROM forms both copies' source and destination addresses before the first `stm`; ours finishes
 the first copy before forming the second's (`0219e384`). Splitting the one frame struct in two, with
@@ -549,11 +439,7 @@ Inert: a copy helper in any argument order, a pointer local per address.
 ### A SINGLE-DEFINITION LOCAL IS RE-DERIVED AFTER A CALL — give it a second definition
 `int prev = i - 1;` is forward-substituted: mwcc reloads `i` and recomputes `i - 1` after the `bl`,
 where the ROM kept it in callee-saved `fp`. Assign it to a variable that already has another
-definition (`idx = i - 1;`, reusing a dead parameter) (`021d8c30`). The same variable split in
-place also works: `last = shown; last -= 1;` instead of `last = shown - 1;` (`021db634`, colorsweep r63).
-Constant first works the same way: `short key = 0x26; key += r->letter_;` keeps the constant in a
-register and folds the `lsr #24` into the add, where `short key = 0x26 + r->letter_;` shares it
-(`021557c0`, UNDERGEN 4).
+definition (`idx = i - 1;`, reusing a dead parameter) (`021d8c30`).
 A function-wide swap decided by one high-pressure loop: bind the ELEMENT address once
 (`SafeAllocator* alloc = &self->allocs[2]; alloc->Reset();`, pass `alloc`) instead of a base plus
 `&alloc[2]` at each use (`02155e28`). An index local shared by two read-modify-writes is an
@@ -610,35 +496,8 @@ a named local for either operand, a struct or pointer local for the base, or any
 `colorsweep`'s `mlaacc` rule, so a sweep finds it; what it leaves behind is a plain colour that
 `declmove` closes.
 
-## AN IDENTITY OP IN THE TARGET (`sub Rd, Rs, #0`) IS A NULL-POINTER DIFFERENCE
-The front end folds `x - 0` in every spelling — literal, enum, `static const`, template non-type
-parameter, propagated local, all 19 compiler builds — so no arithmetic source form produces it.
-Pointer minus a NULL POINTER is not folded:
-
-    int i = (int)(p - (char *)0);   ->  sub Rd, Rs, #0
-
-Take the parameter as `char *p` and bind it back. That instruction is also a live-range split: it
-copies the parameter out of its incoming register, so every later scratch assignment shifts by one
-and the target's remaining register roles fall into place. WHERE the binding sits in the declaration
-run decides which register the copy lands in — put it after the flag/accumulator declarations, not
-before. `colorsweep` r25 tries this automatically.
-
-**RUN IT THE OTHER WAY TOO — r25 only ADDS the round-trip.** When the ROM has a plain `mov fp, r3`
-where we emit the `sub`, our source is carrying a round-trip the ROM does not have: delete
-`int b = (int)(b_p - (char*)0);` and take `b` as a plain `int` parameter. The spurious `sub` is also
-a live-range split, so removing it rotates the r5/r7/r8/fp ladder back by one at the same time
-(`02218604`, 268B, 18 -> 14 bytes before the final decl hoist).
-
-**Hoisting a BARE declaration above an INITIALISED one swaps that pair.** `int len;` moved above
-`TextBuffer* buf = &self->buf;` gave `buf=r6, len=r5` (`02218604`). `colorsweep` does NOT generate
-this — `r4`, `r8`, `r11` and `r14` all return zero candidates for a bare/initialised adjacent pair —
-so it is a hand edit until that gap is closed.
-
-`orr Rd, Rs, #0` and `and Rd, Rs, #0` are the same class of survivor from a 64-bit operation whose
-constant has a zero word: `(int)((long long)x | 0x100000000LL)`. A flag-setting `adds`/`subs Rd, Rs,
-#0` means the carry into the high half is still live. `add Rd, Rs, #0` is the zero-accumulator form
-`acc = acc + f(...)` with `acc` still 0 (colorsweep r12), or `add rN, sp, #0` — the address of a
-local at frame offset 0, which is never folded either.
+## `add rN, sp, #0` IS THE ADDRESS OF A LOCAL AT FRAME OFFSET 0
+mwcc never folds it into the instruction that uses the address.
 
 ## `stm rD, {rX, rY}` NEEDS TWO DISTINCT VALUES — a repeated constant cannot fuse
 mwcc fuses consecutive word stores into `stm`/`stmib` only when the values sit in distinct,
@@ -673,21 +532,6 @@ in the ROM listing; the scaffold's ARGS line is a heuristic, not evidence. No sw
 allocation, so padding the signature to move a register does nothing: on `ov017:021941fc` the
 one-parameter form and `(ov, int arg1, int arg2)` gate BYTE-IDENTICAL.
 
-**When the ROM holds a PARAMETER one or more rungs higher than you do, promote the locals that
-outrank it into trailing parameters** (`ov017:021941fc`, 4120B, **112 -> 17** in one edit). Declare
-them after the real parameter and leave their assignments exactly where they were in the body:
-
-    -void f(unsigned char* ov) {
-    +void f(unsigned char* ov, unsigned char* mode, void** list) {
-         /* delete `unsigned char* mode;` and `void** list;` from the local declarations */
-         ...
-         list = *(void***)(ov + 0x3000 + 0x6fc);      // assignment stays put
-
-The incoming r1/r2 are dead-stored and never read, so the prologue stays byte-identical and existing
-one-argument callers remain ABI-safe. Reach for this when the residue is a pure pair swap involving
-the parameter and no declaration order fixes it — measured over all six permutations of the competing
-locals, the parameter kept the same low rung in every one.
-
 With locals competing, the ladder is DEFINITION order, highest register first (one parameter plus
 four call results gives `r8, r7, r6, r5, r4`). A parameter counts as defined at ENTRY, so it takes
 the HIGHEST. If the ROM holds it in a LOW one, the ROM does not keep it live from entry — it
@@ -695,27 +539,7 @@ re-loads the value later, which defines it late. Find that reload rather than pe
 Caveat: a value whose live range spans a loop can outrank definition order, so treat the ladder as a
 first guess. That holds with FEW locals competing; with many it inverts. On `ov017:021941fc` (eleven
 named locals) the parameter took the LOWEST rung in all six permutations of the competing locals, and
-the ROM performs no reload — the load appears exactly once, in the schedule slot we already emit. If
-the listing shows a single load, stop hunting for a reload and promote instead (below).
-
-**To swap the pair WITHOUT moving any code, split the second one's DECLARATION off its definition
-and hoist just the declaration above the first** (`ov000:0215858c`, 4816B, 253 bytes of pure
-pair-swap). Two pointers each defined by an expression in source order give the first the higher
-register; declaring the second uninitialised on the line above the first, and assigning it where it
-already was, reverses that pair for the whole function:
-
-    struct CombatantAilments* ailments;                  // declaration only, hoisted
-    struct Combatant* combatant = GetCombatantFromList(list, i);
-    ailments = &combatant->ailments;                     // definition stays put
-
-An empty declaration is not a definition, so nothing else in the ladder moves and no statement
-changes order — this is the one edit that touches colouring alone. `colorsweep`'s `r7_decl_split`
-plus `r8_decl_hoist` generate it, so try the sweep before doing it by hand.
-
-**Only for an ADJACENT pair.** Hoisted past other definitions it moves that local to the TOP of the
-ladder and rotates every register in between instead of swapping two: on `main:020227dc` the pair
-sits four definitions apart and this turned `r8<->sb` into `r6->r7 r7->r8 r8->sb sb->r6`, 14 bytes
-to 20. If the two are not adjacent, this is not the lever.
+the ROM performs no reload — the load appears exactly once, in the schedule slot we already emit.
 
 The full ladder is **`sl, sb` for the parameters, then `r8 r7 r6 r5 r4` descending for the locals,
 then `fp` last** (`pad/probe_r9.cpp`, eight call results chained into one sum). Two consequences:
@@ -772,20 +596,13 @@ scalars to bare declarations and search their order with
 `python $KIT/pad/cf_multi.py <file.cpp> ovNNN <addr> <size> <pool_from> '{"moves": [[idx, pos]], "choices": [idx]}' --order`
 reorders or flips mwcc's colouring and prints the node order.
 
-### THE SAME LEVER ORDERS SPILL SLOTS — declare bare, assign where the ROM computes it
-Scalars that spill get stack slots in declaration order, first declared = highest address. A local
+### THE SAME LEVER ORDERS SPILL SLOTS
+Scalars that spill get stack slots in declaration order, first declared = highest address; a local
 declared with an initializer at its point of use lands in the LOWEST slot and shifts every spill slot
-above it by 4 — a diff full of `[sp,#0x5c] | [sp,#0x58]` rows. Declare it bare where its slot says it
-belongs (ROM slot above `battle` => declare it before `battle`) and keep the assignment in place:
-
-    unsigned char* codes;                        // before the first scalar
-    ...
-    codes = node->codes;                         // where the ROM loads it
-
-`ov025:021ebb90` (4096B) 84 -> 49 in one edit. Moving the INITIALISED declaration instead drags the
-load with it and costs more than it saves. Declare EVERY spilled scalar this way, in ROM slot
-order, even ones assigned first; 12-byte struct locals follow the same rule (`02176634`, 47 -> 0;
-`0217df08`, a pointer declared last to take the lowest slot sp+0xc).
+above it by 4 — a diff full of `[sp,#0x5c] | [sp,#0x58]` rows. 12-byte struct locals follow the same
+rule (`02176634`, 47 -> 0; `0217df08`, a pointer declared last to take the lowest slot sp+0xc). A 1/0
+flag written `changed = (a | b) ? 1 : 0;` instead of if/else stores is a compiler temp, and
+compiler-temp spills sit below the declared scalars (`0219d250`).
 
 ### A LITERAL-POOL OFFSET DIFF CAN HIDE A WRONG CONSTANT — compare the VALUES, not the offsets
 `ldr r0, [pc, #0x584] | ldr r0, [pc, #0x58c]` reads like pool-layout noise and usually is. It can
@@ -815,31 +632,6 @@ The same shape with no local at all: `and r0, fp, r0, lsl r8 ; mov r7, #0 ; str 
 reload of that slot inside the loop is the condition `if (present & (1 << current))` written in the
 loop body. A `flag = present & (1 << current);` before the `for` stores before the counter init, and
 no declaration or statement order moves it (`ov023:021eeaac`, the last 19 bytes).
-
-### A CONDITIONAL STORE AS `?:` BECOMES A COMPILER-TEMP SPILL — the lowest slot group
-When a flag's spill slot is too HIGH and moving its declaration anywhere only makes things worse,
-fold the second condition into a `?:` on the store. The ternary's value becomes a compiler temp,
-and compiler-temp spills are laid out BELOW the declared scalars:
-
-    if (e->mode == 1 && obj->f311 != 0) waitUnique = 0;            // slot 0x14, 49 bytes
-    if (e->mode == 1) waitUnique = obj->f311 != 0 ? 0 : waitUnique;  // slot 0xc,  35 bytes
-
-Same instructions (store 1, then `movne`/`strne` 0), different slot. `ov025:021ebb90`. An if/else
-1/0 flag written `changed = (a | b) ? 1 : 0;` takes the lowest slot the same way (`0219d250`).
-
-### BREAK A CSE WITHOUT SWAPPING REGISTERS — build the named pointer through a `static inline`
-When the ROM RECOMPUTES `&obj->arr[i]` for a call but ours reuses a named `e = &obj->arr[i]`, every
-direct CSE-breaker (`(T*)obj + i`, `&obj->arr[(unsigned)i]`, declaring `e` later) produces the
-recompute AND swaps `i`/`e` across the whole function. Compute `e` through an inline helper instead
-and leave the call's argument exactly as it was:
-
-    static inline T* EntryAt(Container* o, int n) { return (T*)o + n; }
-    T* e = EntryAt(obj, i);            // the call still passes &obj->arr[i]
-
-The inline boundary hides the equality from the CSE pass; the registers stay put. `ov025:021ebb90`
-35 -> 31. The helper MUST reach the element by different arithmetic — pointer plus index from the
-container base. `return &o->arr[n];` inside the helper is re-CSE'd against the call and stays 35. Under `-inline noauto` only a `static inline` whose body is a single `return expr` is
-inlined — a helper that stores through a parameter emits a `bl`.
 
 ## TYPE WIDTH IS A REGALLOC LEVER — `int` vs `unsigned char` on the same value
 A byte-typed local sourced from a `ldrb` changes which callee-saved pair mwcc picks. When the diff
@@ -933,8 +725,7 @@ is register NUMBERS around a byte value, retype it before touching anything else
   one `mov r0,#0` plus plain stores, but it will not propagate across the implicit conversion, so
   each read becomes a real reload. The narrow local still takes a full word slot, so nothing else in
   the frame moves. That one retype closed a 12-byte whole-function shortfall. Inert at the same site:
-  chained versus separate assignments, a pointer round-trip, an aggregate holding the flags; and
-  `volatile` is worse than inert — it breaks the loop shape.
+  chained versus separate assignments and an aggregate holding the flags.
 
 ## A RESIDUE THAT WILL NOT MOVE IS POINTING AT CODE YOU INVENTED
 When a site resists every form you can think of, stop generating forms and read the whole file for
@@ -985,18 +776,12 @@ and is copied into the named local (`021b8e8c`).
 A `#pragma opt_common_subs off` or `#pragma opt_dead_assignments off` in your file is a SIZE bug
 waiting to be counted, not a lever: it keeps a store the ROM folded away and blocks a reload the ROM
 performs. Delete both before reading any size verdict. On `main:02048e2c` that alone took OVERGEN 4
-to size-exact -- the dead half of `idx = 0; idx = arr[1] - idx;` disappeared with the pragma, and
-the store the ROM repeats came back once a `volatile`-qualified read of the owning pointer stopped
-propagation from reusing the register (`((Obj volatile*)obj)->ptr->arr[w] = cur;`). Which local
-lands in which callee-saved register follows the order the values are FIRST WRITTEN, not the order
-they are declared: `int r; int w = 1; r = w;` emits `mov r4, #1; mov r3, r4` where `int w = 1; int
-r = 1;` emits the constant twice in the other two registers. Splitting a declaration from its
-assignment is therefore the positioning tool, and the two halves move it independently: a local
+to size-exact. Which local lands in which callee-saved register follows the order the values are
+FIRST WRITTEN, not the order they are declared: `int r; int w = 1; r = w;` emits `mov r4, #1; mov
+r3, r4` where `int w = 1; int r = 1;` emits the constant twice in the other two registers. A local
 declared WITH its initializer takes its place from that write, while a bare `T x;` takes its place
-from where the DECLARATION sits, wherever the assignment ends up. So hoisting a bare declaration of
-the last-computed local above all the others rotates a three-register cycle without moving a single
-call (`0215bc9c`, 20 bytes), and hoisting the writes that must own r5/r6/r7 above the first call
-fixes the ladder before it (`021767ec`, SHAPE 102 -> REGPERM 9).
+from where the DECLARATION sits, wherever the assignment ends up. Hoisting the writes that must own
+r5/r6/r7 above the first call fixes the ladder before it (`021767ec`, SHAPE 102 -> REGPERM 9).
 
 `push {r3, r4-fp, lr}; sub sp, #0x38` in the ROM against your `push {r4-fp, lr}; sub sp, #0x3c` is
 the SAME 96-byte frame: mwcc reserves an odd word by pushing a scratch register rather than widening
@@ -1083,23 +868,13 @@ in the wrong place, the lever is whether the value has a name at all:
 
 Ask "does the target keep this in a register or on the stack?" and add or remove the NAME to match.
 
-## BREAKING CSE — `volatile` is the tool, a plain cast is not
-**`colorsweep` already tries this class for you** (`r36` on extern globals, `r37` on a pointer's
-fields, including parameters) and it has been run on your starting artifact before this doc was
-built. Reach for these by hand only when the shape below is one the rules cannot express.
-`volatile` also PINS LOAD ORDER, not just reloads: plain locals let mwcc sink each load to its
-first use and reorder them into use order, where volatile keeps declaration order (`0215b138`,
-two `ldrsh` field reads, 4 bytes).
+## BREAKING CSE — re-read what the ROM re-reads
 **A CACHED LOCAL IS A CLAIM THAT NOTHING IN BETWEEN WROTE THAT MEMORY, and the ROM rarely makes it.**
 Re-read instead of caching whenever calls sit between the two uses: a field after three mutating
 calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the function has itself been
 mutating — call it AGAIN rather than testing a held flag (`021ea85c`, 500B, matched on the first
 compile) — and a plain redundant `ldr`, written by naming the field again at the use site
 (`020307d0`).
-`02156054` — a cast on an INDEX does break CSE. With `unsigned char j` and a loop condition that
-reads `tbl[j]`, the ROM loads `tbl[j]` again in the body. Write the body's read as `tbl[(int)j]`: a
-different subscript expression, so mwcc reloads. Plain `tbl[j]` reuses the condition's register,
-and the function comes out 4 bytes short.
 `02188d9c` — `const` is the OPPOSITE lever and it moves whole blocks, not one load: declaring an
 extern lookup table `extern const short tbl[]` means `int` stores through an unrelated pointer can
 no longer alias it, so eight `ldrsh` hoist above the store block and their index adds materialise up
@@ -1111,16 +886,7 @@ is materialised — with `int missing = 1;` in scope above the bind, `-1` came o
 instead of `mvn r3, #0`. If a materialisation is one instruction off, look at what is live, not at
 the expression.
 
-When the target RE-COMPUTES register arithmetic you keep in a callee-saved register (`lsl r0, r6, #2`
-again after a call, while ours holds `j*4` in `sl` from the top of the loop): change the TYPE of the
-second expression, not its spelling. `(unsigned int)j * 4 + 2` is a different CSE key from `j * 4`
-and costs no code; `j << 2`, `4 * j`, a second inline call and `(unsigned char)j` are either the
-same key or add an `and`. The freed register then goes to the loop-invariant the ROM hoists there
-(`ov017:0219bfb4`, 182 -> 0).
-
 When the target RE-LOADS a value you are holding in a register:
-- `*(volatile int*)obj` forces the reload. A plain `*(int*)obj` cast barrier is **inert**
-  (`022410d8`, measured both).
 - A register restored from a saved field, `ldr r0, [base] ; ldr r3, =mask ; ldr ip, [self, #off] ;
   and r0, r0, r3 ; orr r0, r0, ip`, is an SDK setter whose mode parameter is an ENUM:
   `static inline void GX_SetOBJVRamMode(GXOBJVRamMode mode) { DISPCNT = (unsigned int)((DISPCNT & ~0x300010) | mode); }`
@@ -1149,18 +915,11 @@ When the target RE-LOADS a value you are holding in a register:
   `static inline` functions over `volatile unsigned int`; one inline expression orders the `orr`
   before the `bic` (`02065418`). A plain `GX_SetVisiblePlane(obj->planes)` read once colours its
   scratch registers only as `(obj->planes << 8) | (reg & ~0x1f00)` (`021c17fc`, `021a9768`).
-- `extern void (* volatile arr[])();` stops a handler load being sunk past a count store
-  (`020015e8`).
-- To defeat an UNWANTED CSE, change the expression's shape so mwcc does not recognise it: where
-  parallel tables share an index and stride, `*(const char* const*)((char*)tbl + (int)i * 12)` is
-  not the same subexpression as `tbl[i].value`, so the ROM's per-table recompute comes back
-  (`02170a7c`, UNDERGEN 8 to shape-clean). Mixing access forms splits a pointer CSE the same way —
-  cached local for the read side, global-deref for the store side (`0223d0b4`).
+- Mixing access forms splits a pointer CSE: cached local for the read side, global-deref for the
+  store side (`0223d0b4`).
 - The MIRROR CASE: when the target reuses the register from a nearby COMPARE, write the arithmetic
   on the literal, not on the field. In a `field == -16` arm, `-16 + 15` reuses the compare's `mvn`
   register; `field6a + 15` re-loads the field and picks a different one (`020db3f4`).
-- a volatile read at the top of a loop body forces the per-iteration re-load that a guarded do-while
-  otherwise CSEs away (`020015e8`).
 - read the field TWICE rather than reusing an expression: `n = l->count; l->count = l->count + 1;`
   not `n + 1` — that supplies the extra mov/ldr the target has (`0209f030`).
 
@@ -1197,10 +956,9 @@ call). Pool words are emitted in first-use order: swap two stores to swap two po
 
 **A STATE CHAIN THAT IS SHORT** (`0215cc70`, UNDERGEN 64 -> 0): a materialised flag test
 (`tst; movne #1; moveq #0; cmp`) is a one-line inline returning `int`, not `bool` (r20); a call
-result tested `mvn; cmp; beq far; cmp #1` is `if (r != -1) { if (r == 1) ... } else ...` (r24); a
-field the ROM RE-LOADS after a conditional region is read there through a one-line `static inline`
-reaching it by DIFFERENT arithmetic, one spelling per reload (r29). Helpers with control flow or
-several statements are not inlined: write those bodies in place.
+result tested `mvn; cmp; beq far; cmp #1` is `if (r != -1) { if (r == 1) ... } else ...` (r24).
+Helpers with control flow or several statements are not inlined, nor is one that stores through a
+parameter: write those bodies in place.
 
 **THE ORDER OF TWO PREDICATED ARMS IS THE SOURCE ORDER OF THE IF/ELSE** (`02174a80`): `strhle` before
 `asrgt` means the `<= 0` arm was written first: `if (x <= 0) { x = -1; } else { count++; }`.
@@ -1242,12 +1000,10 @@ Never `const int CAP = 999;` as a block-local: mwcc folds every use but still em
 `.rodata`, and integration refuses the unreferenced object (DATA-UNPLACED). Use `enum { CAP = 999 };`
 or the literal (`0216033c`).
 A zero-fill of a local buffer is `__clear(buf, n)`, not `memset(buf, 0, n)` (`02021f88`, which also
-used the chained adds below for `zone + 0x2000` and separate out-param locals per state for the frame).
-A store offset the ROM splits in a specific order (`add #0x264` then `add #0x2400` for `+0x2664`)
-comes from two chained one-line static inline pointer adds, `Off2400(Off264(p))[0xb6]` (`021643d4`).
-The reverse also happens (`021729ac`): a FLAT non-encodable offset (`void* list = src->list`, list at
-`+0x684`) makes the partial sum a compiler temp coloured below a hoisted address, where a named
-pointer to the `+0x284` sub-struct took the other register. Try both roots.
+used separate out-param locals per state for the frame).
+A FLAT non-encodable offset (`void* list = src->list`, list at `+0x684`) makes the partial sum a
+compiler temp coloured below a hoisted address, where a named pointer to the `+0x284` sub-struct
+took the other register (`021729ac`). Try both roots.
 `0215b520`: name BOTH the rooted base (`ents` at `+0xa70`, array at `+0x1000`) and the CSEd offset
 (`off = (k + 4) * 0x88`), define them where the ROM first needs them (after the first store, not at
 the loop top), and use them only at the call sites the ROM computes that way. A `const` byte table
@@ -1256,24 +1012,20 @@ same: `extern T* const tbl[9];` stops its load being ordered before a global sto
 Inside a loop the same re-rooting is spelled as raw pointer arithmetic on the element:
 `((int*)o + i)[0xac/4]` rather than `o->idx[i]` (`0218f088`).
 
-**NAMING AN INTERMEDIATE DECIDES WHERE IT MATERIALISES.** One rule, four proven instances. An
+**NAMING AN INTERMEDIATE DECIDES WHERE IT MATERIALISES.** One rule, two proven instances. An
 expression written inline is sunk to its use and folded; bound to a local it is computed where the
 binding sits, in its own instruction. Reach for this whenever the residue is one instruction in the
 wrong place, in the wrong register, or missing entirely.
 
 | shape | inline form | bound form | address |
 |---|---|---|---|
-| loop-invariant address hoisted ahead of neighbouring loads | `p = (char*)obj + 0x10;` | `p = (char*)obj; p += 0x10;` | `0202b900` SCHED 14 -> 0 |
 | a call inside a compare always takes Rm, for BOTH operand orders | `if (x == Call())` | `int a = Call(); if (a == x)` — declared BELOW the loaded local | `02053634` 2B -> 0, `0209bed8` |
 | a condition the ROM tests twice | folded into the enclosing `\|\|` | `int ok = (... == 3); if (ok == 0) return 0;` | `02094fe4` 12B |
-| a constant the ROM materialises rather than folds | `x >= 0` (folds to a `cmp` immediate) | `x > -1` (forces `mvn r1,#0` + `cmp`) | `0209c840`; run it BOTH ways — `x <= -1` -> `x < 0` removes an `mvn` ours emits and the ROM does not (`02081f20`, 23B -> 4B) |
-| a `+K` folded into a cast over a struct FIELD | `p = (Stage*)(h.ptrC + 0x1000);` | `p = h.ptrC; p += 0x1000;` — keep the BASE type, cast after | `021db524` 13B -> 0. The add then emits in place, its dead register is reused by the next `mov #1`, and two pool constants fall back into the ROM's slots. `r39_split_pointer_add` does NOT reach this: its pattern needs a bare identifier base and the `+` OUTSIDE the cast |
 
-Bounding rules for all four: the bind must sit BELOW the value it is compared against (above gives
-SHAPE); the local's type is free; `(char*)(obj + 4)` and `&obj[4]` are the same instruction as the
-inline form and inert; inlining an already-bound expression at its use site DELETES the instruction
-(UNDERGEN). Sibling sites in one function may legitimately want opposite forms — match each site to
-its own instruction.
+Bounding rules for both: the bind must sit BELOW the value it is compared against (above gives
+SHAPE); the local's type is free; inlining an already-bound expression at its use site DELETES the
+instruction (UNDERGEN). Sibling sites in one function may legitimately want opposite forms — match
+each site to its own instruction.
 
 **AN EXPLICIT NO-OP `case` COSTS A DETACHED COPY.** `case 0: return;` written out gives mwcc a real
 arm to branch to; deleting it and letting 0 fall through the jump table unhandled — exactly as the
@@ -1330,18 +1082,9 @@ together. A switch arm that does only what "no arm" does should not be written.
   and skips the rest. The same chain with `cmpeq` is the `&&` of the same equalities. They are not
   two shapes of one condition, they are different conditions, so a `cmpne | cmpeq` column in the
   diff means the SOURCE has the wrong operator, not the wrong colouring (`020cddec`).
-- **block the range fold** (`0205337c`): an `||`-chain of equality tests written as
-  `!(a != x && a != y && a != z)` stops mwcc lowering it to `(unsigned)(a-x) <= 2` and forces real
-  cmp/cmpne/cmpne/bne with a non-predicated then-block. For two ADJACENT constants with the field
-  bound to a local, `s == 0x54 || s == 0x55` becomes `sub`, a shift pair, `cmp #1` and `ls`-
-  predicated stores (OVERGEN 20); reading the field at each compare keeps the two `cmp` (`02160f4c`).
-- **a chain that opens with `cmpne` right after a `beq` on the same value** repeats the test the
-  branch above already decided: `if (s == 0) {...} else if (s != 0 && s != 1 && s != 2)`. Without
-  the redundant `s != 0` the chain opens with a plain `cmp` (`021dbf04`).
-- **a null test on a member's address** (`add`, `adds`, `ldrbne`, `cmpne`, `bne`): bind
-  `Task* task = &ctx->task;` and write `!(task != 0 && task->active != 0)` in the condition. An
-  int-returning inline materialises `movne`/`moveq`/`cmp`, and an unbound `&ctx->task` re-adds the
-  base (`0215e69c`).
+- **two adjacent constants** (`02160f4c`): with the field bound to a local, `s == 0x54 || s == 0x55`
+  becomes `sub`, a shift pair, `cmp #1` and `ls`-predicated stores (OVERGEN 20); reading the field at
+  each compare keeps the two `cmp`.
 - **backward `goto` into a label** reproduces mwcc's tail-merge of a duplicated reset block
   (`02002b90`).
 - **EARLY RETURN vs SINGLE EXIT decides WHERE a returned constant is materialised — both directions
@@ -1354,8 +1097,7 @@ together. A switch arm that does only what "no arm" does should not be written.
   (`020a1bb4` + its twin `020a1ccc`); early return out of the success branch instead makes the FAIL
   path materialise its `NULL` before the cleanup calls rather than sinking it to the final return
   (`0207568c`, 296B, 53 bytes — but only with `#pragma opt_propagation off` at function scope, which
-  is evidence the real form has not been found: a pointer round-trip usually reproduces it without
-  one). The single-exit direction, measured: an early return makes K dead on the fall-through path,
+  is evidence the real form has not been found). The single-exit direction, measured: an early return makes K dead on the fall-through path,
   so mwcc folds it into a predicated instruction instead:
 
         cmp r7, #0x23 / mov r0, #0   / pophs {...}      target
@@ -1400,8 +1142,6 @@ wrong and a byte-perfect function still fails the gate:
   parameter the mangling spells `j` is `unsigned int`; declaring it `unsigned char` reorders the
   argument setup. Keep `unsigned int` and narrow at the call, `(unsigned char)(idx + 1) & 0xff`
   (`021539a0`; the cast or the mask alone stays SCHED 7).
-- a symbol may mangle as void-param even when you pass arguments (`_Z21BlankFunction020a28dcv` with
-  4 args, `021982ac`).
 - **but pool-word FUNCTION ADDRESSES resolve to mangled symbols** (`_Z22TransferMainObjPaletteiij`)
   — declare those as plain C++ declarations, NOT `extern "C"` (`0222d1b8`).
 - Mixed in one file is normal and is what let `0202b0f4` match FIRST TRY: mangled `_Z` callees as
@@ -1425,17 +1165,6 @@ wrong and a byte-perfect function still fails the gate:
   (`021544f4`, `0215c988`). Indexing an `int *` taken at the first field
   (`int *q = &s->id; short cur = q[1]; short id = q[0];`) is what keeps that base in one
   register. A `char *` plus the raw offset does not (`02160004`).
-
-## DUPLICATE POOL WORD — the alias also works for DATA and BSS
-One symbol referenced twice ALWAYS dedupes to a single pool word. Declare a second extern named
-`<symbol>_dup` (or `_arg`) and use each symbol at one site. Do NOT edit `symbols.txt`: integration
-adds the alias line itself, and wgate accepts the `_dup`/`_arg` name without it. The line it writes:
-(`02155e28`):
-- **data**: `data_ov031_02249b54_arg kind:data(any) addr:0x02249b54` — plain `kind:data(any)`, and
-  **no `size=` field**, because data entries in that file carry no size. 149 bytes -> MATCH in one
-  step (`02216b90`).
-- **bss**: `data_ov031_02290c94_dup kind:bss addr:0x02290c94` (`0222d1b8`); dsd 0.10 rejects a `size:` here.
-Keep the field reads on the original symbol and pass the ALIAS to the call that needs the address.
 
 ## A SMALL INTEGER LOADED FROM THE POOL IS AN OVERLAY ID — write `OVERLAY_ID(n)`
 `ldr rN,=0x18` where a C constant would give `mov rN,#0x18` is the address of the LCF symbol
@@ -1532,31 +1261,6 @@ The temp is REQUIRED: with the call inside the `|=` the word has to be reloaded 
 the wrong destination. The shape is `(val << (32 - width)) >> (32 - width - offset)`, which is what
 the bitfield assignment already emits. `0209a104` 33 -> 27; the corpus source that shows the
 accumulator form is `GenerateDeviceRandomBytes_020120f0` (`packed = a<<24 | b<<16 | c<<8 | d`).
-
-### TWO STORES TO ONE BITFIELD WORD — clear through a `volatile` union member
-Consecutive writes to one bitfield storage unit collapse to ONE store: mwcc keeps the word in a
-register and dead-store-eliminates every write but the last. This is general dead-store elimination,
-not a bitfield quirk — two full-word writes to the same local collapse the same way. When the target
-stores the word TWICE, overlay the bitfield struct with a volatile full-word member and write the
-last one through it:
-
-    union U { struct Bits b; unsigned int raw; volatile unsigned int vraw; };
-
-    rec.u.b.d = Val();                            // run flush   -> str rX, [sp, #N]
-    rec.u.vraw = rec.u.raw & 0x01ffffff;          // the clear   -> str rY, [sp, #N]
-
-The volatile store cannot be eliminated, so the first store survives, and because it is a MEMBER
-write (not a pointer deref) both stores are addressed off sp with no base register. The volatile
-must be on the LATER store: a volatile EARLIER store followed by a plain one is still deleted, even
-`rec.u.vraw = rec.u.raw;` (measured on `0209a218`, output identical to having no volatile at all). A cast
-(`*(unsigned int*)((char*)&rec + 4) &= mask`) also keeps both stores but pays a materialised
-`add rX, sp, #0` and addresses the second off it — that is the wrong shape.
-
-`0209a104`, `0209a218`. Inert, measured: volatile on the CLEARED bitfield (adds a reload), volatile
-on the FIRST write, `optimization_level 1` (restores the store but reschedules the whole function),
-every dead-store pragma, a union self-assign, an aggregate round-trip (costs the temp a stack slot).
-The volatile store is a scheduling barrier, so it lands immediately after the mask — if the target
-computes something from the cleared word before storing it, that ordering is a separate residue.
 
 A dead `strb` triple (raw, `and`, `mov r0,r0`) that survives in the ROM is a 1-byte struct returned
 by a `static inline` wrapper and assigned to a FUNCTION-scope struct whose address is taken
