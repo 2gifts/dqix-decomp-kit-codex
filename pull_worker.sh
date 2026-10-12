@@ -303,7 +303,7 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$SRCDIR" 2>/dev/null | head -1)
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$STAGE" 2>/dev/null | head -1)
   if [ -n "$f" ] && python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
-    matched=$((matched+1)); v=MATCH
+    _held=""; matched=$((matched+1)); v=MATCH
     _imp=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
     _sid=$(python -c "import json;print(json.load(open(r'$OUT')).get('session_id',''))" 2>/dev/null)
     if [ -n "$_imp" ] && [ -n "$_sid" ]; then
@@ -321,10 +321,18 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
       if ! python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
         cp "$SP/gated/$_gsuf/$ADDR.cpp" "$f" 2>/dev/null
       fi
-      _left=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
+      _left=$(python "$KIT/plausible.py" --blocking "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
       if [ -n "$_left" ]; then
+        _hold="$SP/hold_plausible/$_gsuf/$(basename "$f")"
+        mkdir -p "$(dirname "$_hold")"
+        cp "$f" "$_hold"
+        _lines=$(python "$KIT/plausible.py" "$_hold" 2>/dev/null | grep -oE ':[0-9]+:' | tr -d ':' | sort -un | paste -sd, -)
+        _hint=$(printf '%s\n' $_left | sed 's/$/: see core.md NATURAL FORMS/' | paste -sd';' -)
+        printf '%s\t%s\t%s\t%s\t%s\tstaging\n' "$MARG" "$ADDR" "$_hold" "$_lines" "$_hint" >> "$SP/wlog/clean_queue.tsv"
         printf '%s\t%s\t%s\t%s\n' "$(date +%F)" "$MARG" "$ADDR" "$_left" >> "$SP/wlog/suspect.tsv"
-        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- staged, listed in wlog/suspect.tsv" >> "$LOG"
+        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- HELD in hold_plausible/, queued for cleanwork" >> "$LOG"
+        _held=1
+        matched=$((matched-1)); v=held
       else
         echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: natural form MATCHES" >> "$LOG"
       fi
@@ -334,14 +342,16 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
     # so a match left only in src/ never triggers integration, and the next wave for a DIFFERENT
     # module quarantines it as a foreign untracked file. ov017:021d4e38 (4796B, $7.72) sat in
     # src/Combat/Overlay_17 with staging empty until it was copied in by hand.
-    mkdir -p "$STAGE"
+    [ -n "$_held" ] || mkdir -p "$STAGE"
     # VERIFY THE COPY, AND FALL BACK TO THE PROOF. A wave for ANOTHER module quarantines this
     # module's untracked .cpp while it runs, so $f routinely vanishes between the gate above and
     # this copy -- and `cp ... 2>/dev/null` said nothing, leaving the match invisible to the
     # integration trigger. ov000:0215858c ($19.23) and ov024:021ea85c both had to be staged by hand.
     # wgate archives every MATCH under gated/<mod>/<addr>.cpp, so that copy is proof and is safe to
     # stage from.
-    if ! cp "$f" "$STAGE/$(basename "$f")" 2>/dev/null || [ ! -s "$STAGE/$(basename "$f")" ]; then
+    if [ -n "$_held" ]; then
+      :
+    elif ! cp "$f" "$STAGE/$(basename "$f")" 2>/dev/null || [ ! -s "$STAGE/$(basename "$f")" ]; then
       _gsuf=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")
       if [ -s "$SP/gated/$_gsuf/$ADDR.cpp" ]; then
         cp "$SP/gated/$_gsuf/$ADDR.cpp" "$STAGE/$ADDR.cpp"

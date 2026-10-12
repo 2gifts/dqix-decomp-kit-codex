@@ -1,7 +1,9 @@
 """Land contributor pull requests on decomp-matching. Run through landpr.sh, which holds the wave lock.
 
-    bash landpr.sh <number>...
+    bash landpr.sh [--fixes DIR] <number>...
 
+--fixes DIR overlays DIR's files (repo-relative paths, e.g. our cleaned versions of a pull request's flagged
+sources) on the merged tree and commits them as `Clean #N` before prready.py runs.
 In the integration tree, from the published tip: merges each pull request head as `Merge #N` (a
 conflict only in delinks.txt, where both sides added blocks, keeps both), refuses symbolic links, strips
 comments from the source it changed, requires `prready.py decomp` READY, ports between the regions
@@ -102,8 +104,30 @@ def build_every_region(tree):
     regionsync.configure("usa")
 
 
+def apply_fixes(tree, fixes, numbers):
+    for root, _, files in os.walk(fixes):
+        for name in files:
+            src = os.path.join(root, name)
+            rel = os.path.relpath(src, fixes).replace("\\", "/")
+            if not os.path.exists(f"{tree}/{rel}"):
+                refuse(f"--fixes {rel}: no such file in the merged tree")
+            with open(src, encoding="utf-8") as fh, open(f"{tree}/{rel}", "w", encoding="utf-8", newline="\n") as out:
+                out.write(fh.read())
+    if git(tree, "status", "--porcelain", "--", "src")[1].strip():
+        git(tree, "add", "--", "src")
+        git(tree, "commit", "-q", "-m", "Clean " + " ".join("#" + n for n in numbers))
+
+
 def main():
-    numbers = sys.argv[1:]
+    args = sys.argv[1:]
+    fixes = None
+    if "--fixes" in args:
+        i = args.index("--fixes")
+        fixes = args[i + 1] if i + 1 < len(args) else ""
+        args = args[:i] + args[i + 2:]
+        if not os.path.isdir(fixes or ""):
+            sys.exit(f"--fixes {fixes!r}: not a directory")
+    numbers = args
     if not numbers or not all(n.isdigit() for n in numbers):
         sys.exit(__doc__)
     code, out = run(KIT, sys.executable, f"{KIT}/integ_tree.py", "sync")
@@ -124,6 +148,8 @@ def main():
         if code and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
+    if fixes:
+        apply_fixes(tree, fixes, numbers)
     strip_comments(tree, tip)
     code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp", env=dict(os.environ, DQIX_REPO=tree))
     if code:

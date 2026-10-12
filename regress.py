@@ -1562,7 +1562,7 @@ def _prready():
             "src/A.cpp": "void Foo() {}\n",
             "src/B.cpp": "void Baz() {}\n"})
         commit(pub_kit, {n: open(f"{KIT}/{n}", encoding="utf-8").read()
-                         for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py")}
+                         for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py", "plausible.py", "mangle.py")}
                | {"worker_src/deadends.md": "# dead ends\n", "worker_src/core.md": "# core\n"})
         git(d, "clone", "-q", pub_decomp, decomp)
         git(d, "clone", "-q", pub_kit, kit)
@@ -2324,6 +2324,59 @@ def _plausible_dodges():
     for good in ("x = (a - 1 < b);", "y = (p + i) + 0x100;", "z = base + 0x2c5c;"):
         if P.findings(wrap % good):
             return "plausible.py flagged %r: %r" % (good, P.findings(wrap % good))
+    return None
+
+
+@check("implausible code is held, not landed: prready refuses new findings and the fleet holds a flagged match",
+       "plausible.py findings only triggered one cleanup try and then landed anyway, and landpr never "
+       "checked them (user, 2026-10-12: block, clean, then land)")
+def _implausible_blocks():
+    import subprocess
+    pr = load("plausible")
+    clean = "void f(S* p) {\n    if (p->ptr == 0) return;\n}\n"
+    pun = "void f(S* p) {\n    if (*(int*)p == 0) return;\n}\n"
+    if pr.gained(clean, pun) != ["INT-PUN-NULL-TEST"]:
+        return "prready did not report a finding the change adds: %r" % pr.gained(clean, pun)
+    if pr.gained(pun, pun):
+        return "prready blamed a change for a finding the tip already had"
+    human = "void G3B_PolygonAttr(Info* d, u32 r1, u32 r2, u32 r3) {\n    if (r1 > -1) d->p = r1 | r2 << 4;\n}\n"
+    if pr.gained("", human):
+        return "an advisory kind seen in human-written code blocks: %r" % pr.gained("", human)
+    worker = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
+    if "hold_plausible" not in worker or 'if [ -n "$_held" ]; then' not in worker:
+        return "pull_worker.sh still stages a match plausible.py flags after its cleanup"
+    lp = load("landpr")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landpr_fixes_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        tree, fixes = f"{root}/tree", f"{root}/fixes"
+        os.makedirs(f"{tree}/src", exist_ok=True)
+        os.makedirs(f"{fixes}/src", exist_ok=True)
+
+        def git(*args):
+            return subprocess.run(["git", "-C", tree, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+
+        git("init", "-q", "-b", "main")
+        with open(f"{tree}/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write(pun)
+        git("add", "-A")
+        git("commit", "-qm", "Merge #5")
+        with open(f"{fixes}/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write(clean)
+        old = lp.git
+        def fake_git(t, *a):
+            r = subprocess.run(["git", "-C", t, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                               capture_output=True, text=True)
+            return r.returncode, r.stdout
+
+        lp.git = fake_git
+        try:
+            lp.apply_fixes(tree, fixes, ["5"])
+        finally:
+            lp.git = old
+        if git("log", "-1", "--format=%s") != "Clean #5" or "*(int*)" in open(f"{tree}/src/a.cpp").read():
+            return "landpr --fixes did not commit the cleaned source as `Clean #5`"
     return None
 
 

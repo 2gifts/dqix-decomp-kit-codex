@@ -769,9 +769,8 @@ def _mangle_arity(src, out):
         mangled = mangle.mangled_arity(name)
         if mangled is None:
             continue
-        member = name.startswith("_ZN")
-        allowed = (mangled + 1,) if name.startswith("_ZNK") else (mangled, mangled + 1) if member else (mangled,)
-        if declared not in allowed:
+        most = mangled + 1 if name.startswith("_ZN") else mangled
+        if declared > most:
             line = src.text.count("\n", 0, m.start(1)) + 1
             _hit(out, line, "MANGLE-ARITY-MISMATCH", "%s mangled %d declared %d" % (name, mangled, declared))
 
@@ -812,10 +811,13 @@ ADDRESS_LABEL = re.compile(r"(?m)^\s*(L[0-9a-fA-F]{1,4})\s*:")
 
 def _transliterated(src, out):
     regs = sorted(set(REGISTER_NAME.findall(src.text)), key=lambda r: int(r[1:]))
-    labels = ADDRESS_LABEL.findall(src.text)
-    if len(regs) >= 2 or labels:
-        line = src.text.count("\n", 0, (REGISTER_NAME.search(src.text) or ADDRESS_LABEL.search(src.text)).start()) + 1
-        _hit(out, line, "TRANSLITERATED", "registers %s, labels %s" % (",".join(regs) or "-", ",".join(labels) or "-"))
+    if len(regs) >= 2:
+        line = src.text.count("\n", 0, REGISTER_NAME.search(src.text).start()) + 1
+        _hit(out, line, "TRANSLITERATED", "registers " + ",".join(regs))
+    labels = list(ADDRESS_LABEL.finditer(src.text))
+    if labels:
+        _hit(out, src.text.count("\n", 0, labels[0].start()) + 1, "ADDRESS-LABEL",
+             ",".join(m.group(1) for m in labels))
 
 
 FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access,
@@ -916,10 +918,27 @@ def findings(text):
     return out
 
 
+ADVISORY = {"TRANSLITERATED", "VOLATILE-CAST", "VOLATILE-LOCAL", "COMPARE-MINUS-ONE", "ALIAS-REREAD",
+            "DEAD-ADDRESS-LOCAL", "SPLIT-POINTER-ADD", "MEMBER-ADDR-NULL-TEST", "SELF-ASSIGN", "MIXED-ACCESS-RELOAD",
+            "NOOP-ADDR-CAST", "SELF-STORE", "INLINE-IDENTITY", "MANGLE-ARITY-MISMATCH", "TERNARY-SELF"}
+
+
+def blocking(text):
+    return [h for h in findings(text) if h[1] not in ADVISORY]
+
+
+def gained(before, after):
+    count = lambda text: collections.Counter(k for _, k, _ in blocking(text or ""))
+    was, now = count(before), count(after)
+    return sorted(k for k in now if now[k] > was[k])
+
+
 def main():
     bad = 0
-    for p in sys.argv[1:]:
-        for line, kind, what in findings(open(p, encoding="utf-8", errors="ignore").read()):
+    only_blocking = "--blocking" in sys.argv
+    check = blocking if only_blocking else findings
+    for p in [a for a in sys.argv[1:] if a != "--blocking"]:
+        for line, kind, what in check(open(p, encoding="utf-8", errors="ignore").read()):
             print("%s:%d: %s %s" % (p, line, kind, what))
             bad += 1
     return 1 if bad else 0

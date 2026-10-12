@@ -42,15 +42,25 @@ git -C "$REPO" fetch -q origin decomp-matching
 while :; do
   { [ -e "$SP/STOP_CLEAN" ] || [ -e "$SP/FLEET_STOPPED" ]; } && break
   ROW=$(next_row) || break
-  IFS=$'\t' read -r MOD ADDR REL PRIVATE HINT < <(printf '%s\n' "$ROW")
+  IFS=$'\t' read -r MOD ADDR REL PRIVATE HINT DEST < <(printf '%s\n' "$ROW")
   F="$WORK/$MOD/$(basename "$REL")"
   mkdir -p "$(dirname "$F")"
-  BASE=$(git -C "$REPO" rev-parse "origin/decomp-matching:$REL" 2>/dev/null)
-  if [ -z "$BASE" ]; then
-    echo "$(date '+%H:%M') SKIP $ADDR not on decomp-matching: $REL" >> "$LOG"
-    continue
+  if [ -n "$DEST" ]; then
+    if [ ! -s "$REL" ]; then
+      echo "$(date '+%H:%M') SKIP $ADDR source gone: $REL" >> "$LOG"
+      continue
+    fi
+    BASE=""
+    cp "$REL" "$F"
+    cp "$REL" "$WORK/.orig_$ADDR"
+  else
+    BASE=$(git -C "$REPO" rev-parse "origin/decomp-matching:$REL" 2>/dev/null)
+    if [ -z "$BASE" ]; then
+      echo "$(date '+%H:%M') SKIP $ADDR not on decomp-matching: $REL" >> "$LOG"
+      continue
+    fi
+    git -C "$REPO" show "origin/decomp-matching:$REL" > "$F"
   fi
-  git -C "$REPO" show "origin/decomp-matching:$REL" > "$F"
   before=$(vcount "$F")
   pbefore=$(pcount "$F")
   if [ "$before" -eq 0 ] 2>/dev/null && [ "$pbefore" -eq 0 ] 2>/dev/null; then
@@ -107,8 +117,23 @@ Reply with exactly one line:
   said=$(python -c "import json,sys;print((json.load(open(sys.argv[1])).get('result') or '').strip().splitlines()[-1])" "$OUT" 2>/dev/null)
   after=$(vcount "$F")
   ORIG="$WORK/.orig_$ADDR"
-  git -C "$REPO" cat-file blob "$BASE" > "$ORIG"
-  if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | grep -q "^MATCH" \
+  [ -n "$BASE" ] && git -C "$REPO" cat-file blob "$BASE" > "$ORIG"
+  if [ -n "$DEST" ]; then
+    if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | grep -q "^MATCH" \
+       && [ -z "$(python "$KIT/plausible.py" --blocking "$F" 2>/dev/null)" ] \
+       && [ "$(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$F")" -le "$(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$REL")" ]; then
+      if [ "$DEST" = "staging" ]; then
+        _sub=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")
+        mkdir -p "$SP/staging/$_sub"
+        cp "$F" "$SP/staging/$_sub/$(basename "$REL")" && rm -f "$REL"
+      else
+        cp "$F" "$REL"
+      fi
+      v=CLEAN
+    else
+      v=BLOCKED
+    fi
+  elif python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | grep -q "^MATCH" \
      && python "$KIT/cleancheck.py" "$ORIG" "$F" "$PRIVATE" > /dev/null \
      && [ "$(pcount "$F")" -le "$pbefore" ]; then
     mkdir -p "$SP/clean/$(dirname "$REL")"
