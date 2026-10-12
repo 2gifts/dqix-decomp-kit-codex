@@ -304,7 +304,7 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$STAGE" 2>/dev/null | head -1)
   if [ -n "$f" ] && python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
     matched=$((matched+1)); v=MATCH
-    _imp=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | sort -u | tr '\n' ' ')
+    _imp=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
     _sid=$(python -c "import json;print(json.load(open(r'$OUT')).get('session_id',''))" 2>/dev/null)
     if [ -n "$_imp" ] && [ -n "$_sid" ]; then
       echo "$(date '+%H:%M') s$SLOT $ADDR MATCH carries invented constructs ($_imp) -- worker cleanup" >> "$LOG"
@@ -312,8 +312,8 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
         --resume "$_sid" --model "$MODEL" --permission-mode dontAsk --safe-mode \
         --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \
         --max-budget-usd "${CLEAN_CAP:-4}" --output-format json \
-        --allowedTools "Bash" "Write" "Read" "Edit" "Grep" "Glob" \
-        --add-dir "$SP" --add-dir "$KIT" \
+        --allowedTools "Bash(python:*)" "Write" "Read" "Edit" "Grep" "Glob" \
+        --add-dir "$SP" \
         > "$OUT.clean" 2>/dev/null < /dev/null
       _cc=$(python -c "import json;print('%.4f' % json.load(open(r'$OUT.clean'))['total_cost_usd'])" 2>/dev/null || echo "${CLEAN_CAP:-4}")
       spent=$(python -c "print(round($spent + $_cc, 4))")
@@ -321,7 +321,7 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
       if ! python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
         cp "$SP/gated/$_gsuf/$ADDR.cpp" "$f" 2>/dev/null
       fi
-      _left=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | sort -u | tr '\n' ' ')
+      _left=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
       if [ -n "$_left" ]; then
         printf '%s\t%s\t%s\t%s\n' "$(date +%F)" "$MARG" "$ADDR" "$_left" >> "$SP/wlog/suspect.tsv"
         echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- staged, listed in wlog/suspect.tsv" >> "$LOG"
