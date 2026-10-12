@@ -869,6 +869,11 @@ in the wrong place, the lever is whether the value has a name at all:
 Ask "does the target keep this in a register or on the stack?" and add or remove the NAME to match.
 
 ## BREAKING CSE — re-read what the ROM re-reads
+**A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's
+result to a local before the call (`BaseCombatStats* stats = GetBaseStats(c);`, `02069158`,
+`0206918c`; `int a = o->GetF7c(); int b = o->GetF80();`, `020bd88c`; three header accessors in place
+of a `volatile` parameter, `020dc07c`), or give the field its struct type and write the compound
+assignment: `o->flags |= 0x400;` (`021f2348`).
 **A CACHED LOCAL IS A CLAIM THAT NOTHING IN BETWEEN WROTE THAT MEMORY, and the ROM rarely makes it.**
 Re-read instead of caching whenever calls sit between the two uses: a field after three mutating
 calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the function has itself been
