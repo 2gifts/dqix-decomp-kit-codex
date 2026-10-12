@@ -856,6 +856,9 @@ is register NUMBERS around a byte value, retype it before touching anything else
   12 bytes short (`02155d54`).
 - a flag passed to a `bool` parameter is a `bool` local; an `int` converted at the call costs
   OVERGEN 16 (`ov005:021589f4`).
+- `mov rN,#0` / `blt` / `movle rN,#1` / `cmp rN,#0` is a range flag written in the body:
+  `int party = 0; if (id >= 0 && id <= 3) party = 1; if (party)`. An inline returning the test is
+  OVERGEN 4, and the same flag inside a `static inline` stops it inlining (`021e62cc`).
 - a spilled `str` of a parameter at the very front of the prologue means the parameter is `short`;
   a 0..3 range test on it as its own `static inline` taking `short` keeps the 0/1 result in r0
   instead of a conversion temp (`021da9e0`). Its reloads from that slot then carry memory edges
