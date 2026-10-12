@@ -770,7 +770,8 @@ belongs (ROM slot above `battle` => declare it before `battle`) and keep the ass
 
 `ov025:021ebb90` (4096B) 84 -> 49 in one edit. Moving the INITIALISED declaration instead drags the
 load with it and costs more than it saves. Declare EVERY spilled scalar this way, in ROM slot
-order, even ones assigned first; 12-byte struct locals follow the same rule (`02176634`, 47 -> 0).
+order, even ones assigned first; 12-byte struct locals follow the same rule (`02176634`, 47 -> 0;
+`0217df08`, a pointer declared last to take the lowest slot sp+0xc).
 
 ### A LITERAL-POOL OFFSET DIFF CAN HIDE A WRONG CONSTANT — compare the VALUES, not the offsets
 `ldr r0, [pc, #0x584] | ldr r0, [pc, #0x58c]` reads like pool-layout noise and usually is. It can
