@@ -6,6 +6,9 @@ import sys
 import kitpaths
 import regionsync
 
+sys.path.insert(0, f"{kitpaths.KIT}/pad")
+from decomment import strip
+
 KIT, SP = kitpaths.KIT, kitpaths.SP
 CLEAN = f"{SP}/clean"
 MANIFEST = f"{CLEAN}/manifest.tsv"
@@ -75,7 +78,13 @@ def green():
 def apply(tree, tip, entries):
     git(tree, "checkout", "-q", "-f", "--detach", tip)
     for rel, _, _ in entries:
-        shutil.copyfile(f"{CLEAN}/{rel}", f"{tree}/{rel}")
+        if rel.endswith((".c", ".cpp")):
+            with open(f"{CLEAN}/{rel}", encoding="utf-8") as fh:
+                text = strip(fh.read())
+            with open(f"{tree}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        else:
+            shutil.copyfile(f"{CLEAN}/{rel}", f"{tree}/{rel}")
 
 
 def write_rows(path, entries, mode):

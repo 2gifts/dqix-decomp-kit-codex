@@ -2219,6 +2219,21 @@ def _landclean_settle():
     src = open(f"{KIT}/landclean.py", encoding="utf-8").read()
     if 'write_rows(MANIFEST, [], "w")' in src or "not in done" not in src:
         return "landclean empties the whole manifest, dropping rows cleanwork appended while it ran"
+    with tempfile.TemporaryDirectory(prefix="landclean_strip_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        os.makedirs(f"{root}/clean/src", exist_ok=True)
+        os.makedirs(f"{root}/tree/src", exist_ok=True)
+        with open(f"{root}/clean/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write("// USA: func_a\nint a; // 0x70\n")
+        old, old_git = lc.CLEAN, lc.git
+        lc.CLEAN, lc.git = f"{root}/clean", lambda *a: (0, "")
+        try:
+            lc.apply(f"{root}/tree", "tip", [("src/a.cpp", "b", "")])
+        finally:
+            lc.CLEAN, lc.git = old, old_git
+        landed = open(f"{root}/tree/src/a.cpp", encoding="utf-8").read()
+        if "0x70" in landed or "// USA: func_a" not in landed:
+            return "landclean landed a rewrite with its worker comments, or lost the region tag: %r" % landed
     return None
 
 
