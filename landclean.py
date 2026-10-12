@@ -15,8 +15,9 @@ MANIFEST = f"{CLEAN}/manifest.tsv"
 LANDED = f"{CLEAN}/landed.tsv"
 REJECTED = f"{CLEAN}/rejected.tsv"
 REGIONS = ("usa", "jpn", "eur")
-USAGE = """bash landclean.sh
+USAGE = """bash landclean.sh [reviewed.txt]
 
+With reviewed.txt (one repo path per line), only those rows land; the rest stay queued.
 Lands rewritten sources of functions already on decomp-matching. $SP/clean/manifest.tsv lists
 `<repo path>\\t<blob it replaces>\\t<why>`; $SP/clean/<repo path> is the rewrite. Under the wave lock,
 from the published tip of the integration tree: drops a row whose file changed since its blob,
@@ -93,9 +94,12 @@ def write_rows(path, entries, mode):
 
 
 def main():
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 2:
         sys.exit(USAGE)
     entries = rows()
+    if len(sys.argv) == 2:
+        reviewed = {ln.strip() for ln in open(sys.argv[1], encoding="utf-8") if ln.strip()}
+        entries = [e for e in entries if e[0] in reviewed]
     if not entries:
         print("nothing to land")
         return 0
