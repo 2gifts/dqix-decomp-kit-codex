@@ -54,8 +54,7 @@ supervise.sh                     keeps pull_all alive across crashes and usage l
 ```
 
 Run by hand or from the sweeps, not from the dispatcher: `recover_sweep.sh` (zero-token harvest:
-`wgate_scratch.sh`, `synth.py`, `translate.py`, `recoverable.py`, `ov_recover.py`), `irosweep.py`
-(re-gate parked candidates with the IR optimizer switched off), `tucheck.py` (byte-compare a
+`wgate_scratch.sh`, `synth.py`, `translate.py`, `recoverable.py`, `ov_recover.py`), `tucheck.py` (byte-compare a
 multi-function translation unit against its ROM range), `proppurge.py` (re-match committed sources
 without `opt_propagation`), `poolsize.py` (unmatched count per module), `delinked.py` (exit 0 when an address lies inside a
 delinked range; `integrate_fast.sh` uses it), `plausible.py` (flag

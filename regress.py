@@ -304,37 +304,10 @@ def _r11():
     return None
 
 
-@check("r13 duplicates a pool literal for INDEXED and MEMBER uses, with element-pointer arithmetic",
-       "an array or struct global read at two sites shares one pool word and lands exactly 4 bytes "
-       "short, but r13 only matched `&data_x` -- ov023:021fa2f4 had `data_x[3].fn` and "
-       "`&data_x[idx]` and the sweep could not generate a single candidate. `&data_x[i]` also has "
-       "to cast to the ELEMENT pointer: `__typeof__(&data_x)` is T(*)[], so indexing it steps by "
-       "the whole array")
-def _r13_indexed():
-    C = load("colorsweep")
-    text = ('extern int data_ov023_021fea0c[];\nextern struct P data_020e6d5c;\n'
-            'void f(int i) {\n    data_ov023_021fea0c[3] = data_020e6d5c.a;\n'
-            '    int* d = &data_ov023_021fea0c[i];\n}\n')
-    got = dict(C.r13_dup_pool_literal(text))
-    idx = [c for l, c in got.items() if l.startswith("dupliteralidx")]
-    mem = [c for l, c in got.items() if l.startswith("dupliteralmem")]
-    amp = [c for l, c in got.items() if l.startswith("dupliteral:")]
-    if not idx:
-        return "no candidate for the `data_x[3]` use -- an indexed read owns a pool word too"
-    if not mem:
-        return "no candidate for the `data_x.field` use"
-    if not amp:
-        return "no candidate for the `&data_x[i]` use"
-    if not any("&((__typeof__(&data_ov023_021fea0c[0]))0x021FEA0C)[i]" in c for c in amp):
-        return "`&data_x[i]` was rewritten to a pointer-to-ARRAY cast; indexing that steps by the " \
-               "whole array, so the candidate is wrong even when it compiles"
-    return None
-
-
 @check("neighbours() interleaves the rules instead of concatenating them",
        "a file with many early-rule sites spent the whole budget before a later rule was scored "
-       "once: 150 compiles on ov023:021fa2f4 never reached r13, whose own candidate takes the "
-       "score from 1031 to 32. Every rule must get a turn before any rule gets a second")
+       "once: 150 compiles on ov023:021fa2f4 never reached the rule that cracked it. Every rule "
+       "must get a turn before any rule gets a second")
 def _interleaved():
     C = load("colorsweep")
     text = ('extern int data_ov023_021fea0c[];\n'
@@ -342,14 +315,13 @@ def _interleaved():
             '    int w = a + b;\n    int x = b + c;\n    int y = c + d;\n    int z = d + a;\n'
             '    int* p = &data_ov023_021fea0c[w];\n    int q = x + y + z;\n}\n')
     labels = [l for l, _ in C.neighbours(text)]
-    if not any(l.startswith("dupliteral") for l in labels):
-        return "r13 produced nothing on a text that clearly holds its shape"
-    first = next(i for i, l in enumerate(labels) if l.startswith("dupliteral"))
-    rules = len(C.RULES)
-    if first >= 2 * rules:
-        return ("the first r13 candidate is at position %d of %d; with one candidate per rule per "
-                "round it must appear within the first two rounds (%d)" % (first, len(labels),
-                                                                           2 * rules))
+    if not any(l.startswith("inline1:") for l in labels):
+        return "r22 produced nothing on a text that clearly holds its shape"
+    first = next(i for i, l in enumerate(labels) if l.startswith("inline1:"))
+    producing = sum(1 for rule in C.RULES[:-1] if rule(text))
+    if first >= producing:
+        return ("the first r22 candidate is at position %d of %d; with one candidate per rule per "
+                "round it must appear within the first round (%d)" % (first, len(labels), producing))
     return None
 
 
@@ -540,13 +512,11 @@ def _new_rules():
     return None
 
 
-@check("r43 casts a bitfield read that feeds an add, r44 splits a compound cast store",
+@check("r43 casts a bitfield read that feeds an add",
        "`add rd, rn, rm, shift` folds ONE shift and a bitfield read ends in one, so a bare "
        "`fld->flag + i * 2` folds the extract and gives the other operand the register; a (short) "
-       "cast blocks the fold and emits nothing (0218a9ec). Two writes to one word collapse to one "
-       "store under general DSE, and only a volatile store fed by a non-volatile read keeps both "
-       "of them off sp with no base register (0209a104)")
-def _r43_r44():
+       "cast blocks the fold and emits nothing (0218a9ec)")
+def _r43():
     C = load("colorsweep")
     add = ('ARM void f(Box* fld, int i)\n{\n'
            '    Sink((short)(fld->flag + i * 2 + 0x7530));\n}\n')
@@ -554,15 +524,8 @@ def _r43_r44():
     if not any("(short)fld->flag" in c for c in got):
         return "r43 never cast the bitfield read that feeds the add"
     store = '    *(unsigned int*)((char*)&rec + 4) &= 0x01ffffff;\n'
-    want = ('*(volatile unsigned int*)((char*)&rec + 4) = '
-            '*(unsigned int*)((char*)&rec + 4) & 0x01ffffff;')
-    got = [c for _t, c in C.r44_volatile_split_store(store)]
-    if not any(want in c for c in got):
-        return "r44 never split the compound cast store into a read and a volatile store"
-    if any("volatile volatile" in c for _t, c in C.r44_volatile_split_store(want + "\n")):
-        return "r44 re-qualifies a store that is already volatile"
-    if C.r44_volatile_split_store(add) or C.r43_short_cast_in_add(store):
-        return "a rule fired on a source containing none of its shape"
+    if C.r43_short_cast_in_add(store):
+        return "r43 fired on a source containing none of its shape"
     return None
 
 
@@ -613,55 +576,6 @@ def _r46():
     if C.r46_counter_position('extern "C" ARM int g(int a) {\n    int x;\n    x = a;\n'
                               '    return x;\n}\n'):
         return "r46 fires on a function whose int local is not a loop counter"
-    return None
-
-
-@check("r47 folds the second && operand of a conditional store into a ?:",
-       "A flag stored under `if (A && B)` spilled to the wrong slot and no declaration position "
-       "fixed it; `if (A) V = B ? K : V;` makes the store a compiler-temp spill, which is laid out "
-       "below the declared scalars (021ebb90, 49 -> 35)")
-def _r47():
-    C = load("colorsweep")
-    text = ('extern "C" ARM void f(struct S* e, struct T* obj) {\n'
-            '    int w = 1;\n'
-            '    if (e->mode == 1 && obj->f311 != 0) w = 0;\n'
-            '    g(w);\n}\n')
-    got = [c for _t, c in C.r47_ternary_store(text)]
-    if not any("if (e->mode == 1) w = obj->f311 != 0 ? 0 : w;" in c for c in got):
-        return "r47 never produced `if (A) V = B ? K : V;`"
-    nested = text.replace("e->mode == 1 && obj->f311 != 0", "(e->a && e->b) || obj->f311")
-    if C.r47_ternary_store(nested):
-        return "r47 split an && that is not at the top level of the condition"
-    if C.r47_ternary_store('extern "C" ARM void f(int x) {\n    int y = 1;\n'
-                           '    if (x) y = 0;\n    g(y);\n}\n'):
-        return "r47 fired on a condition with no &&"
-    return None
-
-
-@check("r48 builds a named element pointer through a static inline pointer-arithmetic helper",
-       "The ROM recomputes &obj->arr[i] for a call while ours reused the named e; every direct "
-       "CSE-breaker swapped i and e. An inline helper returning (T*)o + n hides the equality and "
-       "keeps the registers (021ebb90, 35 -> 31); a helper returning &o->arr[n] is re-CSE'd")
-def _r48():
-    C = load("colorsweep")
-    text = ('struct E;\nstruct C;\n'
-            '// USA: func_f\n'
-            'extern "C" ARM void f(struct C* obj, int i) {\n'
-            '    struct E* e = &obj->entries[i];\n'
-            '    g(e);\n'
-            '    h(&obj->entries[i]);\n}\n')
-    got = [c for _t, c in C.r48_inline_index(text)]
-    if not got:
-        return "r48 produced no candidate for `T* e = &obj->arr[i];`"
-    c = got[0]
-    if "static inline struct E* _AtR48_" not in c or "return (struct E*)o + n;" not in c:
-        return "r48 did not emit the void* pointer-arithmetic helper"
-    if "h(&obj->entries[i]);" not in c:
-        return "r48 rewrote the call's own &obj->arr[i], which is the recompute it must keep"
-    if c.index("static inline") > c.index("// USA: func_f"):
-        return "r48 put the helper between the USA tag and the function"
-    if C.r48_inline_index('extern "C" ARM void f(int* p) {\n    int* q = p + 1;\n    g(q);\n}\n'):
-        return "r48 fired on a declaration that is not &base->arr[i]"
     return None
 
 
@@ -784,29 +698,6 @@ def _r53():
     return None
 
 
-@check("r54 gives an indexed struct pointer a two-definition byte offset",
-       "The second definition of the offset flips which scratch register the value and the address "
-       "take (0219e384, 0x644); plain `+=`, locals, casts and operand order are inert")
-def _r54():
-    C = load("colorsweep")
-    text = ('// USA: func_f\n'
-            'extern "C" ARM void f(char* ov, struct E* e) {\n'
-            '    struct Slot* slot = (struct Slot*)(ov + 0x3a9c) + e->idx;\n'
-            '    g(slot);\n}\n')
-    got = C.r54_two_def_offset(text)
-    if not got:
-        return "r54 produced no candidate"
-    c = got[0][1]
-    if ("int off = e->idx;" not in c or "off *= sizeof(struct Slot);" not in c
-            or "struct Slot* slot = (struct Slot*)(ov + 0x3a9c + off);" not in c):
-        return "r54 did not render the two-definition offset"
-    if "int off2 = e->idx;" not in C.r54_two_def_offset(text.replace("g(slot);", "g(slot, off);"))[0][1]:
-        return "r54 reused a name already in the function"
-    if C.r54_two_def_offset(text.replace("(struct Slot*)(ov", "(struct Other*)(ov")):
-        return "r54 fired when the cast type differs from the declared type"
-    return None
-
-
 @check("r56 drops the trailing argument from an extern \"C\" prototype and every call to it",
        "A stale pointer left in r1 at a call means the source passed one argument fewer (ov003:02178910)")
 def _r56():
@@ -842,60 +733,6 @@ def _allman_body():
     got = dict(C.r51_short_spill(text))
     if "    short x;\n" not in got.get("shortspill:x@3", ""):
         return "r51 offered nothing on a brace-below function: %s" % sorted(got)
-    return None
-
-
-@check("r63 splits `v = e OP k;` into `v = e; v OP= k;` and leaves unsafe forms alone",
-       "A single-definition loop bound is forward-substituted; `last = shown; last -= 1;` closed "
-       "SCHED 13 (ov023:021db634)")
-def _r63():
-    C = load("colorsweep")
-    text = ('// USA: func_f\n'
-            'extern "C" ARM void f(unsigned char shown, int* a, int b)\n'
-            '{\n'
-            '    int last;\n'
-            '    int n = b * 4 + 1;\n'
-            '    last = shown - 1;\n'
-            '    b = a[0] + b;\n'
-            '    b = b >> 2;\n'
-            '    b = a[1] + 1 < b;\n'
-            '    b = g(b - 1);\n'
-            '    a[last] = n;\n'
-            '}\n')
-    got = dict(C.r63_split_assign_op(text))
-    want = {"splitop:last@5": "    last = shown;\n    last -= 1;\n",
-            "splitop:n@4": "    int n = b * 4;\n    n += 1;\n"}
-    for label, needle in want.items():
-        if needle not in got.get(label, ""):
-            return "r63 did not emit %r for %s: %s" % (needle, label, sorted(got))
-    if set(got) != set(want):
-        return "r63 split an unsafe form: %s" % sorted(set(got) - set(want))
-    return None
-
-
-@check("r62 aligns one word-aligned extern data object, preferring an array, never a function",
-       "An alignment-qualified object switches mwcc's IR optimizer off for the function (ov015:0218cc24)")
-def _r62():
-    C = load("colorsweep")
-    text = ('extern char data_021940db[];\n'
-            'extern int data_0211e33c;\n'
-            'extern "C" unsigned char data_02193d48[];\n'
-            'extern "C" void g(int x);\n'
-            '// USA: func_f\n'
-            'extern "C" ARM int f(int i) {\n'
-            '    g(i);\n'
-            '    return data_02193d48[i] + data_0211e33c + data_021940db[i];\n}\n')
-    got = C.r62_iro_align(text)
-    if len(got) != 1:
-        return "r62 produced %d candidates, want 1" % len(got)
-    new = got[0][1]
-    if 'extern "C" unsigned char data_02193d48[] __attribute__((aligned(4)));' not in new:
-        return "r62 did not align the word-aligned extern array"
-    if new.count("__attribute__") != 1:
-        return "r62 aligned more than one object"
-    if C.r62_iro_align('extern int data_0211e33c;\nextern "C" void g(int x);\n')[0][1] != \
-            'extern int data_0211e33c __attribute__((aligned(4)));\nextern "C" void g(int x);\n':
-        return "r62 did not fall back to a scalar"
     return None
 
 
@@ -1175,31 +1012,6 @@ def _r29_r34():
     return None
 
 
-@check("r12 emits the zero-accumulator form that forces a redundant copy",
-       "a whole family (02081f20, 020df77c, 0215f060, 0216f634) comes out exactly 4 bytes SHORT "
-       "because clean C lets mwcc skip a register copy the original kept. `x = 0; x = x + e;` is "
-       "the construct that makes mwcc emit `add rD,rS,#0` -- proven by the committed "
-       "SumKeyedLookups02086bf4 -- and `x = 0; x = e - x;` gives the sub form 020df77c reports")
-def _r12():
-    C = load("colorsweep")
-    text = 'ARM void f(Obj* o)\n{\n    int t = o->timer;\n    o->x = t;\n}\n'
-    got = dict(C.r12_zero_accumulator(text))
-    if not got:
-        return "no candidate produced (DECL is anchored ^...$ without re.M -- feed it one line)"
-    plus = got.get("zeroacc+:t", "")
-    minus = got.get("zeroacc-:t", "")
-    if "int t = 0;" not in plus or "t = t + o->timer;" not in plus:
-        return "the add form is not `T x = 0;` + `x = x + e;`"
-    if "t = o->timer - t;" not in minus:
-        return "the sub form is missing; 020df77c needs `sub rD,rS,#0`"
-    # must not fire on pointers or floats, where adding zero is not the same rewrite
-    for bad in ('    char* p = o->name;\n', '    float f = o->rate;\n'):
-        t2 = 'ARM void f(Obj* o)\n{\n' + bad + '}\n'
-        if C.r12_zero_accumulator(t2):
-            return "fired on a non-integer declaration: %r" % bad.strip()
-    return None
-
-
 @check("r4 swaps same-type and bare declarations, not just differing initialised ones",
        "`_independent` counted every identifier left of `=` as WRITTEN, which for a declaration "
        "includes the type: `int a = 1;` and `int b = 2;` both wrote `int`, intersected, and were "
@@ -1260,26 +1072,6 @@ def _r4_preserves_record_layout():
         return "lost method-local pair"
     if any("    int first;\n    int second;" not in c for _, c in candidates):
         return "changed method owner's member layout"
-    return None
-
-
-@check("r41 folds the -1 form back to 0 as well as away from it",
-       "the rule shipped one-way, generating only `x >= 0` -> `x > -1`. The sweep hill-climbs from "
-       "OUR source toward the ROM, so the direction it needs most is removing an `mvn` our source "
-       "carries and the ROM does not -- main:02081f20 sat at 23 bytes on exactly that and no rule "
-       "could reach it")
-def _r41_both_ways():
-    C = load("colorsweep")
-    text = ('ARM void f(Obj* o)\n{\n    if (o->timer <= -1) {\n        o->timer = o->b;\n'
-            '    }\n    if (o->a > -1) {\n        g();\n    }\n    if (o->c < 0) {\n'
-            '        h();\n    }\n}\n')
-    got = [c for _t, c in C.r41_nonfoldable_constant(text)]
-    if not any("o->timer < 0" in c for c in got):
-        return "`x <= -1` was never folded to `x < 0`"
-    if not any("o->a >= 0" in c for c in got):
-        return "`x > -1` was never folded to `x >= 0`"
-    if not any("o->c <= -1" in c for c in got):
-        return "the original `x < 0` -> `x <= -1` direction was lost"
     return None
 
 
@@ -1844,16 +1636,8 @@ FUNCTIONAL = [
     ("main", "02065990", "regress_fixtures/InPlaceField5_02065990.cpp", "MATCH", 60,
      "inplace+fold: the copy's shift folded into its initialiser closes the last one-shift fold; the "
      "prior is r52's output, since from the 40-byte one the first level alone exceeds the budget"),
-    ("017", "0219e384", "regress_fixtures/TwoDefOffset_0219e384.cpp", "MATCH", 60,
-     "twodefoff: an indexed struct pointer built from a two-definition byte offset gives the index "
-     "the lower scratch register"),
-    ("031", "02223b1c", "regress_fixtures/ReleaseHandle_02223b1c.cpp", "MATCH", 60,
-     "dupliteral: an absolute-address constant emits the SECOND pool word mwcc folds away"),
     ("017", "021bd5d0", "regress_fixtures/SyncCombatantFlagAndDispatch_021bd5d0.cpp", "MATCH", 150,
      "declmove: one non-adjacent declaration move fixes the register ladder that decides stm fusion"),
-    ("main", "02097280", "regress_fixtures/NullPointerDiffIndex_02097280.cpp", "MATCH", 150,
-     "nullptrdiff: `(int)(p - (char *)0)` is the only unfolded `sub Rd, Rs, #0`, and the binding's "
-     "position in the declaration run decides which register the copy lands in"),
     ("main", "0205f9cc", "regress_fixtures/AllocateAndInsertTimedNode_0205f9cc.cpp", "MATCH", 400,
      "mlaacc: binding a multiply-accumulate's MULTIPLICAND to the result local reverses the operand "
      "load order and stops the destination reusing the addend's register, then declmove colours it"),
@@ -1881,12 +1665,6 @@ FUNCTIONAL = [
     ("main", "02037d88", "regress_fixtures/HandleCombatantTick_02037d88.cpp", "MATCH", 250,
      "callmove: which call runs first decides who owns the callee-saved register for the rest of "
      "the block, and the move has to be allowed to hop a braced dispatch"),
-    ("main", "0202b900", "regress_fixtures/PtrSplit_0202b900.cpp", "MATCH", 60,
-     "ptrsplit: a loop-invariant address bound in one expression is hoisted ahead of the "
-     "neighbouring loads; splitting the bind from the advance puts the `add` back"),
-    ("main", "0209c840", "regress_fixtures/NoFold_0209c840.cpp", "MATCH", 60,
-     "nofold: `>= 0` folds into a cmp immediate and `> -1` cannot, so the ROM's extra `mvn` comes "
-     "back -- same test, one more instruction"),
     ("main", "02053634", "regress_fixtures/BindCall_02053634.cpp", "MATCH", 90,
      "bindcall: a call left inline in a compare always takes Rm, for BOTH operand orders; naming "
      "the result restores left-to-right placement"),
@@ -1896,13 +1674,6 @@ FUNCTIONAL = [
     ("main", "02002b90", "regress_fixtures/GuardedDoWhile_02002b90.cpp", "MATCH", 60,
      "dowhile: mwcc does not rotate loops -- a `while` emits a branch to a bottom test and never "
      "becomes the ROM's top-tested do-while, so the guarded form has to be written directly"),
-    ("main", "020cdfd8", "regress_fixtures/VolatileAlias_020cdfd8.cpp", "MATCH", 60,
-     "volalias: reading a pointer's fields through a `const volatile` alias forbids mwcc reordering "
-     "two loads against each other. The alias is on a PARAMETER, which the first cut of the rule "
-     "could not see -- so it could not reproduce the crack it was derived from"),
-    ("023", "021db634", "regress_fixtures/SplitLoopBound_021db634.cpp", "MATCH", 60,
-     "splitop: `last = shown; last -= 1;` gives a single-definition loop bound a second definition, "
-     "so it is not forward-substituted and i2 = 0 schedules first"),
     ("023", "021ddc98", "regress_fixtures/ShortCanvasX_021ddc98.cpp", "MATCH", 60,
      "shortspill on a brace-below function: `short x` loads with ldrsh into the product temp; the "
      "prior already loads x before y, since neither step alone moves the score"),
