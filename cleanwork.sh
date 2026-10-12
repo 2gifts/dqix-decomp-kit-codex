@@ -32,7 +32,6 @@ while IFS=$'\t' read -r -u 3 MOD ADDR REL PRIVATE HINT; do
     continue
   fi
   git -C "$REPO" show "origin/decomp-matching:$REL" > "$F"
-  cp "$F" "$F.orig"
   before=$(vcount "$F")
   pbefore=$(pcount "$F")
   if [ "$before" -eq 0 ] 2>/dev/null; then
@@ -66,6 +65,8 @@ grep -n -A60 '<heading>' $KIT/worker_src/core.md.
 ${DOC:+Module recipes: $DOC.}
 Target listing: python $KIT/wlist.py $MOD $ADDR
 Gate after every edit: python $KIT/wgate.py $MOD $ADDR $F
+Shell commands are allowlisted one at a time: run each command exactly as written above, alone,
+with these absolute paths -- no cd, no &&, no ;, no pipes, no cat. Read files with the Read tool.
 Edit only $F. When the gate prints STOP, stop.
 If a construct replaced a volatile, append ONE tab-separated line to $SP/wlog/levers.tsv:
 ${ADDR}<TAB><size><TAB><bytes off without the volatile><TAB><the construct that replaced it>
@@ -85,8 +86,10 @@ Reply with exactly one line:
   cost=$(python -c "import json,sys;print('%.4f' % json.load(open(sys.argv[1]))['total_cost_usd'])" "$OUT" 2>/dev/null || echo "$CAP")
   said=$(python -c "import json,sys;print((json.load(open(sys.argv[1])).get('result') or '').strip().splitlines()[-1])" "$OUT" 2>/dev/null)
   after=$(vcount "$F")
+  ORIG="$WORK/.orig_$ADDR"
+  git -C "$REPO" cat-file blob "$BASE" > "$ORIG"
   if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | tail -1 | grep -q "^MATCH" \
-     && python "$KIT/cleancheck.py" "$F.orig" "$F" "$PRIVATE" > /dev/null \
+     && python "$KIT/cleancheck.py" "$ORIG" "$F" "$PRIVATE" > /dev/null \
      && [ "$(pcount "$F")" -le "$pbefore" ]; then
     mkdir -p "$SP/clean/$(dirname "$REL")"
     cp "$F" "$SP/clean/$REL"
