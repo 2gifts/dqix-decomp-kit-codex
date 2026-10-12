@@ -3020,6 +3020,21 @@ def _plausible_const_volatile():
     return None
 
 
+@check("plausible.py flags a volatile cast on ordinary data and not on a hardware address",
+       "`*(volatile unsigned char*)&entry->id` in 021e7cec forced a reload no developer wrote, and passed "
+       "plausible.py because only volatile locals were checked")
+def _plausible_volatile_cast():
+    P = load("plausible")
+    bad = "void f(E* e) {\n    unsigned char id = *(volatile unsigned char*)&e->id;\n}\n"
+    good = ("void g(int i) {\n    *(volatile unsigned int*)0x4000488 = 1;\n"
+            "    ((volatile int*)0x27ffdc4)[i] = 0;\n}\n")
+    if "VOLATILE-CAST" not in repr(P.findings(bad)):
+        return "plausible.py did not flag a volatile cast on a struct field"
+    if "VOLATILE" in repr(P.findings(good)):
+        return "plausible.py flagged a volatile hardware or shared-memory access: %r" % P.findings(good)
+    return None
+
+
 @check("colorforce, schedforce and renum read the size argument the same way",
        "schedforce parsed the size as hex while colorforce took decimal, so the plan's 'same "
        "arguments' run read 2816 as 0x2816 and crashed in struct.unpack on ov000:02165490")

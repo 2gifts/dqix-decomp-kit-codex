@@ -7,7 +7,9 @@ blocker.py records a miss on a flagged file as IMPLAUSIBLE; pad/evo_score.py pen
 import re
 import sys
 
-HW = re.compile(r"\(\s*volatile[^)]*\*\s*\)\s*0x0?4[0-9a-fA-F]{6}\b")
+HWADDR = r"0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b"
+HW = re.compile(r"\(\s*volatile[^)]*\*\s*\)\s*" + HWADDR)
+VCAST = re.compile(r"\((?:\s*const)?\s*volatile\b[^()]*\*\s*\)|\([^()]*\bvolatile\s*\*+\s*\)")
 IDENT = r"[A-Za-z_]\w*"
 
 
@@ -29,6 +31,11 @@ def findings(text):
         m = re.match(r"^\s+(?:const\s+)?volatile\s+[^;(]*?\b(%s)\s*(=\s*([^;]+))?;" % IDENT, ln)
         if m and not (m.group(3) and HW.search(ln)):
             out.append((i + 1, "VOLATILE-LOCAL", m.group(1)))
+
+        if not ln.lstrip().startswith("#"):
+            for m in VCAST.finditer(ln):
+                if not re.match(r"[\s(]*" + HWADDR, ln[m.end():]):
+                    out.append((i + 1, "VOLATILE-CAST", m.group(0)))
 
         m = re.match(r"^\s+(?:const\s+)?(?:struct\s+)?%s\s*\*+\s*(%s)\s*=\s*&[^;]+;\s*$" % (IDENT, IDENT), ln)
         if m:
