@@ -71,7 +71,9 @@ Reply with exactly one line:
     --model "$MODEL" --permission-mode dontAsk --safe-mode --autocompact auto \
     --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \
     --max-budget-usd "$CAP" --output-format json \
-    --allowedTools "Bash(python:*)" "Bash(grep:*)" "Write" "Read" "Edit" "Grep" "Glob" \
+    --allowedTools "Bash(python $KIT/wgate.py:*)" "Bash(python $KIT/wlist.py:*)" "Bash(python $KIT/wdiff.py:*)" \
+      "Bash(python $KIT/plausible.py:*)" "Bash(python $KIT/colorsweep.py:*)" "Bash(grep:*)" \
+      "Write" "Read" "Edit" "Grep" "Glob" \
     --add-dir "$SP" \
     > "$OUT" 2>/dev/null < /dev/null
   cd "$KIT" || exit 1
