@@ -1,0 +1,4 @@
+{"functions":[{"module":"main","addr":"02040c2c","verdict":"MATCH","residue":"","size":796,
+"file":"/home/user/dqix-kit-state/wip/main/02040c2c.cpp","description":"combat child update with timer-gated dispatch",
+"lever":"read the compared limit (f88 / limit_c0) through an inline getter that copies into a local: self->timer < a->GetLimit() gives the ROM's load order (limit first) with cmp timer,limit; bhs","lever_bytes":12,
+"notes":"Plain `limit > timer`, `timer < limit`, named locals, signedness changes and a getter on timer were all inert (core.md 'AN OPERAND ORDER THAT DRAGS ITS REGISTERS ALONG'). Also fixed: GetField0x78/GetPtrField0x58 are C++ mangled (dropped extern \"C\"), renamed definition to func_02040c2c, removed a stray brace block."}]}

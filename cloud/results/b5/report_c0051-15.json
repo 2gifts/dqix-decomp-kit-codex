@@ -1,0 +1,3 @@
+{"functions":[{"module":"004","addr":"0215fdfc","verdict":"MATCH","residue":"","size":1344,
+"file":"/home/user/dqix-kit-state/wip/ov004/0215fdfc.cpp","description":"Combat command cursor advance and setup",
+"lever":"entry-search loop with int e and (unsigned char) casts, key as v & 0xff, if/!= 0 form for the flag-table stores","lever_bytes":8,"notes":""}]}

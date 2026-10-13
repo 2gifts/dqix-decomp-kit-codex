@@ -1,0 +1,1 @@
+{"functions":[{"module":"005","addr":"0215c530","verdict":"MATCH","residue":"","size":1564,"file":"/home/user/dqix-kit-state/wip/ov005/0215c530.cpp","description":"Inventory tab sort and rebuild handler","lever":"count as int instead of short, id as short, container pointer via char* offset from sub","lever_bytes":0,"notes":""}]}

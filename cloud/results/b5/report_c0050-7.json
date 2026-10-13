@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"020aeb34","verdict":"MATCH","residue":"","size":720,
+"file":"/home/user/dqix-kit-state/wip/main/020aeb34.cpp","description":"rotate four entries around jittered orbit angle",
+"lever":"declare list before arr and head last (swaps r4/r8); rename definition to func_020aeb34; route func_020c3260/32f8 long long results through func_0200c700 instead of a float cast","lever_bytes":5,"notes":"Raw offsets replaced with typed structs (Ov017State, Obj0201b600.angle, Entry_203dce4.child, S02040538); zero raw casted reads."}]}

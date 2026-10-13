@@ -1,0 +1,29 @@
+025	021ea604	852	MATCH	
+main	02099304	568	RESIDUE	RESIDUE SCHED 4 same instructions, different order over 2 site(s)
+003	02170d88	1816	RESIDUE	RESIDUE UNDERGEN 4 0x714 vs slot 0x718
+main	02015ae4	492	MATCH	
+main	02024000	636	RESIDUE	RESIDUE UNDERGEN 4 0x278 vs slot 0x27c
+main	020a8fd0	696	RESIDUE	RESIDUE REGPERM 65 r8->sb r7->r5 r5->r7 sb->r8 r4->r5 r5->r4
+main	020aeb34	720	MATCH	
+main	02074c18	572	RESIDUE	RESIDUE SCHED 6 same instructions, different order over 2 site(s)
+main	02074e54	572	RESIDUE	RESIDUE SCHED 6 same instructions, different order over 2 site(s)
+main	02040c2c	796	MATCH	
+main	0207fe80	636	RESIDUE	RESIDUE REGPERM 9 r5->r3 r3->r5
+002	0215a0a4	1460	RESIDUE	RESIDUE SCHED 8 same instructions, different order over 4 site(s)
+017	0218d2f0	456	MATCH	
+main	0201a300	768	RESIDUE	RESIDUE SHAPE 8 0x24c add r0, sb, #0x18 | mov r1, r8
+004	0215fdfc	1344	MATCH	
+004	02165f2c	456	RESIDUE	RESIDUE SCHED 52 same instructions, different order over 39 site(s)
+main	0204fd00	704	RESIDUE	RESIDUE SHAPE 44 0x144 stm sp, {r8, sb} | ldr r0, [sp, #0xc]; 0x148 ldr r0, [sp, #0x14] | mov r1, r5; 0x154 mov r3, r7 | stm sp, {r8, sb}
+main	020b1b54	500	RESIDUE	RESIDUE UNDERGEN 8 0x1ec vs slot 0x1f4
+main	020ab314	704	RESIDUE	RESIDUE REGPERM 10 r5->r8 r8->r5
+006	0215c154	1324	RESIDUE	RESIDUE SCHED 10 same instructions, different order over 3 site(s)
+003	0217cf10	1580	RESIDUE	RESIDUE SHAPE 11 0x64 bics r0, r0, #0 | cmp r0, #0
+main	0208bb78	788	RESIDUE	RESIDUE REGPERM 13 r8->r7 r7->r8
+000	0215833c	428	RESIDUE	RESIDUE REGPERM 14 r5->r4 r4->r5
+001	0215657c	584	RESIDUE	RESIDUE SCHED 17 same instructions, different order over 6 site(s)
+main	0203f98c	668	RESIDUE	RESIDUE SCHED 17 same instructions, different order over 10 site(s)
+006	0215c680	1520	RESIDUE	RESIDUE SCHED 18 same instructions, different order over 5 site(s)
+017	021b06b0	580	RESIDUE	RESIDUE SCHED 18 same instructions, different order over 8 site(s)
+005	0215c530	1564	MATCH	
+015	021934f8	2008	RESIDUE	RESIDUE SHAPE 20 0x2a8 mov r0, #0 | ldr r0, [pc, #0x508]; 0x2ac str r0, [sp, #0x20] | ldr r1, [pc, #0x508]; 0x2b0 ldr r0, [pc, #0x500] | mov r3, #0

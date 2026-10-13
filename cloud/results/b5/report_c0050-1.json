@@ -1,0 +1,3 @@
+{"functions":[{"module":"025","addr":"021ea604","verdict":"MATCH","residue":"","size":852,
+"file":"/home/user/dqix-kit-state/wip/ov025/021ea604.cpp","description":"combat action display actor side update",
+"lever":"inner loop: keep the node pointer and test other->id twice (instead of an int otherId local) with a literal-0 flag init; outer flag init as literal 0/1","lever_bytes":2,"notes":"An int local for the loaded id let mwcc fold 'x=0; if(c) x=1;' into if/else form (UNDERGEN 8); reading the field through the node pointer kept the preinit mov #0 / movle #1 shape. 20 gate runs."}]}

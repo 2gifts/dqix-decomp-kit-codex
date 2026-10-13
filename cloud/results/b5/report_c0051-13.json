@@ -1,0 +1,4 @@
+{"functions":[{"module":"017","addr":"0218d2f0","verdict":"MATCH","residue":"","size":456,
+"file":"/home/user/dqix-kit-state/wip/ov017/0218d2f0.cpp","description":"revive, cure and restore party HP/MP",
+"lever":"boolean parameters revive, cure, all typed unsigned char instead of int (fixed prologue spill order)","lever_bytes":8,
+"notes":"ClearFieldBit02053fe4 callee switched to the committed extern \"C\" _Z21ClearFieldBit02053fe4P9T02053fe4 name (the ii-mangled C++ declaration is UNDEF-SYM); colorsweep --apply gave no change; 18 gate runs"}]}
