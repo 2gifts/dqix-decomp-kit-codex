@@ -2411,6 +2411,15 @@ def _implausible_blocks():
     return None
 
 
+@check("buildcfg falls back to the default assembler flags when a configure.py defines none",
+       "wgate.py crashed on eakeys/text because that branch's configure.py has no AS_FLAGS")
+def _buildcfg_as_flags():
+    src = open(f"{KIT}/buildcfg.py", encoding="utf-8").read()
+    if "_cfg.AS_FLAGS.split()" in src or 'getattr(_cfg, "AS_FLAGS"' not in src:
+        return "buildcfg.py still requires configure.py to define AS_FLAGS"
+    return None
+
+
 @check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
        "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
        "rewrite plus one gate settles")

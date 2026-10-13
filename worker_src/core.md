@@ -35,7 +35,7 @@ Every `wgate` run ends with `RESIDUE <CLASS> <metric> <detail>`. Route on it:
 | `OVERGEN` / `UNDERGEN` | wrong length | no colouring rewrite can help while the size is wrong — fix the shape first |
 | `LOOP-SHAPE` | branch targets differ | a loop/guard is built differently. Declaration order is INERT here |
 | `REGPERM` | only register numbers differ | `colorsweep --apply`, then recipe #9 (callee-saved) or #15 (scratch) |
-| `SCHED` | same instructions, different order | move the DEFINITION, do not renumber. `colorsweep --apply` generates these |
+| `SCHED` | same instructions, different order | move the DEFINITION, do not renumber. `colorsweep --apply` generates these. A store and a `mov` swapped near a spilled parameter: narrow that parameter's type (`int` -> `unsigned char`/`short`, TYPE WIDTH IS A REGALLOC LEVER, `021df924`) |
 | `OPERAND` | same mnemonics, different immediates/offsets | check offsets and constants (#4) |
 | `SHAPE` | mnemonics differ | the C construct is wrong. Do NOT permute declarations |
 

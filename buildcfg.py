@@ -62,7 +62,7 @@ DECOMP_ME_COMPILER = _cfg.DECOMP_ME_COMPILER
 COMPILER_ROOT = os.path.normpath(os.path.join(REPO, str(_cfg.mwcc_root)))
 CC = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwccarm.exe"
 AS = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwasmarm.exe"
-AS_FLAGS = _cfg.AS_FLAGS.split()
+AS_FLAGS = getattr(_cfg, "AS_FLAGS", "-proc arm5TE").split()
 FLAGS = (_cfg.CC_FLAGS + " " + _cfg.CC_INCLUDES + " " + _mwcc_defines(_cfg)).split()
 from pragmas import CODEGEN_PRAGMA
 
