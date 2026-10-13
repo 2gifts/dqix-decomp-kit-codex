@@ -1,0 +1,1 @@
+{"functions":[{"module":"000","addr":"0215ed8c","verdict":"MATCH","residue":"","size":688,"file":"/home/user/dqix-kit-state/wip/ov000/0215ed8c.cpp","description":"assign combat units to species groups","lever":"table declared as Container02070e60* (&data_->table_.container_) instead of UnitTable*","lever_bytes":5,"notes":""}]}

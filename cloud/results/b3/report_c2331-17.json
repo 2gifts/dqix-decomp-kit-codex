@@ -1,0 +1,3 @@
+{"functions":[{"module":"017","addr":"021b688c","verdict":"MATCH","residue":"","size":696,
+"file":"/home/user/dqix-kit-state/wip/ov017/021b688c.cpp","description":"menu overlay state machine update",
+"lever":"call BlankFunction02094b34 with 5 args via extern C mangled name; swap operand order of DISPCNT read-modify-write","lever_bytes":11,"notes":""}]}

@@ -1,0 +1,61 @@
+main	02024000	636	RESIDUE	RESIDUE UNDERGEN 4 0x278 vs slot 0x27c
+main	02058750	616	RESIDUE	RESIDUE SHAPE 73 0xb0 and r2, r1, #0x3e0 | sub r0, r2, r0; 0xb4 sub r0, r7, r0 | and r2, r1, #0x3e0; 0xb8 and r7, r3, #0x3e0 | str r2, [sp, #4]
+main	0205da88	640	RESIDUE	RESIDUE SHAPE 69 0xf4 mov r1, fp | str r0, [sp, #0xc]; 0xf8 mov r3, r8 | ldrsh sb, [r5, #0xc0]; 0xfc str r0, [sp, #0xc] | ldr r2, [sp, #0xc]
+main	0207fe80	636	RESIDUE	RESIDUE OVERGEN 8 0x284 vs slot 0x27c
+main	020beed8	624	RESIDUE	RESIDUE UNDERGEN 20 0x25c vs slot 0x270
+main	020e0028	600	RESIDUE	RESIDUE SCHED 52 same instructions, different order over 36 site(s)
+025	021e7890	620	RESIDUE	RESIDUE REGPERM 27 sb->r4 r4->sl r5->sb sl->r5 r1->r4 lr->ip
+main	020c0e9c	640	RESIDUE	RESIDUE OVERGEN 104 0x2e8 vs slot 0x280
+main	020800fc	624	MATCH	
+main	0203f98c	668	RESIDUE	RESIDUE SCHED 17 same instructions, different order over 10 site(s)
+main	020995f8	656	RESIDUE	RESIDUE SCHED 49 same instructions, different order over 18 site(s)
+main	020a8fd0	696	RESIDUE	RESIDUE UNDERGEN 4 0x2b4 vs slot 0x2b8
+000	0215ed8c	688	MATCH	
+000	02170538	696	RESIDUE	RESIDUE SHAPE 44 0x230 add r0, r7, #0x10 | mov r2, #3; 0x234 mov r2, #3 | add r0, r7, r0
+001	0215ca4c	656	RESIDUE	RESIDUE UNDERGEN 16 0x280 vs slot 0x290
+001	02162a90	684	RESIDUE	RESIDUE SCHED 226 same instructions, different order over 87 site(s)
+017	021b688c	696	MATCH	
+main	020df374	676	RESIDUE	RESIDUE SHAPE 315 0xc mov sb, r1 | ldr r0, [sp, #0x48]; 0x10 ldr fp, [sp, #0x40] | mov sb, r1; 0x14 ldr r0, [sp, #0x48] | mov r8, r2
+main	0204fd00	704	RESIDUE	RESIDUE UNDERGEN 8 0x2b8 vs slot 0x2c0
+main	02071874	708	RESIDUE	RESIDUE SHAPE 35 0x248 str r0, [sp, #0xc] | add r0, r5, #0x40; 0x24c add r0, r5, #0x40 | str r1, [sp, #0xc]; 0x254 lsl r2, r0, #0x18 | ldr r2, [sp, #0x10]
+main	020aeb34	720	RESIDUE	RESIDUE REGPERM 5 r4->r8 r8->r4
+025	021e7b74	704	RESIDUE	RESIDUE REGPERM 26 r4->sl sl->r4 r1->r4 lr->ip ip->r1 r6->sb
+main	020ab314	704	RESIDUE	RESIDUE REGPERM 10 r5->r8 r8->r5
+025	021dbe10	712	MATCH	
+main	0201a300	768	RESIDUE	RESIDUE SHAPE 8 0x24c add r0, sb, #0x18 | mov r1, r8
+main	02040c2c	796	RESIDUE	RESIDUE SHAPE 6 0x8c bhs #0x21c | bls #0x21c; 0x1b4 bhs #0x21c | bls #0x21c
+main	02050100	768	RESIDUE	RESIDUE SHAPE 213 0xa8 asr r3, r0, #0x10 | lsl r0, r0, #0x13; 0xac lsl r1, r1, #0x13 | asr r1, r1, #0x10; 0xb4 add r1, r0, r0, lsr #31 | sub r3, r1, #0xd
+main	0208bb78	788	RESIDUE	RESIDUE REGPERM 13 r8->r7 r7->r8
+main	020b20b0	760	RESIDUE	RESIDUE UNDERGEN 64 0x2b8 vs slot 0x2f8
+001	0215f3fc	836	RESIDUE	RESIDUE SCHED 68 same instructions, different order over 56 site(s)
+025	021ea604	852	RESIDUE	RESIDUE OPERAND 2 0x84 mov r1, #0 | mov r1, sl
+main	0205e57c	596	RESIDUE	RESIDUE SCHED 41 same instructions, different order over 25 site(s)
+main	0204f174	584	RESIDUE	RESIDUE LOOP-SHAPE 218 2 branch target(s) differ, first at 0x68
+001	0215657c	584	RESIDUE	RESIDUE SCHED 17 same instructions, different order over 6 site(s)
+main	020459b8	584	RESIDUE	RESIDUE SCHED 74 same instructions, different order over 22 site(s)
+017	021b06b0	580	RESIDUE	RESIDUE SCHED 18 same instructions, different order over 8 site(s)
+main	020b1300	576	RESIDUE	RESIDUE UNDERGEN 52 0x20c vs slot 0x240
+main	02074c18	572	RESIDUE	RESIDUE SCHED 6 same instructions, different order over 2 site(s)
+main	02074e54	572	RESIDUE	RESIDUE SCHED 6 same instructions, different order over 2 site(s)
+main	02099304	568	RESIDUE	RESIDUE SCHED 4 same instructions, different order over 2 site(s)
+main	020d39dc	556	RESIDUE	RESIDUE SHAPE 59 0x10c add r0, r4, #0x50 | and r0, r2, r0; 0x110 and r1, r3, r1 | orr r0, r0, r1, lsr #12; 0x114 orr r1, r1, r2, lsr #12 | str r0, [sp, #0x14]
+main	02023b5c	552	RESIDUE	RESIDUE SCHED 21 same instructions, different order over 12 site(s)
+main	02015cd0	548	RESIDUE	RESIDUE LOOP-SHAPE 176 1 branch target(s) differ, first at 0x40
+main	0204e1c8	536	RESIDUE	RESIDUE SHAPE 270 0x18 str r4, [sp, #0x3c] | ldr sb, [sp, #0x40]; 0x1c ldr sb, [sp, #0x40] | str r4, [sp, #0x3c]; 0x2c mov r7, #0 | str r4, [sp, #8]
+000	0216dbf0	528	RESIDUE	RESIDUE SCHED 26 same instructions, different order over 15 site(s)
+main	020b16d8	528	RESIDUE	RESIDUE UNDERGEN 116 0x19c vs slot 0x210
+main	020adda4	516	RESIDUE	RESIDUE SHAPE 28 0xfc ldr r2, [sp, #0x28] | rsb r0, r0, #0; 0x100 rsb lr, r3, #0 | str r0, [sp, #0x3c]; 0x108 rsb ip, r2, #0 | ldr r2, [sp, #0x28]
+main	020a1180	512	RESIDUE	RESIDUE SHAPE 34 0x28 ldr r3, [pc, #0x1c0] | rsb r1, r1, #0; 0x2c rsb r2, r2, #0 | ldr r2, [sp]; 0x30 ldr r5, [sp] | and r0, r0, r1, lsr #23
+main	020e1780	508	RESIDUE	RESIDUE LOOP-SHAPE 280 1 branch target(s) differ, first at 0x114
+main	0205c96c	500	RESIDUE	RESIDUE OPERAND 38 0x10 mov fp, r1 | mov sb, r1; 0x40 str r0, [sp, #0x1c] | str r0, [sp, #0x24]; 0x4c cmp fp, #0 | cmp sb, #0
+main	020b1b54	500	RESIDUE	RESIDUE UNDERGEN 8 0x1ec vs slot 0x1f4
+main	02015ae4	492	RESIDUE	RESIDUE UNDERGEN 4 0x1e8 vs slot 0x1ec
+004	02165f2c	456	RESIDUE	RESIDUE UNDERGEN 8 0x1c0 vs slot 0x1c8
+017	0218d2f0	456	RESIDUE	RESIDUE SCHED 8 same instructions, different order over 2 site(s)
+main	0205b36c	452	RESIDUE	RESIDUE LOOP-SHAPE 172 1 branch target(s) differ, first at 0x1ac
+main	0201c1f8	428	RESIDUE	RESIDUE SCHED 34 same instructions, different order over 14 site(s)
+000	0215833c	428	RESIDUE	RESIDUE REGPERM 14 r5->r4 r4->r5
+main	020b19b8	412	RESIDUE	RESIDUE UNDERGEN 24 0x184 vs slot 0x19c
+main	0205b890	412	RESIDUE	RESIDUE SCHED 151 same instructions, different order over 76 site(s)
+main	020b1540	408	RESIDUE	RESIDUE UNDERGEN 36 0x174 vs slot 0x198
+main	0204e038	400	RESIDUE	RESIDUE SHAPE 119 0x18 str r4, [sp, #0x3c] | ldr sb, [sp, #0x44]; 0x1c ldr r4, [sp, #0x40] | str r4, [sp, #0x3c]; 0x20 str r4, [sp, #0x40] | ldr r4, [sp, #0x40]
