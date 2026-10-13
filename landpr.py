@@ -5,6 +5,7 @@
 --fixes DIR overlays DIR's files (repo-relative paths, e.g. our cleaned versions of a pull request's flagged
 sources) on the merged tree and commits them as `Clean #N` before prready.py runs. DIR/DROP lists repo paths
 still implausible: each is removed with its delinks blocks (`Hold ... from #N`) and waits for cleanwork.
+A merge conflict in a file DIR replaces is resolved to DIR's version.
 In the integration tree, from the published tip: merges each pull request head as `Merge #N` (a
 conflict only in delinks.txt, where both sides added blocks, keeps both), refuses symbolic links, strips
 comments from the source it changed, requires `prready.py decomp` READY, ports between the regions
@@ -52,6 +53,18 @@ def fetch(tree, ref):
     if code:
         refuse(f"git fetch {ref}: {out.strip()[-200:]}")
     return git(tree, "rev-parse", "FETCH_HEAD")[1].strip()
+
+
+def take_fixes(tree, fixes):
+    for path in git(tree, "diff", "--name-only", "--diff-filter=U")[1].split():
+        src = os.path.join(fixes, path)
+        if os.path.isfile(src):
+            with open(src, encoding="utf-8") as fh, open(f"{tree}/{path}", "w", encoding="utf-8", newline="\n") as out:
+                out.write(fh.read())
+            git(tree, "add", "--", path)
+    if git(tree, "diff", "--name-only", "--diff-filter=U")[1].split():
+        return False
+    return git(tree, "commit", "-q", "--no-edit")[0] == 0
 
 
 def keep_both_delinks(tree, head):
@@ -171,7 +184,7 @@ def main():
             refuse(f"#{n} adds symbolic links: {', '.join(links)}")
     for n, head in heads.items():
         code, out = git(tree, "merge", "--no-ff", "-m", f"Merge #{n}", head)
-        if code and not keep_both_delinks(tree, head):
+        if code and not (fixes and take_fixes(tree, fixes)) and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
     if fixes:

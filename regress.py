@@ -2408,6 +2408,27 @@ def _implausible_blocks():
         links = open(f"{tree}/config/usa/delinks.txt", encoding="utf-8").read()
         if os.path.exists(f"{tree}/src/b.cpp") or "src/b.cpp" in links or "src/a.cpp" not in links:
             return "landpr --fixes DROP did not remove the held file and only its delinks block"
+        os.unlink(f"{fixes}/DROP")
+        git("checkout", "-qb", "pr")
+        with open(f"{tree}/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write("struct Unused {};\n" + clean)
+        git("commit", "-qam", "theirs")
+        git("checkout", "-q", "main")
+        with open(f"{tree}/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write("struct Other {};\n" + clean)
+        git("commit", "-qam", "ours")
+        with open(f"{fixes}/src/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write(clean)
+        lp.git = fake_git
+        try:
+            code = fake_git(tree, "merge", "--no-ff", "-m", "Merge #7", "pr")[0]
+            took = code and lp.take_fixes(tree, fixes)
+        finally:
+            lp.git = old
+        if not code or not took or git("rev-parse", "HEAD^2") != git("rev-parse", "pr"):
+            return "landpr --fixes did not resolve a conflict in a file it replaces with the fixed version"
+        if open(f"{tree}/src/a.cpp", encoding="utf-8").read() != clean:
+            return "landpr --fixes resolved a conflict to something other than the fixed version"
     return None
 
 
