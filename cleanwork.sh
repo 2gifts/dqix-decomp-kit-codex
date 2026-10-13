@@ -15,8 +15,16 @@ pcount() {
   echo $(( $(python "$KIT/plausible.py" --blocking "$1" 2>/dev/null | grep -c .) + $(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$1") ))
 }
 export WGATE_ALLOW_COMMITTED=1
-finished() { grep -qE " (CLEAN|KEEP|BLOCKED|SKIP) $1 " "$LOG" 2>/dev/null; }
+finished() { grep -E " (CLEAN|KEEP|BLOCKED|SKIP|RETRY) $1( |$)" "$LOG" 2>/dev/null | tail -1 | grep -qvE " RETRY $1( |$)"; }
 CLAIMS="$SP/clean/claims"
+if [ "$1" = "--retry" ]; then
+  shift
+  for a in "$@"; do
+    rmdir "$CLAIMS/$a" 2>/dev/null
+    echo "$(date '+%H:%M') RETRY $a" >> "$LOG"
+  done
+  exit 0
+fi
 SIMPLE='^(CC-FLAG-EMULATION|INT-PUN-NULL-TEST|NOOP-ADDR-CAST|TERNARY-SELF|COMPARE-MINUS-ONE|SELF-STORE|SELF-ASSIGN|SPLIT-POINTER-ADD|INLINE-LOCAL-RETURN|INLINE-IDENTITY)$'
 next_row() {
   local m a rest

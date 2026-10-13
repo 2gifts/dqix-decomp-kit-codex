@@ -2259,8 +2259,21 @@ def _cleancheck():
     sentinel = pun[:2] + ["    if (p->n > -1) g(p->ptr);", "}"]
     if C.accepted(sentinel, pun[:2] + ["    if (p->n >= 0) g(p->ptr);", "}"], {2})[0]:
         return "cleancheck accepted a rewrite that removed only an advisory finding"
-    if 'plausible.py" --blocking "$1"' not in open(f"{KIT}/cleanwork.sh", encoding="utf-8").read():
+    work = open(f"{KIT}/cleanwork.sh", encoding="utf-8").read()
+    if 'plausible.py" --blocking "$1"' not in work:
         return "cleanwork counts advisory findings as work left"
+    import subprocess
+    finished = re.search(r"(?m)^finished\(\) \{.*\}$", work).group(0)
+    with tempfile.TemporaryDirectory(prefix="cleanretry_", dir=f"{SP}/handwork", ignore_cleanup_errors=True) as root:
+        log = f"{root}/clean.log"
+        with open(log, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("01:00 BLOCKED 0200aaaa x\n01:00 CLEAN 0200bbbb x\n01:05 RETRY 0200bbbb\n"
+                     "01:00 KEEP 0200cccc x\n01:05 RETRY 0200cccc\n01:09 BLOCKED 0200cccc y\n")
+        script = f"{finished}\nLOG='{log}'\nfor a in 0200aaaa 0200bbbb 0200cccc 0200dddd; do finished $a && echo $a; done\n"
+        bash, benv = _kp.bash()
+        done = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=benv).stdout.split()
+    if done != ["0200aaaa", "0200cccc"]:
+        return "cleanwork's finished() after RETRY lines: %r, want ['0200aaaa', '0200cccc']" % done
     return None
 
 
