@@ -21,6 +21,7 @@ Anything that fails is moved out of src/ to a stage dir so it cannot poison the 
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import plausible as _plausible
 import bisect
 import glob
 import importlib.util as _ilu
@@ -353,6 +354,12 @@ for f, addr in pending:
         fails.append((f, addr))
         continue
 
+    held = _plausible.hold(f, MOD, addr)
+    if held:
+        print(f"IMPLAUSIBLE {f} @0x{addr}: {','.join(held)} — held for cleanwork, SKIP")
+        fails.append((f, addr))
+        continue
+
     sec = section_for(a)
     if sec not in CODE_NAMES:
         # .init is code but dsd cannot place a file there; rodata/data/bss are not code at all.
@@ -558,6 +565,10 @@ for f, addrs in sorted(TU.items()):
         continue
     if not all(x in ASM_ALLOW for x in addrs) and ASMPAT.search(open(f, encoding="utf-8", errors="ignore").read()):
         tu_fail(f, addrs, "ASM-SKIP", "hand-asm and not on the asm allowlist")
+        continue
+    held = _plausible.hold(f, MOD, addrs[0])
+    if held:
+        tu_fail(f, addrs, "IMPLAUSIBLE", ",".join(held) + " -- held for cleanwork")
         continue
 
     head, blocks = delink_blocks(newdelinks)

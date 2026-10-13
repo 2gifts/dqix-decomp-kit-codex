@@ -943,6 +943,28 @@ def blocking(text):
     return [h for h in findings(text) if h[1] not in ADVISORY and not any((a, h[1]) in ok for a in addrs)]
 
 
+def hold(path, mod, addr, sp=None):
+    text = open(path, encoding="utf-8", errors="ignore").read()
+    hits = blocking(text)
+    if not hits:
+        return []
+    if sp is None:
+        import kitpaths
+        sp = kitpaths.SP
+    sub = "main" if mod == "main" else "ov" + mod
+    dest = f"{sp}/hold_plausible/{sub}/{os.path.basename(path)}"
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    kinds = sorted({k for _, k, _ in hits})
+    lines = ",".join(sorted({str(n) for n, _, _ in hits if n}, key=int))
+    hint = ";".join(f"{k}: see core.md NATURAL FORMS" for k in kinds)
+    os.makedirs(f"{sp}/wlog", exist_ok=True)
+    with open(f"{sp}/wlog/clean_queue.tsv", "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"{mod}\t{addr}\t{dest}\t{lines}\t{hint}\tstaging\n")
+    return kinds
+
+
 def gained(before, after):
     count = lambda text: collections.Counter(k for _, k, _ in blocking(text or ""))
     was, now = count(before), count(after)
@@ -950,6 +972,9 @@ def gained(before, after):
 
 
 def main():
+    if sys.argv[1:2] == ["--hold"] and len(sys.argv) == 5:
+        print(" ".join(hold(sys.argv[4], sys.argv[2], sys.argv[3])))
+        return 0
     bad = 0
     only_blocking = "--blocking" in sys.argv
     check = blocking if only_blocking else findings

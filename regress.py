@@ -2374,8 +2374,24 @@ def _implausible_blocks():
         pr.ALLOW_FILE = old
         os.unlink(fh.name)
     worker = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
-    if "hold_plausible" not in worker or 'if [ -n "$_held" ]; then' not in worker:
+    if 'plausible.py" --hold' not in worker or 'if [ -n "$_held" ]; then' not in worker:
         return "pull_worker.sh still stages a match plausible.py flags after its cleanup"
+    for script in ("integrate.py", "ov_recover.py"):
+        if "_plausible.hold(" not in open(f"{KIT}/{script}", encoding="utf-8").read():
+            return "%s lands a staged match plausible.py flags (gated/ rescue bypasses the worker's hold)" % script
+    with tempfile.TemporaryDirectory(prefix="plaushold_", dir=f"{SP}/handwork", ignore_cleanup_errors=True) as sp:
+        src = f"{sp}/f_0202c9ac.cpp"
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write("// USA: func_0202c9ac\n" + pun)
+        if pr.hold(src, "main", "0202c9ac", sp) != ["INT-PUN-NULL-TEST"]:
+            return "plausible.hold did not hold a flagged source"
+        row = open(f"{sp}/wlog/clean_queue.tsv", encoding="utf-8").read().split("\t")
+        if row[:2] != ["main", "0202c9ac"] or not os.path.exists(row[2]) or row[5].strip() != "staging":
+            return "plausible.hold queued %r" % row
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write("// USA: func_0202c9ac\n" + clean)
+        if pr.hold(src, "main", "0202c9ac", sp):
+            return "plausible.hold held a clean source"
     lp = load("landpr")
     os.makedirs(f"{SP}/handwork", exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="landpr_fixes_", dir=f"{SP}/handwork",

@@ -321,14 +321,8 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
       if ! python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
         cp "$SP/gated/$_gsuf/$ADDR.cpp" "$f" 2>/dev/null
       fi
-      _left=$(python "$KIT/plausible.py" --blocking "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
+      _left=$(python "$KIT/plausible.py" --hold "$MARG" "$ADDR" "$f" 2>/dev/null)
       if [ -n "$_left" ]; then
-        _hold="$SP/hold_plausible/$_gsuf/$(basename "$f")"
-        mkdir -p "$(dirname "$_hold")"
-        cp "$f" "$_hold"
-        _lines=$(python "$KIT/plausible.py" "$_hold" 2>/dev/null | grep -oE ':[0-9]+:' | tr -d ':' | sort -un | paste -sd, -)
-        _hint=$(printf '%s\n' $_left | sed 's/$/: see core.md NATURAL FORMS/' | paste -sd';' -)
-        printf '%s\t%s\t%s\t%s\t%s\tstaging\n' "$MARG" "$ADDR" "$_hold" "$_lines" "$_hint" >> "$SP/wlog/clean_queue.tsv"
         printf '%s\t%s\t%s\t%s\n' "$(date +%F)" "$MARG" "$ADDR" "$_left" >> "$SP/wlog/suspect.tsv"
         echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- HELD in hold_plausible/, queued for cleanwork" >> "$LOG"
         _held=1

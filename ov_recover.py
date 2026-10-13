@@ -846,6 +846,17 @@ if ASMPARK:
     RISKY = [a for a in RISKY if a not in ASMPARK]
     open(f"{SP}/wlog/asmpark_{SUF}.txt", "w").write('\n'.join(ASMPARK))
     print(f"[{SUF}] hand-asm off the allowlist, parked to {_parkdir} (back to workers): {len(ASMPARK)}")
+import plausible as _plausible
+IMPLAUSIBLE = [a for a in TRUSTED + RISKY if _plausible.blocking(cands.get(a, ''))]
+if IMPLAUSIBLE:
+    for _fp in glob.glob(f"{HOLD}/*.cpp"):
+        _a = tag_addr(open(_fp, encoding='utf-8', errors='ignore').read())
+        if _a in IMPLAUSIBLE and _plausible.hold(_fp, MOD, _a):
+            os.remove(_fp)
+    for _a in IMPLAUSIBLE: cands.pop(_a, None)
+    TRUSTED = [a for a in TRUSTED if a not in IMPLAUSIBLE]
+    RISKY = [a for a in RISKY if a not in IMPLAUSIBLE]
+    print(f"[{SUF}] implausible, held in hold_plausible/ for cleanwork: {len(IMPLAUSIBLE)}")
 
 # TRUSTED+RISKY are already-matched source sitting on disk: they will land on a gate, no worker needed.
 # genwave_direct reads this file and stops serving these addrs — that is the duplicate-work fix.
