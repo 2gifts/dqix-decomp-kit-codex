@@ -35,6 +35,7 @@ LV = r"(?:\*\s*)?%s(?:\s*(?:->|\.)\s*%s|\s*\[[^\]=]+\])*" % (IDENT, IDENT)
 ASSIGN_RE = re.compile(r"^(%s)\s*=(?!=)\s*(.+)$" % LV, re.S)
 UPDATE_RE = re.compile(r"^(%s)\s*(?:[-+*/%%&|^]|<<|>>)=\s*(.+)$" % LV, re.S)
 LABEL_RE = re.compile(r"^\s*(?:(case\s+[^:]+|default)\s*:(?!:)|(%s)\s*:(?!:))" % IDENT)
+ASSERT_STMT = re.compile(r"^SDK_\w*ASSERT\w*\s*\(")
 
 
 def strip_code(text):
@@ -718,12 +719,13 @@ def _inline_bodies(src):
     for f in src.funcs:
         if f["inline"] and not f["asm"]:
             body = src.code[f["open"] + 1:f["close"]].strip()
-            yield f, [x.strip() for x in body.split(";") if x.strip()], dict((n, t) for t, n in f["params"] if n)
+            stmts = [x.strip() for x in body.split(";") if x.strip() and not ASSERT_STMT.match(x.strip())]
+            yield f, stmts, dict((n, t) for t, n in f["params"] if n)
 
 
 def _inline_local_return(src, out):
     for f, stmts, params in _inline_bodies(src):
-        d = parse_decl(stmts[0]) if len(stmts) == 2 else None
+        d = parse_decl(stmts[0]) if len(stmts) == 2 and not stmts[0].startswith("static") else None
         if d and len(d[1]) == 1 and re.match(r"^return\s+%s$" % re.escape(d[1][0][0]), stmts[1]):
             _hit(out, f["line"], "INLINE-LOCAL-RETURN", f["name"])
 

@@ -916,6 +916,11 @@ Each was a byte-exact replacement for an invented construct; write these first.
   callee's header or another caller (`02077e80`, `02097cac`, `020dcd40`, `021551d4`).
 - A byte-offset cast `*(T*)(obj + 0x9b4)` is a field of the object's struct, typed as the ROM loads it
   (`02046e08`, `020559cc`, `0208f68c`).
+- An inline getter that matches only as `{ short v = c->hp; return v; }` carries a compiled-out assert:
+  `{ SDK_NULL_ASSERT(c); return c->hp; }` (`globaldefs.h`). Any statement before the `return` makes mwcc
+  expand the body where the calling statement starts; a plain return is folded into the expression.
+  34 of 35 files (`021e4c04`, `0201a300`, `0215bb7c`). A raw `0x027ffc3c` read is
+  `OS_GetVBlankCount()`, `return *(volatile unsigned long*)0x027ffc3c;` (`0202d6c8`).
 
 ## BREAKING CSE — re-read what the ROM re-reads
 **A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's

@@ -2529,12 +2529,65 @@ def _mechclean_rewrites():
         (["INLINE-LOCAL-RETURN"], "static inline int Get(S* s) { int v = s->hp; return v; }",
          "static inline int Get(S* s) { return s->hp; }"),
         (["NOOP-ADDR-CAST"], "    x = y > -1;", "    x = y > -1;"),
+        (["INLINE-LOCAL-RETURN"], "inline T& GetT() { static T s; return s; }",
+         "inline T& GetT() { static T s; return s; }"),
     ]
     for kinds, before, want in cases:
         got = M.rewrite(before, kinds)
         if got != want:
             return "%s: %r became %r, want %r" % (kinds, before, got, want)
+    asserted = [
+        ("static inline short CurrHP(GameObject* c) { short v = c->stats->hp; return v; }",
+         "static inline short CurrHP(GameObject* c) { SDK_NULL_ASSERT(c); return c->stats->hp; }"),
+        ("    short GetId() const { short id = s4; return id; }",
+         "    short GetId() const { SDK_NULL_ASSERT(this); return s4; }"),
+        ("static inline int Sum(int a, int b) { int v = a + b; return v; }",
+         "static inline int Sum(int a, int b) { int v = a + b; return v; }"),
+        ("struct A;\nstruct B;\nstatic inline B* AsB(A* a) { B* b = (B*)a; return b; }\n"
+         "static inline int Hp(S* s) { int v = s->hp; return v; }",
+         "struct A;\nstruct B;\nstatic inline B* AsB(A* a) { B* b = (B*)a; return b; }\n"
+         "static inline int Hp(S* s) { SDK_NULL_ASSERT(s); return s->hp; }"),
+    ]
+    for before, want in asserted:
+        got = M.rewrite(before, ["INLINE-LOCAL-RETURN"], True)
+        if got != want:
+            return "asserted: %r became %r, want %r" % (before, got, want)
     return None
+
+
+@check("mechclean keeps an inline's statement boundary with the assert when the plain return misses",
+       "65 INLINE-LOCAL-RETURN findings matched only with the local: any statement before the return "
+       "makes mwcc expand the inline at the start of the calling statement, and the plain return "
+       "missed on all 35 files tried (021e4c04 SCHED 37) while ((void)0) matched 34")
+def _mechclean_assert_fallback():
+    import shutil
+    M = load("mechclean")
+    if (["INLINE-LOCAL-RETURN"], True) not in list(M.candidates(["INLINE-LOCAL-RETURN", "NOOP-ADDR-CAST"])):
+        return "a cast rewrite that breaks the match also throws away the getter fix (0219e384, 02157d40)"
+    seen = []
+    M.gate = lambda mod, addr, path: seen.append(open(path, encoding="utf-8").read()) or "SDK_NULL_ASSERT" in seen[-1]
+    M.finished = lambda addr: False
+    sp = tempfile.mkdtemp()
+    try:
+        M.SP, M.WORK, M.CLAIMS, M.LOG = sp, f"{sp}/work", f"{sp}/claims", f"{sp}/clean.log"
+        os.makedirs(M.CLAIMS)
+        held = f"{sp}/hold_plausible/ov024/func_ov024_021e4c04.cpp"
+        os.makedirs(os.path.dirname(held))
+        with open(held, "w", encoding="utf-8") as fh:
+            fh.write("#include <globaldefs.h>\nstruct S { short hp; };\n"
+                     "static inline short GetHP(S* c) { short hp = c->hp; return hp; }\n"
+                     'extern "C" ARM int f(S* c) { return GetHP(c) - 1; }\n')
+        result = M.job(["024", "021e4c04", held, "3", "INLINE-LOCAL-RETURN", "staging"])
+        staged = f"{sp}/staging/ov024/func_ov024_021e4c04.cpp"
+        if len(seen) != 2 or "SDK_NULL_ASSERT" in seen[0]:
+            return "mechclean did not try the plain return first, then the assert (%d gates)" % len(seen)
+        if not os.path.exists(staged) or os.path.exists(held):
+            return "the cleaned staging row did not move to staging/ (%s)" % result
+        if "{ SDK_NULL_ASSERT(c); return c->hp; }" not in open(staged, encoding="utf-8").read():
+            return "the staged file does not carry the assert form"
+        return None
+    finally:
+        shutil.rmtree(sp, ignore_errors=True)
 
 
 @check("landpr leaves the integration tree on the published tip when it refuses",
@@ -3232,8 +3285,9 @@ PLAUSIBLE_CASES = [
      "an inline getter that copies into a local and returns it exists only to reorder a load",
      'struct U { int id; };\nstatic inline int UnitId(struct U* u) { int id = u->id; return id; }\n'
      '// USA: func_02000000\nextern "C" ARM int f(struct U* u) {\n    return UnitId(u);\n}\n',
-     'struct U { int id; };\nstatic inline int UnitId(struct U* u) { return u->id; }\n'
-     '// USA: func_02000000\nextern "C" ARM int f(struct U* u) {\n    return UnitId(u);\n}\n'),
+     'struct U { int id; };\nstatic inline int UnitId(struct U* u) { SDK_NULL_ASSERT(u); return u->id; }\n'
+     'inline U& Shared() { static U s; return s; }\n'
+     '// USA: func_02000000\nextern "C" ARM int f(struct U* u) {\n    return UnitId(u) + Shared().id;\n}\n'),
     ("INLINE-OFFSET-ADD",
      "an inline helper that only adds a constant to a pointer splits an offset the struct should carry",
      'static inline char* Off2400(char* p) { return p + 0x2400; }\n// USA: func_02000000\n'
@@ -3242,6 +3296,13 @@ PLAUSIBLE_CASES = [
      'static inline int GetField(struct Obj* o) { return o->field; }\n'
      'static inline int Next(int id) { return id + 1; }\n// USA: func_02000000\n'
      'extern "C" ARM void f(struct Obj* o) {\n    g(Next(GetField(o)));\n}\n'),
+    ("INLINE-OFFSET-ADD",
+     "a compiled-out SDK assert in front of the return made the helper two statements and hid it",
+     'static inline char* Off2400(char* p) { SDK_NULL_ASSERT(p); return p + 0x2400; }\n'
+     '// USA: func_02000000\nextern "C" ARM void f(char* p) {\n    g(Off2400(p));\n}\n',
+     'struct Obj { int pad[0x900]; int field; };\n'
+     'static inline int GetField(struct Obj* o) { SDK_NULL_ASSERT(o); return o->field; }\n'
+     '// USA: func_02000000\nextern "C" ARM void f(struct Obj* o) {\n    g(GetField(o));\n}\n'),
     ("INLINE-IDENTITY",
      "an inline that returns its own parameter, cast, only adds an inline boundary",
      'struct A;\nstruct B;\nstatic inline struct A* AsA(struct B* b) { return (struct A*)b; }\n'
