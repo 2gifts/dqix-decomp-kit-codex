@@ -670,6 +670,10 @@ is register NUMBERS around a byte value, retype it before touching anything else
   12 bytes short (`02155d54`).
 - a flag passed to a `bool` parameter is a `bool` local; an `int` converted at the call costs
   OVERGEN 16 (`ov005:021589f4`).
+- a u16 field packed into a register word with `lsl #16` at the load and `lsr #16` at the `orr`
+  is truncated at the load, `unsigned int a = obj->tex->f50 << 16; REG = 0x6e500000 | (a >> 16);`.
+  A `(unsigned short)` cast at the store creates the value after the pool constant and swaps the
+  callee-saved pair around it (`02066cf0`).
 - `mov rN,#0` / `blt` / `movle rN,#1` / `cmp rN,#0` is a range flag written in the body:
   `int party = 0; if (id >= 0 && id <= 3) party = 1; if (party)`. An inline returning the test is
   OVERGEN 4, and the same flag inside a `static inline` stops it inlining (`021e62cc`).
