@@ -894,7 +894,18 @@ Each was a byte-exact replacement for an invented construct; write these first.
 - Register and OAM bit access is the NitroSDK inline or union (`G2_GetOBJPosition`, `02225c90`;
   `GXBg01Control`, `02074b64`).
 - `cmn rN, #1` then `bgt`/`ble` is a compare against a -1 sentinel the source really wrote: `id > -1`
-  or `id > INVALID`; `id >= 0` compiles to `cmp rN, #0` and never matches it (53 of 53 sites).
+  or the header's enum, `id > BackgroundLoader::TaskStatus_Invalid` (`0205308c`, `02184acc`);
+  `id >= 0` compiles to `cmp rN, #0` and never matches it (53 of 53 sites).
+- Parameters named for registers and reassigned mid-body hide a real signature: an init that zeroes
+  typed fields and returns its object (`021d98b8`, `0215a920`), a getter or setter on a typed global
+  (`021dd024`, `021dcee8`), a script handler `int f(Script::Parameter* params, int count)`
+  (`0218b6bc`, `02188014`).
+- A callee that fills a caller's matrix or vector returns it by value, `Mtx43 m = RotationMatrixY(a);`;
+  a const member returning a struct binds to a const reference (`02018f6c`, `020321e0`, `02048690`).
+- A cast call `((int (*)(int))f)(x)` or a private `extern "C"` alias is the shared prototype from the
+  callee's header or another caller (`02077e80`, `02097cac`, `020dcd40`, `021551d4`).
+- A byte-offset cast `*(T*)(obj + 0x9b4)` is a field of the object's struct, typed as the ROM loads it
+  (`02046e08`, `020559cc`, `0208f68c`).
 
 ## BREAKING CSE — re-read what the ROM re-reads
 **A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's
