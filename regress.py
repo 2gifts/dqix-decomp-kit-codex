@@ -2417,7 +2417,7 @@ def _implausible_blocks():
 def _mechclean_rewrites():
     M = load("mechclean")
     cases = [
-        (["COMPARE-MINUS-ONE"], "    if (obj->count > -1) f();", "    if (obj->count >= 0) f();"),
+        (["COMPARE-MINUS-ONE"], "    if (obj->count > -1) f();", "    if (obj->count > -1) f();"),
         (["NOOP-ADDR-CAST"], "    v = *(unsigned char*)&e->field24;", "    v = e->field24;"),
         (["TERNARY-SELF"], "    s = s->bit0 ? s : NULL;", "    if (!(s->bit0)) s = NULL;"),
         (["SELF-ASSIGN"], "    a = a;\n    b = 1;", "    b = 1;"),

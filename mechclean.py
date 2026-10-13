@@ -18,18 +18,11 @@ WORK = f"{SP}/handwork/mechclean"
 USAGE = """python mechclean.py [-j N]
 
 Rewrites, without a worker, the plausible.py kinds that have one natural form, for every row of
-$SP/wlog/clean_queue.tsv no worker has finished or claimed: COMPARE-MINUS-ONE, NOOP-ADDR-CAST,
+$SP/wlog/clean_queue.tsv no worker has finished or claimed: NOOP-ADDR-CAST,
 TERNARY-SELF, SELF-ASSIGN, INLINE-LOCAL-RETURN. A rewrite is kept only when the function still gates
 MATCH and cleancheck.py accepts it; it goes to $SP/clean/manifest.tsv and clean.log records CLEAN."""
 
 LVAL = r"[A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*|\[[^\]\[]*\])*"
-
-
-def compare_minus_one(line):
-    line = re.sub(r"(%s)\s*>\s*-1\b" % LVAL, r"\1 >= 0", line)
-    line = re.sub(r"\b-1\s*<\s*(%s)" % LVAL, r"\1 >= 0", line)
-    line = re.sub(r"(%s)\s*<=\s*-1\b" % LVAL, r"\1 < 0", line)
-    return re.sub(r"\b-1\s*>=\s*(%s)" % LVAL, r"\1 < 0", line)
 
 
 def noop_addr_cast(line):
@@ -52,7 +45,7 @@ def self_assign(line):
     return None if re.match(r"^\s*(%s)\s*=\s*\1\s*;\s*$" % LVAL, line) else line
 
 
-LINE_FIX = {"COMPARE-MINUS-ONE": compare_minus_one, "NOOP-ADDR-CAST": noop_addr_cast,
+LINE_FIX = {"NOOP-ADDR-CAST": noop_addr_cast,
             "TERNARY-SELF": ternary_self, "SELF-ASSIGN": self_assign}
 
 
