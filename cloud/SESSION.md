@@ -34,6 +34,7 @@ Run the DQIX cloud batch <id> by following cloud/SESSION.md exactly.
    - Each line printed is `<label> <addr> <task file>`. A line ending `PREWORK-MATCH` needs no worker.
 4. **Match.**
    - Spawn one background subagent per task file, all in one message, up to 15 at once.
+   - A fourth column in the batch file names the model for that row; it wins over everything.
    - If `cloud/batches/<id>.model` exists, use the model it names for every worker. Otherwise
      choose the model by function size (the task file says it):
      - 1100 bytes or more: `opus`
