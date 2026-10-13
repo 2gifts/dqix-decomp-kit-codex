@@ -1,0 +1,1 @@
+{"functions":[{"module":"017","addr":"021c530c","verdict":"MATCH","residue":"","size":1808,"file":"/home/user/dqix-kit-state/wip/ov017/021c530c.cpp","description":"Combat command handler for party member events","lever":"hoisted an Event pointer declaration and assigned it inside the condition before comparing targetId to id","lever_bytes":2,"notes":""}]}

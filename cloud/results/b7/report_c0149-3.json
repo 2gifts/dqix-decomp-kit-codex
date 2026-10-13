@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"02081f20","verdict":"MATCH","residue":"","size":284,
+"file":"/home/user/dqix-kit-state/wip/main/02081f20.cpp","description":"Timed slot id allocator and countdown update",
+"lever":"use compound assignments obj->timer -= (char)amount and obj->timer += obj->reloadValue instead of temp local","lever_bytes":4,"notes":""}]}

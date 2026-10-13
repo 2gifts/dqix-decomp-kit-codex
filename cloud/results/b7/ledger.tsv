@@ -1,0 +1,18 @@
+main	0202cb50	340	RESIDUE	RESIDUE SCHED 4 same instructions, different order over 2 site(s)
+main	0207568c	296	RESIDUE	RESIDUE UNDERGEN 4 0x124 vs slot 0x128
+main	02081f20	284	DROPPED	already landed on decomp-matching
+main	0208a700	320	RESIDUE	RESIDUE UNDERGEN 4 0x13c vs slot 0x140
+main	020b245c	360	RESIDUE	RESIDUE UNDERGEN 4 0x164 vs slot 0x168
+main	020e081c	604	RESIDUE	RESIDUE UNDERGEN 4 0x258 vs slot 0x25c
+main	020288e0	228	RESIDUE	RESIDUE REGPERM 5 r4->r6 r6->r4
+main	0209a218	288	RESIDUE	RESIDUE SHAPE 5 0xe8 str r0, [sp, #4] | bic r0, r0, #0xf0000000
+015	0218e670	416	RESIDUE	RESIDUE SCHED 6 same instructions, different order over 2 site(s)
+017	021c530c	1808	MATCH	
+main	020c79bc	184	RESIDUE	RESIDUE SHAPE 6 0x88 bne #0x98 | cmp r4, #0; 0x8c ldr r1, [r8, #0x68] | ldreq r1, [r8, #0x68]; 0x90 ldr r0, [pc, #0x1c] | ldreq r0, [pc, #0x1c]
+000	02161e30	680	RESIDUE	RESIDUE REGPERM 7 r2->r3 r3->r1 r1->r2
+main	02095364	332	DROPPED	already landed on decomp-matching
+main	02097054	340	RESIDUE	RESIDUE REGPERM 7 r5->r7 r7->r5
+main	02047554	244	DROPPED	already landed on decomp-matching
+001	021552a8	1336	DROPPED	already landed on decomp-matching
+017	021b11d8	636	DROPPED	already landed on decomp-matching
+024	021dc2a0	672	RESIDUE	RESIDUE SCHED 8 same instructions, different order over 2 site(s)
