@@ -1,0 +1,30 @@
+024	021dd278	700	DROPPED	already landed on decomp-matching
+main	0204700c	336	DROPPED	already landed on decomp-matching
+main	020ae53c	344	RESIDUE	RESIDUE SHAPE 1 0xec lsr r2, r2, #0x10 | asr r2, r2, #0x10
+023	021da274	1276	RESIDUE	RESIDUE REGPERM 2 r0->r1
+023	021e5974	1268	RESIDUE	RESIDUE REGPERM 2 r1->r3 r3->r1
+main	020c7a90	168	RESIDUE	RESIDUE SHAPE 3 0x74 ldr r1, [r7, #0x68] | ldreq r1, [r7, #0x68]; 0x78 ldr r0, [pc, #0x20] | ldreq r0, [pc, #0x20]; 0x7c str r1, [r0, #0x2c] | streq r1, [r0, #0x2c]
+004	02162dd8	716	RESIDUE	RESIDUE OVERGEN 4 0x2d0 vs slot 0x2cc
+023	021f454c	1720	RESIDUE	RESIDUE UNDERGEN 4 0x6b4 vs slot 0x6b8
+025	021e514c	1436	RESIDUE	RESIDUE REGPERM 6 r0->r2 r2->r0
+026	021db5a4	1540	RESIDUE	RESIDUE SCHED 39 same instructions, different order over 16 site(s)
+026	021dce34	1424	DROPPED	already landed on decomp-matching
+026	021dd8a8	1244	RESIDUE	RESIDUE OVERGEN 4 0x4e0 vs slot 0x4dc
+main	0203a0b4	952	RESIDUE	RESIDUE REGPERM 26 r5->r4 r4->r6 r6->r5
+main	02069fec	980	MATCH	
+main	020bb588	368	RESIDUE	RESIDUE SHAPE 218 0x50 ldm lr, {r5, r6} | ldr r8, [r7]; 0x54 sub r5, r6, r5 | ldr r6, [r7, #4]; 0x58 cmp r5, r3 | sub r6, r6, r8
+main	020def98	988	RESIDUE	RESIDUE LOOP-SHAPE 206 3 branch target(s) differ, first at 0x1d8
+main	020a78dc	1028	MATCH	
+003	021769ec	1256	RESIDUE	RESIDUE SCHED 4 same instructions, different order over 4 site(s)
+main	0203b97c	248	RESIDUE	RESIDUE SCHED 4 same instructions, different order over 4 site(s)
+001	02154974	752	DROPPED	already landed on decomp-matching
+008	02186388	1312	RESIDUE	RESIDUE SHAPE 100 0x38 add r0, r5, #0x1000 | strb r2, [r0, #0x9ae]; 0x3c strb r1, [r0, #0x9ae] | ldrb r7, [sl, #0xb11]; 0x40 ldrb r7, [sl, #0xb11] | add r6, r1, #0x7000
+009	0218742c	1800	RESIDUE	RESIDUE SCHED 33 same instructions, different order over 21 site(s)
+012	02184654	560	RESIDUE	RESIDUE UNDERGEN 4 0x22c vs slot 0x230
+017	02199f08	640	DROPPED	already landed on decomp-matching
+017	021a624c	384	RESIDUE	RESIDUE UNDERGEN 4 0x17c vs slot 0x180
+023	021edf54	2884	RESIDUE	RESIDUE UNDERGEN 4 0xb40 vs slot 0xb44
+030	021d8a40	2064	RESIDUE	RESIDUE SHAPE 1132 0x84 str r0, [sp, #0x1c] | add r8, r0, #0x138; 0x88 add r0, ip, #0x78 | str r1, [sp, #0x128]; 0x90 str r0, [sp, #0x20] | add sb, r0, #0x7c
+main	02001b2c	176	RESIDUE	RESIDUE UNDERGEN 4 0xac vs slot 0xb0
+main	020321e0	224	RESIDUE	RESIDUE UNDERGEN 4 0xdc vs slot 0xe0
+main	0204cc68	248	RESIDUE	RESIDUE SHAPE 106 0x68 lsl r1, r1, #0x12 | smulbb r5, sl, r5; 0x6c smulbb r5, sb, r5 | lsl r1, r1, #0x12; 0x7c lsl ip, sb, #0x10 | and ip, r6, #7

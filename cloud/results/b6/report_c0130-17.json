@@ -1,0 +1,3 @@
+{"functions":[{"module":"main","addr":"020a78dc","verdict":"MATCH","residue":"","size":1028,
+"file":"/home/user/dqix-kit-state/wip/main/020a78dc.cpp","description":"Actor directional input mode update",
+"lever":"compute a.y shift into a local before a.x assignment","lever_bytes":4,"notes":""}]}
