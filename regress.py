@@ -2593,10 +2593,18 @@ def _repool_member():
     new, _what = R.rewrite(member, True, spell, {}, set(), {}, {})
     if new != member:
         return "rewrote a member declaration and its call"
-    free = "int Foo();\n\nvoid f() { Foo(); }\n"
+    free = 'extern "C" int Foo();\n\nvoid f() { Foo(); }\n'
     new, _what = R.rewrite(free, True, spell, {}, set(), {}, {})
     if not new or "_Z3Foov" not in new:
         return "no longer rewrites a renamed free function"
+    cxx = "int Foo();\n\nvoid f() { Foo(); }\n"
+    new, _what = R.rewrite(cxx, True, spell, {}, set(), {}, {})
+    if new != cxx:
+        return "rewrote a C++ call whose new symbol is its own mangling, which then clashes with the header"
+    free_member = "struct GameState;\nvoid* GetGrottoStruct(GameState*);\n\nvoid f(GameState* g) { GetGrottoStruct(g); }\n"
+    new, _what = R.rewrite(free_member, True, spell, {}, set(), {}, {})
+    if new is not None:
+        return "rewrote a free call into a member's mangled name, which does not compile"
 
 
 @check("wgate selects ISA and size by physical address, not raw-name suffix",
