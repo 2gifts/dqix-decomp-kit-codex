@@ -129,6 +129,7 @@ Reply with exactly one line:
   if [ -n "$DEST" ]; then
     if python "$KIT/wgate.py" "$MOD" "$ADDR" "$F" 2>&1 | grep -q "^MATCH" \
        && [ -z "$(python "$KIT/plausible.py" --blocking "$F" 2>/dev/null)" ] \
+       && { grep -qi "^$ADDR " "$KIT/asm_allow.txt" || ! grep -qE '^[[:space:]]*asm\b|\basm[[:space:]]+(void|int|unsigned|char|long|short)\b' "$F"; } \
        && [ "$(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$F")" -le "$(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$REL")" ]; then
       if [ "$DEST" = "staging" ]; then
         _sub=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")

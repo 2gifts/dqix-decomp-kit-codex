@@ -2284,6 +2284,22 @@ def _cleancheck():
         done = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=benv).stdout.split()
     if done != ["0200aaaa", "0200cccc"]:
         return "cleanwork's finished() after RETRY lines: %r, want ['0200aaaa', '0200cccc']" % done
+    if 'grep -qi "^$ADDR " "$KIT/asm_allow.txt"' not in work:
+        return "cleanwork stages hand-asm off asm_allow.txt, which the integrator parks and cleanwork restages"
+    pull = open(f"{KIT}/pull_all.sh", encoding="utf-8").read()
+    if 'claim.py" --best 2>/dev/null); _rc=$?' not in pull or "update_blocked=$SECONDS" not in pull:
+        return "pull_all.sh reads claim.py's refusal as drained pools, or latches a blocked kit update forever"
+    old = os.environ.get("LEVERCHECK_DOCS")
+    os.environ["LEVERCHECK_DOCS"] = "worker_src/core.md"
+    try:
+        docs = load("levercheck").doc_paths()
+    finally:
+        if old is None:
+            del os.environ["LEVERCHECK_DOCS"]
+        else:
+            os.environ["LEVERCHECK_DOCS"] = old
+    if docs != [os.path.normpath(f"{KIT}/worker_src/core.md")]:
+        return "levercheck resolves a relative LEVERCHECK_DOCS entry against the cwd: %r" % docs
     return None
 
 
