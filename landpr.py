@@ -3,7 +3,8 @@
     bash landpr.sh [--fixes DIR] <number>...
 
 --fixes DIR overlays DIR's files (repo-relative paths, e.g. our cleaned versions of a pull request's flagged
-sources) on the merged tree and commits them as `Clean #N` before prready.py runs.
+sources) on the merged tree and commits them as `Clean #N` before prready.py runs. DIR/DROP lists repo paths
+still implausible: each is removed with its delinks blocks (`Hold ... from #N`) and waits for cleanwork.
 In the integration tree, from the published tip: merges each pull request head as `Merge #N` (a
 conflict only in delinks.txt, where both sides added blocks, keeps both), refuses symbolic links, strips
 comments from the source it changed, requires `prready.py decomp` READY, ports between the regions
@@ -13,6 +14,7 @@ region delinks that it could not wire into config/usa.
 Exit 0: landed. 1: refused, nothing published. 2: usage.
 """
 import os
+import re
 import subprocess
 import sys
 
@@ -104,11 +106,35 @@ def build_every_region(tree):
     regionsync.configure("usa")
 
 
+def drop_files(tree, paths, numbers):
+    for rel in paths:
+        if not os.path.exists(f"{tree}/{rel}"):
+            refuse(f"--fixes DROP {rel}: no such file in the merged tree")
+        git(tree, "rm", "-q", "-f", "--", rel)
+        for cfg in git(tree, "ls-files", "--", "config")[1].split():
+            if not cfg.endswith("delinks.txt"):
+                continue
+            path = f"{tree}/{cfg}"
+            text = open(path, encoding="utf-8").read()
+            kept = regionsync.BLOCK.sub(lambda m: "" if m.group(1) == rel else m.group(0), text)
+            if kept != text:
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(re.sub(r"\n{3,}", "\n\n", kept))
+                git(tree, "add", "--", cfg)
+    if paths:
+        git(tree, "commit", "-q", "-m", "Hold %d implausible file(s) from %s" % (len(paths), " ".join("#" + n for n in numbers)))
+
+
 def apply_fixes(tree, fixes, numbers):
+    drop = os.path.join(fixes, "DROP")
+    if os.path.exists(drop):
+        drop_files(tree, [ln.strip() for ln in open(drop, encoding="utf-8") if ln.strip()], numbers)
     for root, _, files in os.walk(fixes):
         for name in files:
             src = os.path.join(root, name)
             rel = os.path.relpath(src, fixes).replace("\\", "/")
+            if rel == "DROP":
+                continue
             if not os.path.exists(f"{tree}/{rel}"):
                 refuse(f"--fixes {rel}: no such file in the merged tree")
             with open(src, encoding="utf-8") as fh, open(f"{tree}/{rel}", "w", encoding="utf-8", newline="\n") as out:

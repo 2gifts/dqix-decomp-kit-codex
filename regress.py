@@ -2390,6 +2390,24 @@ def _implausible_blocks():
             lp.git = old
         if git("log", "-1", "--format=%s") != "Clean #5" or "*(int*)" in open(f"{tree}/src/a.cpp").read():
             return "landpr --fixes did not commit the cleaned source as `Clean #5`"
+        os.makedirs(f"{tree}/config/usa", exist_ok=True)
+        with open(f"{tree}/src/b.cpp", "w", encoding="utf-8") as fh:
+            fh.write(pun)
+        with open(f"{tree}/config/usa/delinks.txt", "w", encoding="utf-8") as fh:
+            fh.write("src/a.cpp:\n    complete\n    .text start:0x0 end:0x4\n\nsrc/b.cpp:\n    complete\n"
+                     "    .text start:0x4 end:0x8\n")
+        git("add", "-A")
+        git("commit", "-qm", "Merge #6")
+        with open(f"{fixes}/DROP", "w", encoding="utf-8") as fh:
+            fh.write("src/b.cpp\n")
+        lp.git = fake_git
+        try:
+            lp.apply_fixes(tree, fixes, ["6"])
+        finally:
+            lp.git = old
+        links = open(f"{tree}/config/usa/delinks.txt", encoding="utf-8").read()
+        if os.path.exists(f"{tree}/src/b.cpp") or "src/b.cpp" in links or "src/a.cpp" not in links:
+            return "landpr --fixes DROP did not remove the held file and only its delinks block"
     return None
 
 
