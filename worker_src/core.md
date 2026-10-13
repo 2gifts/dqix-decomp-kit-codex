@@ -898,6 +898,9 @@ Each was a byte-exact replacement for an invented construct; write these first.
   `static inline bool HasInner(const Outer* o) { return o->f0 != NULL; }` (`020bc158`, `020bc1ac`).
 - An offset added to reach an embedded sub-object is a member accessor, `Sub* GetSub() { return &sub; }`
   (`021e62a8`, `0215707c`).
+- A null test on `&node->allocator` is a null test on a member accessor's result:
+  `SafeAllocator* GetAllocator() { return &allocator; }`, `SafeAllocator* const allocator =
+  node->GetAllocator(); if (!allocator) return 0;` (`02164084`; `0208bf78` without the `const`).
 - Shift-and-mask on one field is a real bitfield (`int field58 : 3;`, `02087e6c`; `021eb3e0`).
 - Adjacent globals indexed together are one struct (`struct InputLog { u8 countA, countB; s8 logB[8],
   logA[8]; }`, `020a1df8`, `020a1ef0`).
