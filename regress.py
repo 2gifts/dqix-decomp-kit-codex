@@ -2256,6 +2256,11 @@ def _cleancheck():
         return "cleancheck refused a rewrite that removed an integer-read null test"
     if C.accepted(pun, swap, {2})[0]:
         return "cleancheck accepted a rewrite that swapped one invented construct for another"
+    sentinel = pun[:2] + ["    if (p->n > -1) g(p->ptr);", "}"]
+    if C.accepted(sentinel, pun[:2] + ["    if (p->n >= 0) g(p->ptr);", "}"], {2})[0]:
+        return "cleancheck accepted a rewrite that removed only an advisory finding"
+    if 'plausible.py" --blocking "$1"' not in open(f"{KIT}/cleanwork.sh", encoding="utf-8").read():
+        return "cleanwork counts advisory findings as work left"
     return None
 
 

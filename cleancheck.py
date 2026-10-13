@@ -9,8 +9,8 @@ USAGE = """python cleancheck.py <before> <after> <line,line,...>
 
 Accept a rewrite that removes only invented constructs. The listed lines of <before> carry them.
 Every other line of <before> that says volatile must still appear verbatim in <after>; <after> must
-report no plausible.py kind <before> did not, no more findings, and either fewer findings or fewer
-volatile. Exit 0 accepted, 1 refused."""
+report no plausible.py kind <before> did not, no more findings, and either fewer blocking findings or
+fewer volatile. Exit 0 accepted, 1 refused."""
 
 
 def lines(path):
@@ -33,7 +33,8 @@ def accepted(before, after, private):
     lost, was, now = check(before, after, private)
     kb, ka = kinds(before), kinds(after)
     new = sorted(set(ka) - set(kb))
-    fewer = sum(ka.values()) < sum(kb.values()) or now < was
+    blocking = lambda counts: sum(n for kind, n in counts.items() if kind not in plausible.ADVISORY)
+    fewer = blocking(ka) < blocking(kb) or now < was
     ok = not lost and not new and sum(ka.values()) <= sum(kb.values()) and fewer
     return ok, lost, new, (was, now), (sum(kb.values()), sum(ka.values()))
 

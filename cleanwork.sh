@@ -12,7 +12,7 @@ vcount() {
   python -c "import re,sys;H=re.compile(r'0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b|^\s*#');print(sum(len(re.findall(r'\bvolatile\b',l)) for l in open(sys.argv[1],encoding='utf-8',errors='ignore') if not H.search(l)))" "$1"
 }
 pcount() {
-  echo $(( $(python "$KIT/plausible.py" "$1" 2>/dev/null | grep -vc " VOLATILE-") + $(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$1") ))
+  echo $(( $(python "$KIT/plausible.py" --blocking "$1" 2>/dev/null | grep -c .) + $(grep -c "^[[:space:]]*#[[:space:]]*pragma" "$1") ))
 }
 export WGATE_ALLOW_COMMITTED=1
 finished() { grep -qE " (CLEAN|KEEP|BLOCKED|SKIP) $1 " "$LOG" 2>/dev/null; }
@@ -83,8 +83,8 @@ $SITES
 Each stands in for real source nobody found yet: an inline accessor, the real struct field and its
 type, one shared prototype, a different declaration or statement order, a struct copy. Find it.
 ${HINT:+Hint: $HINT}
-python $KIT/plausible.py $F names most such constructs: your result must report fewer than now and
-no new kind. Every volatile on a hardware register, ARM7-shared memory, or data an interrupt
+python $KIT/plausible.py --blocking $F names most such constructs: your result must report fewer than
+now. Never change a call's arguments to fit a mangled name's parameter list: those names were guessed. Every volatile on a hardware register, ARM7-shared memory, or data an interrupt
 handler or another thread writes is real: leave those lines exactly as they are.
 Never introduce another construct the developers could not have written: no parameter the callers
 never pass, no self-assignment, no zero-negation padding, no dead address-taking local, no codegen
