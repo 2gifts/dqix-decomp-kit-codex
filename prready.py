@@ -112,10 +112,12 @@ def kit(kit_tip, decomp_tip):
 def decomp(decomp_tip):
     problems = []
     changed = git(REPO, "diff", "--name-only", f"{decomp_tip}...HEAD").stdout.split()
+    mixed = any(path.startswith(MATCH_PATHS) for path in changed)
     for path in changed:
         if not path.startswith(MATCH_PATHS):
-            problems.append(f"OUTSIDE A MATCH {path}: differs from {kitpaths.DECOMP_BRANCH}; restore it with "
-                            f"git checkout {decomp_tip[:10]} -- {path}, or send it as its own pull request")
+            if mixed:
+                problems.append(f"OUTSIDE A MATCH {path}: differs from {kitpaths.DECOMP_BRANCH}; restore it with "
+                                f"git checkout {decomp_tip[:10]} -- {path}, or send it as its own pull request")
         elif MARKER.search(show(REPO, "HEAD", path)):
             problems.append(f"CONFLICT MARKERS in {path}")
     wired = "\n".join(delinks(REPO, "HEAD", "config"))

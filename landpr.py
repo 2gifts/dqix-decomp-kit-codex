@@ -142,6 +142,7 @@ def apply_fixes(tree, fixes, numbers):
     drop = os.path.join(fixes, "DROP")
     if os.path.exists(drop):
         drop_files(tree, [ln.strip() for ln in open(drop, encoding="utf-8") if ln.strip()], numbers)
+    written = []
     for root, _, files in os.walk(fixes):
         for name in files:
             src = os.path.join(root, name)
@@ -152,8 +153,9 @@ def apply_fixes(tree, fixes, numbers):
                 refuse(f"--fixes {rel}: no such file in the merged tree")
             with open(src, encoding="utf-8") as fh, open(f"{tree}/{rel}", "w", encoding="utf-8", newline="\n") as out:
                 out.write(fh.read())
-    if git(tree, "status", "--porcelain", "--", "src")[1].strip():
-        git(tree, "add", "--", "src")
+            written.append(rel)
+    if written and git(tree, "status", "--porcelain", "--", *written)[1].strip():
+        git(tree, "add", "--", *written)
         git(tree, "commit", "-q", "-m", "Clean " + " ".join("#" + n for n in numbers))
 
 

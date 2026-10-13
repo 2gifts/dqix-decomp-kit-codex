@@ -1578,6 +1578,11 @@ def _prready():
             code, out = prready(mode)
             if code != 0:
                 return f"a current checkout was refused by prready.py {mode}: {out.strip()[-300:]}"
+        commit(decomp, {"tools/configure.py": "PYTHON = 1\n"})
+        code, out = prready("decomp")
+        if code != 0:
+            return f"prready.py decomp refused a pull request that changes only tooling: {out.strip()[-300:]}"
+        git(decomp, "reset", "-q", "--hard", "HEAD~1")
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
                         "src/Dead.cpp": "void Dead() {}\n",
                         "src/Untagged.cpp": "void Untagged() {}\n",
@@ -2463,6 +2468,21 @@ def _implausible_blocks():
             return "landpr --fixes did not resolve a conflict in a file it replaces with the fixed version"
         if open(f"{tree}/src/a.cpp", encoding="utf-8").read() != clean:
             return "landpr --fixes resolved a conflict to something other than the fixed version"
+        os.makedirs(f"{tree}/tools", exist_ok=True)
+        os.makedirs(f"{fixes}/tools", exist_ok=True)
+        with open(f"{tree}/tools/configure.py", "w", encoding="utf-8") as fh:
+            fh.write("PYTHON = 1\n")
+        git("add", "-A")
+        git("commit", "-qm", "Merge #8")
+        with open(f"{fixes}/tools/configure.py", "w", encoding="utf-8") as fh:
+            fh.write("PYTHON = 2\n")
+        lp.git = fake_git
+        try:
+            lp.apply_fixes(tree, fixes, ["8"])
+        finally:
+            lp.git = old
+        if git("log", "-1", "--format=%s") != "Clean #8" or git("status", "--porcelain"):
+            return "landpr --fixes left a fixed file outside src/ uncommitted"
     return None
 
 
