@@ -1,0 +1,3 @@
+{"functions":[{"module":"003","addr":"0217ab34","verdict":"MATCH","residue":"","size":1740,
+"file":"/home/user/dqix-kit-state/wip/ov003/0217ab34.cpp","description":"Quantity-select menu state machine",
+"lever":"switch on callee result, res != -1 then res != 1 nesting, (unsigned short)(state + 0xffff) range test, table struct with vals at 0xc, struct name matching callee mangling","lever_bytes":0,"notes":"one rename done with sed -i (struct name only) contrary to the edit-tool rule"}]}

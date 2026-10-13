@@ -1,0 +1,20 @@
+main	0202555c	1456	RESIDUE	RESIDUE REGPERM 116 r6->r5 r5->r6 r4->r7 r5->r4 r7->r6 r8->r7
+main	0204c030	1496	RESIDUE	RESIDUE UNDERGEN 56 0x5a0 vs slot 0x5d8
+main	0206b974	1464	RESIDUE	RESIDUE SCHED 124 same instructions, different order over 53 site(s)
+002	0215a0a4	1460	RESIDUE	RESIDUE SCHED 8 same instructions, different order over 4 site(s)
+016	0218e800	1452	RESIDUE	RESIDUE UNDERGEN 88 0x554 vs slot 0x5ac
+016	0218f6b8	1472	RESIDUE	RESIDUE UNDERGEN 1468 0x4 vs slot 0x5c0
+017	0219ad84	1464	RESIDUE	RESIDUE SCHED 122 same instructions, different order over 47 site(s)
+main	0204e3e0	1464	RESIDUE	RESIDUE SHAPE 169 0x8 str r3, [sp, #4] | movs sb, r1; 0xc movs sb, r1 | mov sl, r0; 0x10 mov sl, r0 | str r3, [sp, #4]
+003	0217cf10	1580	RESIDUE	RESIDUE SHAPE 11 0x64 bics r0, r0, #0 | cmp r0, #0
+main	0209b448	1164	RESIDUE	RESIDUE SHAPE 228 0x1c mov r1, #0 | str r0, [sp]; 0x20 str r0, [sp] | mov r1, #0; 0x28 str r1, [sp, #4] | mov r2, r5
+004	0215fdfc	1344	RESIDUE	RESIDUE UNDERGEN 8 0x538 vs slot 0x540
+006	0215c154	1324	RESIDUE	RESIDUE SCHED 10 same instructions, different order over 3 site(s)
+main	02015ef4	1416	MATCH	
+004	02164084	1516	MATCH	
+006	0215c680	1520	RESIDUE	RESIDUE SCHED 18 same instructions, different order over 5 site(s)
+005	0215c530	1564	RESIDUE	RESIDUE SCHED 20 same instructions, different order over 11 site(s)
+003	0217ab34	1740	MATCH	
+015	0218d50c	1760	MATCH	
+003	02170d88	1816	RESIDUE	RESIDUE UNDERGEN 4 0x714 vs slot 0x718
+015	021934f8	2008	RESIDUE	RESIDUE SHAPE 20 0x2a8 mov r0, #0 | ldr r0, [pc, #0x508]; 0x2ac str r0, [sp, #0x20] | ldr r1, [pc, #0x508]; 0x2b0 ldr r0, [pc, #0x500] | mov r3, #0
