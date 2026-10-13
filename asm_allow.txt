@@ -40,6 +40,7 @@
 020c1180  MTX_Identity33_                   NitroSDK ships it as asm (SonicRush fx_mtx33.c:18)
 020c1840  MTX_Identity43_                   NitroSDK ships it as asm (SonicRush fx_mtx43.c:18)
 020c1868  MTX_Copy43To44_                   NitroSDK ships it as asm (SonicRush fx_mtx43.c:35)
+020c197c  MTX_RotX43_                       NitroSDK ships it as asm (pokediamond FX_mtx43.c:169)
 020c6938  GX_SendFifo64B                    NitroSDK ships it as asm (SonicRush gxasm.c:24)
 0200cd1c  _ll_mod                           CW runtime asm: pushes ip, branches into _ll_sdiv; asm in every ref (SonicRush msl.s)
 020c98f0  ResetSystemAndBoot020c98f0       NitroSDK OS_ResetSystem tail is inline asm: mov sp to the IRQ stack bottom, bl into ITCM; mov sp has no C form
