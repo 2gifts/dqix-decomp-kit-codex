@@ -893,6 +893,8 @@ Each was a byte-exact replacement for an invented construct; write these first.
   logA[8]; }`, `020a1df8`, `020a1ef0`).
 - Register and OAM bit access is the NitroSDK inline or union (`G2_GetOBJPosition`, `02225c90`;
   `GXBg01Control`, `02074b64`).
+- `cmn rN, #1` then `bgt`/`ble` is a compare against a -1 sentinel the source really wrote: `id > -1`
+  or `id > INVALID`; `id >= 0` compiles to `cmp rN, #0` and never matches it (53 of 53 sites).
 
 ## BREAKING CSE — re-read what the ROM re-reads
 **A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's

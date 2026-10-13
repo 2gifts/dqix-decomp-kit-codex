@@ -920,7 +920,7 @@ def findings(text):
 
 
 ADVISORY = {"VOLATILE-CAST", "VOLATILE-LOCAL", "TERNARY-SELF", "ALIAS-REREAD", "MIXED-ACCESS-RELOAD",
-            "DEAD-ADDRESS-LOCAL"}
+            "DEAD-ADDRESS-LOCAL", "COMPARE-MINUS-ONE"}
 ALLOW_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plausible_allow.txt")
 USA_ADDR = re.compile(r"//\s*USA:\s*\S*?([0-9a-fA-F]{8})\b")
 
