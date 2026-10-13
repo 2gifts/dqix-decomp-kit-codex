@@ -183,9 +183,11 @@ if r.returncode!=0:
     _err=(r.stdout+r.stderr).strip().replace("\t"," ")
     _first=next((l.strip() for l in _err.split("\n") if "rror" in l or "undefined" in l), "")[:120]
     fail("COMPILE-FAIL: "+_err[-400:], "NO-COMPILE", -1, _first)
+buildcfg.postcompile(_OBJ)
 _objfh=open(_OBJ,"rb"); _ELFH.append(_objfh)
 elf=ELFFile(_objfh)
-texts=[s for s in elf.iter_sections() if s.name==SEC]
+_texts=buildcfg.sections(elf,SEC)
+texts=[s for _,s in _texts]
 total=sum(s['sh_size'] for s in texts)
 # a thumb function is padded to a 4-byte boundary by the LINKER, not mwcc, so the object's
 # section can legitimately be slot-2 bytes.
@@ -198,12 +200,12 @@ if len(texts)!=1 or total not in ok_sizes:
 # r_offset; the ARM `&~3` rounding leaves 2 of its bytes unmasked -> false BYTEDIFF.
 THM_BR={10,25,30,31}          # R_ARM_THM_PC22 / THM_CALL / THM_JUMP*
 reloc=set()
-for sec in elf.iter_sections():
-    if sec.name in ('.rel'+SEC,'.rela'+SEC) and hasattr(sec,'iter_relocations'):
-        for rr in sec.iter_relocations():
-            o=rr['r_offset']
-            if rr['r_info_type'] in THM_BR: reloc.update(range(o,o+4))
-            else: reloc.update(range(o&~3,(o&~3)+4))
+_TEXT_RELS=buildcfg.relocations(elf,_texts[0][0])
+for sec in _TEXT_RELS:
+    for rr in sec.iter_relocations():
+        o=rr['r_offset']
+        if rr['r_info_type'] in THM_BR: reloc.update(range(o,o+4))
+        else: reloc.update(range(o&~3,(o&~3)+4))
 a=int(ADDR,16); mine=texts[0].data()[:slot]; orig=PRISTINE[a-BASE:a-BASE+slot]
 diffs=[i for i in range(min(len(mine),len(orig))) if i not in reloc and mine[i]!=orig[i]]
 if diffs:
@@ -257,8 +259,7 @@ for _p in glob.glob(f"{buildcfg.config_dir('main')}/**/symbols.txt", recursive=T
 def _sign24(v): return v-0x1000000 if v&0x800000 else v
 def _sign23(v): return v-0x800000 if v&0x400000 else v
 wrong=[]
-for _sec in elf.iter_sections():
-    if _sec.name not in ('.rel'+SEC,'.rela'+SEC) or not hasattr(_sec,'iter_relocations'): continue
+for _sec in _TEXT_RELS:
     for rr in _sec.iter_relocations():
         off=rr['r_offset']; typ=rr['r_info_type']
         if off+4>slot: continue

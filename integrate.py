@@ -432,12 +432,14 @@ for f, addr in pending:
         fails.append((f, addr))
         continue
 
+    buildcfg.postcompile(obj)
     elf = ELFFile(open(obj, "rb"))
     secname = "." + sec
     # A .init function emits no .text at all, and its relocations live in .rel.init -- looking only
     # at .text reported total=0x0 and rejected byte-exact files.
-    texts = [s for s in elf.iter_sections() if s.name == secname]
-    text_index = next((i for i, s in enumerate(elf.iter_sections()) if s.name == secname), None)
+    _texts = buildcfg.sections(elf, secname)
+    texts = [s for _, s in _texts]
+    text_index = _texts[0][0] if _texts else None
     total = sum(s["sh_size"] for s in texts)
     slot = size_of(addr)
     if slot is None:
@@ -454,14 +456,13 @@ for f, addr in pending:
 
     # Mask relocated bytes: bl targets and pool words are linker-resolved and meaningless here.
     reloc_off = set()
-    for s in elf.iter_sections():
-        if s.name in (".rel" + secname, ".rela" + secname) and hasattr(s, "iter_relocations"):
-            for rr in s.iter_relocations():
-                o = rr["r_offset"]
-                # A thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes; `&~3` would
-                # leave 2 of them unmasked and report a false BYTEDIFF.
-                reloc_off.update(range(o, o + 4) if rr["r_info_type"] in _THM_BR
-                                 else range(o & ~3, (o & ~3) + 4))
+    for s in buildcfg.relocations(elf, text_index):
+        for rr in s.iter_relocations():
+            o = rr["r_offset"]
+            # A thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes; `&~3` would
+            # leave 2 of them unmasked and report a false BYTEDIFF.
+            reloc_off.update(range(o, o + 4) if rr["r_info_type"] in _THM_BR
+                             else range(o & ~3, (o & ~3) + 4))
 
     mine = texts[0].data()[:slot]
     orig = PRISTINE[a - BASE:a - BASE + slot]
@@ -596,10 +597,11 @@ for f, addrs in sorted(TU.items()):
     if r.returncode != 0:
         tu_fail(f, addrs, "COMPILE", (r.stdout + r.stderr)[-300:])
         continue
+    buildcfg.postcompile(obj)
     elf = ELFFile(open(obj, "rb"))
     symtab = elf.get_section_by_name(".symtab")
     sections = list(elf.iter_sections())
-    tidx = [i for i, s in enumerate(sections) if s.name == "." + sec]
+    tidx = [i for i, _ in buildcfg.sections(elf, "." + sec)]
     if [sections[i]["sh_size"] for i in tidx] != slots:
         tu_fail(f, addrs, "SIZE", f"{[hex(sections[i]['sh_size']) for i in tidx]} want {[hex(x) for x in slots]}")
         continue

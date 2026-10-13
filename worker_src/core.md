@@ -924,6 +924,11 @@ Each was a byte-exact replacement for an invented construct; write these first.
   expand the body where the calling statement starts; a plain return is folded into the expression.
   34 of 35 files (`021e4c04`, `0201a300`, `0215bb7c`). A raw `0x027ffc3c` read is
   `OS_GetVBlankCount()`, `return *(volatile unsigned long*)0x027ffc3c;` (`0202d6c8`).
+- A struct copy the ROM makes into a local nothing reads (`ldm`/`stm` to the stack, never loaded back),
+  which only `volatile` seems to keep, is a local of a type with an empty inline destructor:
+  `struct Vec3 { int x, y, z; ~Vec3() {} };`, `Vec3 rot = *(Vec3*)((char*)c + 0x50);`. Every other form
+  is dead-store eliminated. mwcc emits the destructor out of line; the build empties it, as the
+  original `-dead` link stripped it (`0216c00c`).
 
 ## BREAKING CSE — re-read what the ROM re-reads
 **A RELOAD THE ROM KEEPS IS AN ACCESSOR OR A REAL FIELD, NEVER `volatile`.** Bind an inline accessor's
@@ -1228,6 +1233,13 @@ wrong and a byte-perfect function still fails the gate:
   already forces an `add rX,base,#0x1000` split, so mwcc rematerialises the base per block; a named
   local or `GetSub()` gets CSEd into a parked callee-saved register and adds a register to the push
   (`0202aec0`).
+- `add rB, rX, #0x1840` + `ldr rF, [rB, #0xb34]` with the base in the lower register is a sub-object at
+  `+0x840` whose field sits past 0xfff (`+0x1b34`): the backend splits that offset and merges its
+  `#0x1000` into the `#0x840` add, so the base is a late temp and takes the lower register. Reach the
+  sub-object through nested inline accessors, `SetGold(GetSave(ctx), bonus + GetGold(GetSave(ctx)))`
+  with `GetSave()` returning `&ctx->save`, or the `(char*)ctx + 0x840` cast of 02061c04 case 0xd3.
+  A member chain folds to `#0x2000`/`#0x374`; a sub-object taken at `+0x1840` swaps base and field
+  (`0216c00c`, `02061c04`).
 - use the project's existing one-pointer idiom rather than a base + re-offset local: canon splits the
   same constant either way but colours the two registers in the opposite order (`021b4f48`).
 - read halfword field offsets straight off the canon splits: `add #0x100` + `ldrh [r0,#0x88]` means a

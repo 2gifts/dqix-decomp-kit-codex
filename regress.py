@@ -1245,7 +1245,7 @@ def _staging_sweep_keeps_match():
     return None
 
 
-def _compile_elf(text, repo):
+def _compile_elf(text, repo, postcompile=False):
     import io
     import subprocess
     import buildcfg
@@ -1258,6 +1258,8 @@ def _compile_elf(text, repo):
                            capture_output=True, text=True)
         if r.returncode:
             return "COMPILE " + (r.stdout + r.stderr)[-200:]
+        if postcompile:
+            buildcfg.postcompile(obj)
         return ELFFile(io.BytesIO(open(obj, "rb").read()))
 
 
@@ -1425,6 +1427,29 @@ def _rela_addend():
         return "wgate.py no longer reads r_addend for a RELA pool word"
     if "dataown.addend(rr, mine)" not in open(f"{KIT}/classify.py", encoding="utf-8").read():
         return "classify.py no longer reads the addend through dataown.addend"
+    return None
+
+
+@check("an inline function nothing references leaves the gate one non-empty .text section",
+       "mwcc emits an empty inline destructor as its own multidef .text section; the original -dead "
+       "link stripped it and our -nodead link kept it, so wgate called ov003:0216c00c OVERGEN 4 and "
+       "its dead `rot` copy could only be held with a fake volatile")
+def _dead_inline_section():
+    import buildcfg
+    text = ('struct Vec3 { int x, y, z; ~Vec3() {} };\nextern "C" void Use(void*);\n'
+            'extern "C" void F(char* p) { Vec3 v = *(Vec3*)(p + 8); Use(p); }\n')
+    raw = _compile_elf(text, buildcfg.REPO)
+    if isinstance(raw, str):
+        return raw
+    if len([s for s in raw.iter_sections() if s.name == ".text" and s["sh_size"]]) != 2:
+        return "the fixture no longer emits its destructor out of line"
+    elf = _compile_elf(text, buildcfg.REPO, postcompile=True)
+    kept = buildcfg.sections(elf, ".text")
+    if len(kept) != 1 or not buildcfg.relocations(elf, kept[0][0]):
+        return "after postcompile: %d non-empty .text sections" % len(kept)
+    for tool in ("wgate.py", "wdiff.py", "classify.py", "integrate.py", "tucheck.py"):
+        if "buildcfg.postcompile(" not in open(f"{KIT}/{tool}", encoding="utf-8").read():
+            return "%s no longer runs the build's postcompile step" % tool
     return None
 
 

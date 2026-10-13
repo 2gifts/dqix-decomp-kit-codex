@@ -95,7 +95,10 @@ re-measure one of those before citing it.
 ### Linking and the config
 
 - `-nodead` is forced (mwldarm takes at most twelve `-force_active`; the LCF `FORCE_ACTIVE` block is
-  parsed but is not a dead-strip root). Anything mwcc emits stays in the link.
+  parsed but is not a dead-strip root). Anything mwcc emits stays in the link, except an inline
+  (multidef) function nothing in its object references: the decomp's `tools/mwcc.py` empties it after
+  each compile, as the original `-dead` link stripped it, and the gate tools apply the same step
+  through `buildcfg.postcompile()`.
 - An out-of-line `Class::Class()` emits both the complete and the `[base]` constructor; the unused
   copy shifts every later function. Define the mangled symbol as a free function
   (`extern "C" Cls* _ZN3ClsC1Ev(Cls* self)`) or leave the range to the delinked binary.

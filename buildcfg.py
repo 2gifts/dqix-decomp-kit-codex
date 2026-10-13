@@ -90,6 +90,32 @@ def cc_path(version):
     return f"{COMPILER_ROOT}/{version}/mwccarm.exe" if version else CC
 
 
+_POSTCOMPILE = []
+
+
+def postcompile(obj):
+    if not _POSTCOMPILE:
+        path = os.path.join(_TOOLS, "mwcc.py")
+        if os.path.exists(path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("_decomp_mwcc", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _POSTCOMPILE.append(module.strip)
+        else:
+            _POSTCOMPILE.append(lambda _obj: [])
+    return _POSTCOMPILE[0](obj)
+
+
+def sections(elf, name):
+    return [(i, s) for i, s in enumerate(elf.iter_sections()) if s.name == name and s["sh_size"]]
+
+
+def relocations(elf, index):
+    return [s for s in elf.iter_sections()
+            if s.header["sh_type"] in ("SHT_REL", "SHT_RELA") and s.header["sh_info"] == index]
+
+
 def tool_command(executable):
     runner = _cfg.WINE
     if runner and not os.path.isabs(runner) and ("/" in runner or "\\" in runner):
