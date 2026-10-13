@@ -5,7 +5,8 @@
 --fixes DIR overlays DIR's files (repo-relative paths, e.g. our cleaned versions of a pull request's flagged
 sources) on the merged tree and commits them as `Clean #N` before prready.py runs. DIR/DROP lists repo paths
 still implausible: each is removed with its delinks blocks (`Hold ... from #N`) and waits for cleanwork.
-A merge conflict in a file DIR replaces is resolved to DIR's version.
+A merge conflict in a file DIR replaces is resolved to DIR's version. A changed path outside
+src/, include/ and config/ lands only when DIR supplies it, so nothing a contributor wrote runs here.
 In the integration tree, from the published tip: merges each pull request head as `Merge #N` (a
 conflict only in delinks.txt, where both sides added blocks, keeps both), refuses symbolic links, strips
 comments from the source it changed, requires `prready.py decomp` READY, ports between the regions
@@ -157,6 +158,7 @@ def apply_fixes(tree, fixes, numbers):
     if written and git(tree, "status", "--porcelain", "--", *written)[1].strip():
         git(tree, "add", "--", *written)
         git(tree, "commit", "-q", "-m", "Clean " + " ".join("#" + n for n in numbers))
+    return written
 
 
 def main():
@@ -189,10 +191,10 @@ def main():
         if code and not (fixes and take_fixes(tree, fixes)) and not keep_both_delinks(tree, head):
             conflicts = git(tree, "diff", "--name-only", "--diff-filter=U")[1].split()
             refuse(f"#{n} conflicts in {', '.join(conflicts) or out.strip()[-200:]}; resolve it by hand")
-    if fixes:
-        apply_fixes(tree, fixes, numbers)
+    reviewed = apply_fixes(tree, fixes, numbers) if fixes else []
     strip_comments(tree, tip)
-    code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp", env=dict(os.environ, DQIX_REPO=tree))
+    code, out = run(KIT, sys.executable, f"{KIT}/prready.py", "decomp",
+                    env=dict(os.environ, DQIX_REPO=tree, PRREADY_REVIEWED=os.pathsep.join(reviewed)))
     if code:
         refuse(f"prready.py decomp on the merged tree:\n{out.strip()}")
     print(run(tree, sys.executable, f"{KIT}/regionsync.py", tree)[1].strip())

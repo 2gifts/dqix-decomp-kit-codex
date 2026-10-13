@@ -1580,8 +1580,13 @@ def _prready():
                 return f"a current checkout was refused by prready.py {mode}: {out.strip()[-300:]}"
         commit(decomp, {"tools/configure.py": "PYTHON = 1\n"})
         code, out = prready("decomp")
+        if code != 1 or "OUTSIDE A MATCH tools/configure.py" not in out:
+            return f"prready.py decomp passed a contributor's unreviewed tooling change: exit {code}"
+        env["PRREADY_REVIEWED"] = "tools/configure.py"
+        code, out = prready("decomp")
+        del env["PRREADY_REVIEWED"]
         if code != 0:
-            return f"prready.py decomp refused a pull request that changes only tooling: {out.strip()[-300:]}"
+            return f"prready.py decomp refused a tooling change landpr supplied itself: {out.strip()[-300:]}"
         git(decomp, "reset", "-q", "--hard", "HEAD~1")
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
                         "src/Dead.cpp": "void Dead() {}\n",
