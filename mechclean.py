@@ -558,16 +558,31 @@ def remap(sig, mapping):
     return [syms] + rest
 
 
-def verify(original, new, mapping, jobs, work):
+def resolved(rel, text, headers):
+    here = os.path.dirname(rel[len("include/"):]) if rel.startswith("include/") else None
+    out = set()
+    for path in includes(text):
+        out |= {path} & headers.keys()
+        if here is not None:
+            out |= {os.path.normpath(os.path.join(here, path)).replace("\\", "/")} & headers.keys()
+    return out
+
+
+def affected(original, new):
     headers = {rel[len("include/"):]: rel for rel in original if rel.startswith("include/")}
     closure = {h for h, rel in headers.items() if rel in new}
     while True:
-        more = {h for h, rel in headers.items() if h not in closure and set(includes(original[rel])) & closure}
+        more = {h for h, rel in headers.items() if h not in closure and resolved(rel, original[rel], headers) & closure}
         if not more:
             break
         closure |= more
     tus = sorted(rel for rel in original if rel.endswith((".c", ".cpp"))
-                 and (rel in new or set(includes(original[rel])) & closure))
+                 and (rel in new or resolved(rel, original[rel], headers) & closure))
+    return headers, closure, tus
+
+
+def verify(original, new, mapping, jobs, work):
+    headers, closure, tus = affected(original, new)
     print(f"files {len(new)}; translation units to check {len(tus)}", flush=True)
     os.makedirs(f"{work}/tu", exist_ok=True)
     shutil.rmtree(f"{work}/include", ignore_errors=True)
@@ -593,7 +608,7 @@ def verify(original, new, mapping, jobs, work):
 
     with ThreadPoolExecutor(jobs) as pool:
         bad = [rel for rel, ok in pool.map(check, tus) if not ok]
-    return bad, {rel: [headers[h] for h in set(includes(original[rel])) & closure] for rel in bad}
+    return bad, {rel: [headers[h] for h in resolved(rel, original[rel], headers) & closure] for rel in bad}
 
 
 def queue(new, blobs, why):

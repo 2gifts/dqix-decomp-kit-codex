@@ -2900,6 +2900,22 @@ def _buildcfg_as_flags():
     return None
 
 
+@check("mechclean verify checks every unit that reaches a changed header through a relative include",
+       "include/World/Zone3D.h includes \"ZoneFeatures.h\"; renaming ZoneFeatures::Reset passed verify "
+       "and src/World/Zone3D.cpp then failed to compile in landclean")
+def _mechclean_relative_include():
+    M = load("mechclean")
+    original = {"include/World/ZoneFeatures.h": "struct ZoneFeatures { void Reset(); };\n",
+                "include/World/Zone3D.h": '#include "ZoneFeatures.h"\n',
+                "src/World/Zone3D.cpp": '#include "World/Zone3D.h"\n',
+                "src/Other.cpp": "int x;\n"}
+    new = {"include/World/ZoneFeatures.h": "struct ZoneFeatures { void Reset_0201e248(); };\n"}
+    _headers, _closure, tus = M.affected(original, new)
+    if tus != ["src/World/Zone3D.cpp"]:
+        return "units checked: %s" % tus
+    return None
+
+
 @check("mechclean rewrites each one-form construct to its natural spelling and nothing else",
        "workers spent a session each on `x > -1`, a no-op address cast and a getter local that a "
        "rewrite plus one gate settles")
