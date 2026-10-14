@@ -28,6 +28,14 @@ FUNCTION = re.compile(r"\bkind:function\S*\s+addr:0x([0-9a-fA-F]+)")
 SYMBOLS = re.compile(r"^config/([^/]+)/(.+/symbols\.txt)$")
 MARKER = re.compile(r"(?m)^(<{7}|>{7})( |\r?$)")
 USA_TAG = re.compile(r"(?m)^// USA: \S+")
+REGION_ONLY = re.compile(r"(?m)^#if defined\((jpn|eur)\)\s*$")
+
+
+def region_tagged(text):
+    if USA_TAG.search(text):
+        return True
+    m = REGION_ONLY.search(text)
+    return bool(m) and bool(re.search(r"(?m)^// %s: \S+" % m.group(1).upper(), text))
 
 
 def git(repo, *args):
@@ -125,7 +133,7 @@ def decomp(decomp_tip):
     for path in added:
         if path.endswith(SOURCE) and f"{path}:" not in wired:
             problems.append(f"DEAD FILE {path}: no delinks.txt entry names it; delete it")
-        elif path.endswith((".c", ".cpp")) and not USA_TAG.search(show(REPO, "HEAD", path)):
+        elif path.endswith((".c", ".cpp")) and not region_tagged(show(REPO, "HEAD", path)):
             problems.append(f"NO USA TAG {path}: put `// USA: <USA symbol>` on the line above the definition")
     for path in changed:
         if path.startswith("src/") and path.endswith((".c", ".cpp")):
@@ -181,26 +189,31 @@ def hooked_target():
     return target
 
 
-HOOK = sys.argv[1:] == ["--hook"]
-if HOOK:
-    target = hooked_target()
-    if target is None:
+def main():
+    hook = sys.argv[1:] == ["--hook"]
+    if hook:
+        target = hooked_target()
+        if target is None:
+            sys.exit(0)
+        if target == "land":
+            print("gh pr merge skips the strip, the region ports and the three-region build; "
+                  "land decomp pull requests with: bash landpr.sh <number>...", file=sys.stderr)
+            sys.exit(2)
+    elif sys.argv[1:] in (["kit"], ["decomp"]):
+        target = sys.argv[1]
+    else:
+        sys.exit(__doc__)
+    problems, kit_tip, decomp_tip = staleness()
+    problems += kit(kit_tip, decomp_tip) if target == "kit" else decomp(decomp_tip)
+    report = "\n".join(problems + [f"NOT READY: {len(problems)} problem(s)" if problems else "READY"])
+    if hook:
+        if problems:
+            print(f"prready.py {target}: fix these before opening the pull request.\n{report}", file=sys.stderr)
+            sys.exit(2)
         sys.exit(0)
-    if target == "land":
-        print("gh pr merge skips the strip, the region ports and the three-region build; "
-              "land decomp pull requests with: bash landpr.sh <number>...", file=sys.stderr)
-        sys.exit(2)
-elif sys.argv[1:] in (["kit"], ["decomp"]):
-    target = sys.argv[1]
-else:
-    sys.exit(__doc__)
-problems, kit_tip, decomp_tip = staleness()
-problems += kit(kit_tip, decomp_tip) if target == "kit" else decomp(decomp_tip)
-report = "\n".join(problems + [f"NOT READY: {len(problems)} problem(s)" if problems else "READY"])
-if HOOK:
-    if problems:
-        print(f"prready.py {target}: fix these before opening the pull request.\n{report}", file=sys.stderr)
-        sys.exit(2)
-    sys.exit(0)
-print(report)
-sys.exit(1 if problems else 0)
+    print(report)
+    sys.exit(1 if problems else 0)
+
+
+if __name__ == "__main__":
+    main()

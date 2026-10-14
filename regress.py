@@ -1665,6 +1665,22 @@ def _scaffold_rom_call():
     return None
 
 
+@check("prready.py accepts a region-only source tagged for its region and still refuses an untagged one",
+       "#151's nine JPN-only functions (`#if defined(jpn)`, `// JPN: func_020e12ec`) have no USA symbol to "
+       "tag, so NO USA TAG refused them and no JPN-only function could ever land")
+def _prready_region_only():
+    P = load("prready")
+    jpn = '#if defined(jpn)\n// JPN: func_020e12ec\nextern "C" ARM int func_020e12ec(char* d) {\n    return 0;\n}\n#endif\n'
+    usa = '// USA: func_0201d044\nARM int f(void) {\n    return 1;\n}\n'
+    bare = 'extern "C" ARM int func_020e12ec(char* d) {\n    return 0;\n}\n'
+    unguarded = '// JPN: func_020e12ec\nextern "C" ARM int func_020e12ec(char* d) {\n    return 0;\n}\n'
+    if not P.region_tagged(jpn) or not P.region_tagged(usa):
+        return "prready.py refused a region-only JPN source or a USA-tagged one"
+    if P.region_tagged(bare) or P.region_tagged(unguarded):
+        return "prready.py accepted a source with no USA tag outside a region guard"
+    return None
+
+
 @check("prready.py refuses a pull request built on a stale kit or decomp, and passes a current one",
        "pull requests built on stale checkouts reverted the CI workflow, re-added a file for an address "
        "another file owned, renamed a symbol in one region only, recorded dead ends for matched "
