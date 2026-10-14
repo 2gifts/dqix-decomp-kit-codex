@@ -3762,6 +3762,24 @@ def _reserved_skipped():
     return None
 
 
+@check("the fleet's claims issue lists no claim older than CLAIM_TTL_MIN",
+       "claim.py reaps stale claims only in the module it is claiming from, so #325 published 64 "
+       "addresses, 48 of them landed, while no worker was running")
+def _published_claims_reaped():
+    R = load("reserved")
+    C = load("claim")
+    with tempfile.TemporaryDirectory(dir=f"{SP}/handwork", ignore_cleanup_errors=True) as sp:
+        for mod, a, age in (("017", "0219d250", 3 * 86400), ("main", "02029988", 60)):
+            p = os.path.join(sp, "claims", mod, a)
+            os.makedirs(p)
+            t = time.time() - age
+            os.utime(p, (t, t))
+        got = R.claims(sp)
+    if got != [("main", "02029988")]:
+        return "claims() published %s, want only the live main 02029988 (TTL %d min)" % (got, C.CLAIM_TTL_MIN)
+    return None
+
+
 @check("reserved.py reads a pull request too large for gh pr diff from its file patches",
        "#117 changed 900 files; gh pr diff refused it (HTTP 406 too_large) and every refresh fell back "
        "to the last list, so no reservation changed while it was open")

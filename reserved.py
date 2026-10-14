@@ -154,19 +154,22 @@ def load():
     return _HELD
 
 
-def claims():
+def claims(sp=None):
+    import claim
+    sp = sp or _kp.SP
     out = []
-    root = os.path.join(_kp.SP, "claims")
+    root = os.path.join(sp, "claims")
     if not os.path.isdir(root):
         return out
     for mod in sorted(os.listdir(root)):
         if not re.fullmatch(r"main|\d{3}", mod):
             continue
         d = os.path.join(root, mod)
+        claim.reap(d)
         for a in sorted(os.listdir(d)):
             if re.fullmatch(r"[0-9a-f]{8}", a) and os.path.isdir(os.path.join(d, a)):
                 out.append(("main" if mod == "main" else "ov" + mod, a))
-    for d in sorted(glob.glob(os.path.join(_kp.SP, "staging", "*"))):
+    for d in sorted(glob.glob(os.path.join(sp, "staging", "*"))):
         mod = os.path.basename(d)
         for f in sorted(glob.glob(os.path.join(d, "*.cpp"))):
             for a in STEM_ADDR.findall(os.path.splitext(os.path.basename(f))[0])[-1:]:
