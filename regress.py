@@ -396,8 +396,13 @@ def _stratify_total():
     src = open(os.path.join(KIT, "claim.py"), encoding="utf-8").read()
     if "not any(lo <= r[1] <= hi for lo, hi in SIZE_BOUNDS)" not in src:
         return "stratify() no longer keeps items that fall outside every SIZE_BOUNDS range"
-    # and the live pool must not be empty for a band the config still has work in
-    if not C.unmatched("main"):
+    with tempfile.TemporaryDirectory() as d:
+        sp, C.SP = C.SP, d
+        try:
+            pool = C.unmatched("main")
+        finally:
+            C.SP = sp
+    if not pool:
         return "claim.unmatched('main') is empty -- the band filter is dropping work again"
     return None
 
@@ -2511,6 +2516,20 @@ def _plausible_dodges():
     for good in ("x = (a - 1 < b);", "y = (p + i) + 0x100;", "z = base + 0x2c5c;"):
         if P.findings(wrap % good):
             return "plausible.py flagged %r: %r" % (good, P.findings(wrap % good))
+    return None
+
+
+@check("plausible.py flags a ternary whose two arms are the same expression",
+       "ov024 021dc93c matched with `f(c, obj->action ? obj->context : obj->context)` to hoist a load")
+def _plausible_same_arms():
+    P = load("plausible")
+    wrap = "void f(Obj* obj) {\n    %s\n}\n"
+    for bad in ("g(c, obj->action ? obj->context : obj->context);", "x = k ? h(a) : h(a);"):
+        if "TERNARY-SAME-ARMS" not in repr(P.findings(wrap % bad)):
+            return "plausible.py missed TERNARY-SAME-ARMS in %r" % bad
+    for good in ("g(c, obj->action ? obj->context : 0);", "x = k ? a + b : b;", "y = k ? s->a : s->ab;"):
+        if [k for _, k, _ in P.findings(wrap % good) if k == "TERNARY-SAME-ARMS"]:
+            return "plausible.py flagged %r" % good
     return None
 
 
