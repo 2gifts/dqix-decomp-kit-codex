@@ -1,4 +1,5 @@
 import collections
+import functools
 import glob
 import os
 import re
@@ -300,6 +301,45 @@ def class_header(qual):
     return None
 
 
+def method_return(qual, method):
+    header = class_header(qual)
+    if not header:
+        return None
+    text = open(f"{REPO}/include/{header}", encoding="utf-8", errors="replace").read()
+    body = class_body(text, qual)
+    m = body and re.search(r"(?m)^\s*(?:static\s+|virtual\s+|inline\s+)*([A-Za-z_][\w\s\*&:]*?)\s*\b%s\s*\(" %
+                           re.escape(method), text[body[0]:body[1]])
+    return m.group(1).strip() if m else None
+
+
+@functools.lru_cache(maxsize=None)
+def header_functions(header):
+    return _header_functions(header, set())
+
+
+def _header_functions(header, seen):
+    path = f"{REPO}/include/{header}"
+    if header in seen or not os.path.exists(path):
+        return {}
+    seen.add(header)
+    text, depth, flat = open(path, encoding="utf-8", errors="replace").read(), 0, []
+    for ch in text:
+        depth += {"{": 1, "}": -1}.get(ch, 0)
+        flat.append(ch if depth == 0 or ch in "{}" else " ")
+    names = {m.group(2): m.group(1).strip() for m in re.finditer(
+        r"(?m)^[ \t]*(?:extern\s+\"C\"\s+)?([A-Za-z_][^;{}()=\n]*?)\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*;", "".join(flat))}
+    for inc in includes(text):
+        names = {**_header_functions(inc, seen), **names}
+    return names
+
+
+def included_functions(text):
+    out = {}
+    for inc in includes(text):
+        out = {**header_functions(inc), **out}
+    return out
+
+
 def typed_call(text, name, scalar_cast, with_header):
     parsed = demangle(name)
     decls = list(re.finditer(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*;[ \t]*\n?'
@@ -313,6 +353,7 @@ def typed_call(text, name, scalar_cast, with_header):
     member = qual is not None and len(declared) == len(real) + 1
     if len(declared) != len(real) + member or (with_header and qual is None):
         return None
+    known = included_functions(text) if qual is None else {}
     for d in reversed(decls[1:]):
         text = text[:d.start()] + text[d.end():]
     first, at = decls[0], decls[0].start()
@@ -321,9 +362,9 @@ def typed_call(text, name, scalar_cast, with_header):
     if any("::" in w for w in words):
         return None
     insert = "".join("struct %s;\n" % w for w in sorted(words) if not re.search(r"\b%s\b" % w, rest))
-    if qual is None:
+    if qual is None and ident not in known:
         insert += "%s %s(%s);\n" % (ret, ident, ", ".join(real))
-    else:
+    elif qual is not None:
         body = class_body(rest, qual)
         if body and not re.search(r"\b%s\s*\(" % re.escape(ident), rest[body[0]:body[1]]):
             line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", ret, ident, ", ".join(real),
@@ -335,14 +376,29 @@ def typed_call(text, name, scalar_cast, with_header):
         header = class_header(qual)
         if not header or '"%s"' % header in text:
             return None
+        known = header_functions(header)
+        decl = re.compile(r"^(?:extern\s+\"C\"\s+)?[A-Za-z_][^;{}()=]*?\b(%s)\s*\([^;{}]*\)\s*;\s*$" %
+                          "|".join(map(re.escape, sorted(known)))) if known else None
+        kept, depth = [], 0
+        for line in text.split("\n"):
+            if not (depth == 0 and decl and decl.match(line)):
+                kept.append(line)
+            depth += line.count("{") - line.count("}")
+        text = "\n".join(kept)
         last = list(re.finditer(r"(?m)^#include[^\n]*\n", text))
         at = last[-1].end() if last else 0
         text = text[:at] + '#include "%s"\n' % header + text[at:]
+    header_ret = method_return(qual, ident) if qual else known.get(ident)
+    wrap = header_ret is not None and "*" in ret and norm_type(header_ret + " x") != norm_type(ret + " x")
     for start, end, args in reversed(call_sites(text, name)):
         if len(args) != len(declared):
             return None
         conv = [convert(a, d, r, scalar_cast) for a, d, r in zip(args[member:], declared[member:], real)]
-        if qual is None:
+        if ident == "operator=" and member and len(real) == 1 and real[0].endswith("&"):
+            to = lambda a, t: a[1:].strip() if a.startswith("&") and plain_expr(a[1:].strip()) and not scalar_cast \
+                else "*(%s)%s" % (t, a if plain_expr(a) else "(%s)" % a)
+            call = "%s = %s" % (to(args[0], qual + "*"), to(args[1], real[0][:-1].strip() + "*"))
+        elif qual is None:
             call = "%s(%s)" % (ident, ", ".join(conv))
         elif member:
             recv = receiver(args[0]) if norm_type(declared[0]) == norm_type(qual + "*") else \
@@ -350,7 +406,7 @@ def typed_call(text, name, scalar_cast, with_header):
             call = "%s%s(%s)" % (recv, ident, ", ".join(conv))
         else:
             call = "%s::%s(%s)" % (qual, ident, ", ".join(conv))
-        text = text[:start] + call + text[end:]
+        text = text[:start] + ("(%s)%s" % (re.sub(r"\bstruct\s+", "", ret), call) if wrap else call) + text[end:]
     return None if re.search(r"\b%s\b" % re.escape(name), text) else text
 
 
@@ -365,7 +421,7 @@ def apply_names(text, names):
     plan = names if isinstance(names, dict) else {n: 0 for n in names}
     for name in sorted(plan):
         text = strategies(name)[plan[name]](text)
-        if text is None:
+        if text is None or re.search(r"\b%s\b" % re.escape(name), text):
             return None
     return text
 

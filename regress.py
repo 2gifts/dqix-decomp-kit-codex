@@ -2672,6 +2672,14 @@ def _mechclean_extern_c():
         got = M.typed_call(member, "_ZN7Model3D4DrawEb", True, False) or ""
         if "    void Draw(bool);\n};" not in got or "((Model3D*)p)->Draw((short)k)" not in got:
             return "typed member rewrite gave %r" % got
+        assign = ('struct Vector3i { int x, y, z; Vector3i& operator=(const Vector3i&); };\n'
+                  'extern "C" void _ZN8Vector3iaSERKS_(void* dst, const void* src);\n'
+                  'void f(Vector3i* a, char* b) { Vector3i v; _ZN8Vector3iaSERKS_(&v, b + 4); }\n')
+        got = M.typed_call(assign, "_ZN8Vector3iaSERKS_", False, False) or ""
+        if "v = *(Vector3i const*)(b + 4);" not in got:
+            return "operator= rewrite gave %r" % got
+        if M.apply_names(assign, {"_ZN8Vector3iaSERKS_": 0}) is not None:
+            return "a strategy that leaves the mangled name in place counted as a rewrite"
         header = "#pragma once\nclass Model3D {\npublic:\n    int x;\n};\n"
         source = 'extern "C" void _ZN7Model3D4DrawEb(void* m, int on);\nvoid f(void* p) { _ZN7Model3D4DrawEb(p, 1); }\n'
         old = M.class_header
