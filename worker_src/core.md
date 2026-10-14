@@ -904,6 +904,9 @@ Each was a byte-exact replacement for an invented construct; write these first.
 - A local copy of a table read through `int* w = (int*)&copy;` is a struct with one array member indexed
   directly, `struct Words4 { int v[4]; }; Words4 w = table; w.v[i] = x;`. The pointer alias moves
   loads and stores around the copy; the array member restores the ROM's schedule (`020733d8`).
+- Byte tables a symbol apart read at a shared stride (`data_X[row * 3]`, `data_X1[row * 3]`, `data_X2[row * 3]`)
+  are ONE array of row structs, `struct Row { u8 a, b, carry; }; extern const Row data_X[];`, read
+  `data_X[row].a`. Three externs load three pool literals in the wrong order; one row array restores it (`021fb490`).
 - An offset added to reach an embedded sub-object is a member accessor, `Sub* GetSub() { return &sub; }`
   (`021e62a8`, `0215707c`).
 - A null test on `&node->allocator` is a null test on a member accessor's result:
