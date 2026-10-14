@@ -2519,6 +2519,32 @@ def _plausible_dodges():
     return None
 
 
+@check("asmgen spells capstone's UAL mnemonics the way mwasmarm and the inline assembler accept",
+       "the CW soft-float runtime (_dflt, _feq, _fmul, _dmul ...) failed to assemble on `lsls`, `andseq`, "
+       "`popeq` emitted as `ldmiaeq`, and `msr apsr_nzcvq`")
+def _asmgen_ual():
+    G = load("asmgen")
+    cases = [(("lsls", "r0, r0, ip"), ("movs", "r0, r0, lsl ip")),
+             (("lsrle", "r3, r3, #0x10"), ("movle", "r3, r3, lsr #0x10")),
+             (("lslseq", "r2, r2, #1"), ("moveqs", "r2, r2, lsl #1")),
+             (("andseq", "r2, r0, #1"), ("andeqs", "r2, r0, #1")),
+             (("ldmiaeq", "sp!, {r4, lr}"), ("ldmeqia", "sp!, {r4, lr}")),
+             (("ldm", "r0, {r1, r2}"), ("ldmia", "r0, {r1, r2}")),
+             (("popeq", "{r4, lr}"), ("ldmeqia", "sp!, {r4, lr}")),
+             (("push", "{r4, lr}"), ("stmdb", "sp!, {r4, lr}")),
+             (("msr", "apsr_nzcvq, ip"), ("msr", "cpsr_f, ip")),
+             (("mrs", "ip, apsr"), ("mrs", "ip, cpsr")),
+             (("ldrhne", "r3, [r0, #-1]"), ("ldrneh", "r3, [r0, #-1]")),
+             (("bls", "_L18"), ("bls", "_L18")),
+             (("subs", "r2, r2, #1"), ("subs", "r2, r2, #1")),
+             (("rsbmi", "r0, r0, #0"), ("rsbmi", "r0, r0, #0"))]
+    for given, want in cases:
+        got = G.normalise(*given)
+        if got != want:
+            return "asmgen.normalise%r gave %r, want %r" % (given, got, want)
+    return None
+
+
 @check("plausible.py flags a ternary whose two arms are the same expression",
        "ov024 021dc93c matched with `f(c, obj->action ? obj->context : obj->context)` to hoist a load")
 def _plausible_same_arms():
