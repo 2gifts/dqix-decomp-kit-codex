@@ -4064,6 +4064,33 @@ def _integ_bootstrap():
     return None
 
 
+@check("the integration tree's extract link stays out of the wave's commit",
+       "off Windows link_dir makes extract/usa a symlink, which extract/.gitignore's `*/` does not "
+       "ignore; the wave committed it and the fast-forward replaced the checkout's extracted ROM with a "
+       "link to itself (main 0209a218)")
+def _integ_extract_link_ignored():
+    import subprocess
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        repo, tree = Path(d, "repo"), Path(d, "tree")
+        (repo / "extract").mkdir(parents=True)
+        (repo / "extract/.gitignore").write_text("*/\n")
+        for args in (["init", "-q", "-b", "decomp-matching"], ["add", "."],
+                     ["-c", "user.name=f", "-c", "user.email=f@f", "commit", "-qm", "f"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        (repo / "extract/usa").mkdir()
+        r = subprocess.run([sys.executable, "-c", "import integ_tree; integ_tree.create()"], cwd=KIT,
+                           capture_output=True, text=True,
+                           env=dict(os.environ, DQIX_MAIN_REPO=str(repo), DQIX_INTEG=str(tree)))
+        if r.returncode or not (tree / "extract/usa").exists():
+            return "create() did not link extract/usa: %s" % r.stderr[-300:]
+        st = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True,
+                            text=True).stdout.strip()
+        if st:
+            return "the tree's status shows %r" % st
+    return None
+
+
 @check("both integrators skip sha1 without an ARM7 BIOS and still require it with one",
        "finish_wave exited 5 at `RED: sha1 mismatch` on every module for a contributor without the "
        "BIOS dump, so countfix, regionsync and the push never ran; CONTRIBUTING.md asks for sha1 only "

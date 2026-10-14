@@ -42,6 +42,17 @@ def link_dir(src, dst):
         os.symlink(src, dst)
 
 
+def exclude(pattern):
+    # extract/.gitignore's `*/` ignores directories only. Off Windows the link is a symlink, so the wave
+    # committed it and the fast-forward replaced the checkout's extracted ROM with a link to itself.
+    path = os.path.join(INTEG, git("rev-parse", "--git-path", "info/exclude", cwd=INTEG))
+    text = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+    if pattern not in text.splitlines():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(("\n" if text and not text.endswith("\n") else "") + pattern + "\n")
+
+
 def create():
     git("worktree", "prune")
     git("worktree", "add", "--detach", INTEG, BRANCH)
@@ -49,6 +60,7 @@ def create():
     for name in os.listdir(f"{REPO}/extract"):
         if os.path.isdir(f"{REPO}/extract/{name}") and not any(t.startswith(f"extract/{name}/") for t in tracked):
             link_dir(f"{REPO}/extract/{name}", f"{INTEG}/extract/{name}")
+            exclude(f"/extract/{name}")
     for name in ("arm7_bios.bin",):
         if os.path.isfile(f"{REPO}/{name}") and not os.path.exists(f"{INTEG}/{name}"):
             shutil.copy2(f"{REPO}/{name}", f"{INTEG}/{name}")
