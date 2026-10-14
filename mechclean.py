@@ -65,6 +65,7 @@ def self_assign(line):
 LINE_FIX = {"NOOP-ADDR-CAST": noop_addr_cast,
             "TERNARY-SELF": ternary_self, "SELF-ASSIGN": self_assign}
 FIXABLE = set(LINE_FIX) | {"INLINE-LOCAL-RETURN", "EXTERN-C-MANGLED"}
+TREE_FIXABLE = {"EXTERN-C-MANGLED"}
 
 
 LOCAL_RETURN = re.compile(r"(?:\(([^()]*)\)(\s*const)?\s*)?\{\s*(?!static\b)(?:const\s+)?[A-Za-z_][\w\s\*]*?\b"
@@ -316,7 +317,7 @@ def job(row, force=False):
                                   capture_output=True, text=True).stdout.strip()
             text = subprocess.run(["git", "-C", REPO, "cat-file", "blob", base], capture_output=True, text=True,
                                   encoding="utf-8", errors="replace").stdout
-        found = sorted({k for _, k, _ in plausible.findings(text)} & FIXABLE)
+        found = sorted({k for _, k, _ in plausible.findings(text)} & (TREE_FIXABLE if mod == "tree" else FIXABLE))
         if not found:
             return None
         path = f"{WORK}/{mod}/{rel.replace('/', '_') if mod == 'tree' else os.path.basename(rel)}"

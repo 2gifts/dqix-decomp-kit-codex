@@ -2633,6 +2633,8 @@ def _mechclean_extern_c():
     got = M.apply_names(member, {"_ZNK9GameState7GetTimeEv", "_ZN9GameState11GetInstanceEv"})
     if got != want:
         return "member rewrite gave %r" % got
+    if M.TREE_FIXABLE != {"EXTERN-C-MANGLED"}:
+        return "--tree rewrites kinds that need a gate, which it cannot run without a module: %s" % M.TREE_FIXABLE
     work = tempfile.mkdtemp()
     try:
         path = f"{work}/probe.cpp"
