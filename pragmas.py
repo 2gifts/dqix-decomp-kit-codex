@@ -3,6 +3,7 @@ import re
 
 CODEGEN_PRAGMA = re.compile(r"(?m)^[ \t]*#[ \t]*pragma[ \t]+(?!(?:define_section|section|once)\b)(\w+)")
 HAND_ASM = re.compile(r'(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b')
+ASM_SITE = re.compile(r"(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b|\b__asm\b|\basm\s*[({]")
 ASM_ALLOW_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asm_allow.txt")
 
 
@@ -29,5 +30,10 @@ def asm_allow_symbols():
     return out
 
 
+def has_asm(text):
+    from plausible import strip_code
+    return bool(ASM_SITE.search(strip_code(text)))
+
+
 def refused_asm(addr, path, text):
-    return (path.lower().endswith(".s") or bool(HAND_ASM.search(text))) and addr.lower() not in asm_allow()
+    return (path.lower().endswith(".s") or has_asm(text)) and addr.lower() not in asm_allow()

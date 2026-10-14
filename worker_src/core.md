@@ -945,7 +945,10 @@ Re-read instead of caching whenever calls sit between the two uses: a field afte
 calls (`02184bbc`, the target's second `add`/`ldrsb` pair), a predicate the function has itself been
 mutating — call it AGAIN rather than testing a held flag (`021ea85c`, 500B, matched on the first
 compile) — and a plain redundant `ldr`, written by naming the field again at the use site
-(`020307d0`).
+(`020307d0`). A spill slot that goes to the wrong temp can be the same lever: writing
+`menu->visibleCount - (menu->count - (menu->last - first))` instead of reusing a `span` local creates
+the `menu->last` reload's temp first, so it takes the top spill slot; call arguments bound to
+locals (`px`, `py`) leave only the address constant to be hoisted out of the loops (`02029988`).
 `02188d9c` — `const` is the OPPOSITE lever and it moves whole blocks, not one load: declaring an
 extern lookup table `extern const short tbl[]` means `int` stores through an unrelated pointer can
 no longer alias it, so eight `ldrsh` hoist above the store block and their index adds materialise up

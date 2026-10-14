@@ -1492,6 +1492,12 @@ def _gate_refuses_hand_asm():
         return "refused_asm refuses %s, which asm_allow.txt lists" % allowed
     if pragmas.refused_asm("0200aaaa", "x.cpp", 'extern "C" int f(int a) { return a; }\n'):
         return "refused_asm refuses plain C"
+    if pragmas.refused_asm("0200aaaa", "x.cpp", '// asm void g(void) is what the ROM has\n/* asm { nop } */\n'
+                           'extern "C" int f(int a) { return a; }\n'):
+        return "refused_asm refuses asm quoted in a comment"
+    if not pragmas.refused_asm("0200aaaa", "x.cpp", 'extern "C" int f(int a) {\n    int b;\n'
+                               '    __asm("mov b, a");\n    return b;\n}\n'):
+        return "refused_asm passes an inline __asm register hack"
     addr = _main_function(landed=False)
     if not addr:
         return "no unlanded main function to gate"

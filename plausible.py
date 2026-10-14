@@ -11,7 +11,7 @@ import re
 import sys
 
 import mangle
-from pragmas import asm_allow, asm_allow_symbols
+from pragmas import ASM_SITE, asm_allow, asm_allow_symbols
 
 HWADDR = r"0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b"
 HWTARGET = re.compile(r"[\s(]*(?:%s|&?\s*[A-Z][A-Z0-9_]+\b(?!\s*(?:\.|->|\[)))" % HWADDR)
@@ -823,8 +823,6 @@ def _transliterated(src, out):
         _hit(out, src.text.count("\n", 0, labels[0].start()) + 1, "ADDRESS-LABEL",
              ",".join(m.group(1) for m in labels))
 
-
-ASM_SITE = re.compile(r"(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b|\b__asm\b|\basm\s*[({]")
 
 
 def _enclosing(src, off):
