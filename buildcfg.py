@@ -73,6 +73,8 @@ _cfg = _load()
 
 MWCC_VERSION = _cfg.MWCC_VERSION
 DECOMP_ME_COMPILER = _cfg.DECOMP_ME_COMPILER
+# Suffix of the build's native tools (objdiff-cli, dsd): ".exe" on Windows, "" elsewhere.
+EXE = getattr(_cfg, "EXE", ".exe" if os.name == "nt" else "")
 COMPILER_ROOT = os.path.normpath(os.path.join(REPO, str(_cfg.mwcc_root)))
 CC = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwccarm.exe"
 AS = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwasmarm.exe"
