@@ -24,6 +24,8 @@ def bash(base=None):
         found = shutil.which("bash")
         if not found:
             raise FileNotFoundError("bash is not on PATH")
+        # The caller's env may carry a stripped PATH; the shell still needs the coreutils beside it.
+        env["PATH"] = os.pathsep.join(p for p in (os.path.dirname(found), env.get("PATH")) if p)
         return found, env
     roots = [os.path.join(os.environ[k], "Git") for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
              if os.environ.get(k)]
