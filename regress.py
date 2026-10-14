@@ -2688,6 +2688,12 @@ def _mechclean_extern_c():
         got = M.typed_call(member, "_ZN7Model3D4DrawEb", True, False) or ""
         if "    void Draw(bool);\n};" not in got or "((Model3D*)p)->Draw((short)k)" not in got:
             return "typed member rewrite gave %r" % got
+        nested = ('class Script {\npublic:\n    struct Parameter {\n        int ToInt() const;\n    };\n};\n'
+                  'extern "C" int _ZNK6Script9Parameter5ToIntEv(void* p);\nint f(void* p) { return '
+                  '_ZNK6Script9Parameter5ToIntEv(p); }\n')
+        got = M.typed_call(nested, "_ZNK6Script9Parameter5ToIntEv", False, False) or ""
+        if "return ((Script::Parameter*)p)->ToInt(); }" not in got:
+            return "nested member rewrite gave %r" % got
         assign = ('struct Vector3i { int x, y, z; Vector3i& operator=(const Vector3i&); };\n'
                   'extern "C" void _ZN8Vector3iaSERKS_(void* dst, const void* src);\n'
                   'void f(Vector3i* a, char* b) { Vector3i v; _ZN8Vector3iaSERKS_(&v, b + 4); }\n')

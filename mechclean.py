@@ -293,10 +293,12 @@ def class_body(text, qual):
     return m.end(), i - 1
 
 
+@functools.lru_cache(maxsize=None)
 def class_header(qual):
+    parts = qual.split("::")
     for path in glob.glob(f"{REPO}/include/**/*.h", recursive=True):
-        if re.search(r"(?m)^\s*(?:struct|class)\s+%s\b[^;]*\{" % re.escape(qual), open(path, encoding="utf-8",
-                                                                                     errors="replace").read()):
+        text = open(path, encoding="utf-8", errors="replace").read()
+        if all(re.search(r"(?m)^\s*(?:struct|class)\s+%s\b[^;]*\{" % re.escape(p), text) for p in parts):
             return os.path.relpath(path, f"{REPO}/include").replace("\\", "/")
     return None
 
@@ -379,7 +381,15 @@ def typed_def(text, name, with_header, real=None):
                                  " const" if const else "")
     body = "".join("\n%s    %s" % (m.group(1), a) for a in aliases)
     text = text[:m.start()] + head + body + text[m.end():]
-    if qual is not None:
+    nested = next((w for t in real for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)+", t)), None)
+    if qual is None and with_header:
+        header = class_header(nested) if nested else None
+        if not header or '"%s"' % header in text:
+            return None
+        last = list(re.finditer(r"(?m)^#include[^\n]*\n", text))
+        at = last[-1].end() if last else 0
+        text = text[:at] + '#include "%s"\n' % header + text[at:]
+    elif qual is not None:
         cls = class_body(text, qual)
         if cls and cls[1] < m.start() and not re.search(r"\b%s\s*\(" % re.escape(ident), text[cls[0]:cls[1]]):
             line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", re.sub(r"\b(?:ARM|THUMB)\b", "",
@@ -411,17 +421,18 @@ def typed_call(text, name, scalar_cast, with_header, real=None):
     ret = decls[0].group(2).strip()
     declared = [p.strip() for p in split_args(decls[0].group(3))] if decls[0].group(3).strip() not in ("", "void") else []
     member = qual is not None and len(declared) == len(real) + 1
-    if len(declared) != len(real) + member or (with_header and qual is None):
+    words = {w for t in real for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - BUILTIN_WORDS
+    owner = qual or next((w for w in sorted(words) if "::" in w), None)
+    if len(declared) != len(real) + member or (with_header and owner is None):
         return None
     known = included_functions(text) if qual is None else {}
     for d in reversed(decls[1:]):
         text = text[:d.start()] + text[d.end():]
     first, at = decls[0], decls[0].start()
     rest = text[:first.start()] + text[first.end():]
-    words = {w for t in real for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - BUILTIN_WORDS
-    if any("::" in w for w in words):
+    if not with_header and any("::" in w and not re.search(r"\b%s\b" % w.split("::")[0], rest) for w in words):
         return None
-    insert = "".join("struct %s;\n" % w for w in sorted(words) if not re.search(r"\b%s\b" % w, rest))
+    insert = "".join("struct %s;\n" % w for w in sorted(words) if "::" not in w and not re.search(r"\b%s\b" % w, rest))
     if qual is None and ident not in known:
         insert += "%s %s(%s);\n" % (ret, ident, ", ".join(real))
     elif qual is not None:
@@ -433,7 +444,7 @@ def typed_call(text, name, scalar_cast, with_header, real=None):
             at += len(line) if body[1] <= at else 0
     text = rest[:at] + insert + rest[at:]
     if with_header:
-        header = class_header(qual)
+        header = class_header(owner)
         if not header or '"%s"' % header in text:
             return None
         known = header_functions(header)
@@ -618,7 +629,7 @@ def method_decls(original):
         words = {w for t in list(real) + [ret] for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - BUILTIN_WORDS
         body = class_body(text, qual)
         if not body or re.search(r"\b%s\s*\(" % re.escape(method), text[body[0]:body[1]]) or \
-                any("::" in w or not re.search(r"\b%s\b" % w, text) for w in words - {qual}):
+                any(not re.search(r"\b%s\b" % w.split("::")[-1], text) for w in words - {qual}):
             continue
         line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", ret, method, ", ".join(real),
                                         " const" if const else "")
