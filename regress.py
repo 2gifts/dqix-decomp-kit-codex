@@ -2619,6 +2619,7 @@ def _plausible_extern_c_mangled():
        "Eakeys maps our matches onto his branch by address: 1593 landed names like `_Z10SetWord0x0Pii` "
        "carried none")
 def _addrname():
+    import shutil
     A = load("addrname")
     cases = [("_Z10SetWord0x0Pii", "_0200fb84", "_Z19SetWord0x0_0200fb84Pii"),
              ("_ZNK9GameState7GetTimeEv", "_ov017_021afe00", "_ZNK9GameState22GetTime_ov017_021afe00Ev"),
@@ -2629,6 +2630,16 @@ def _addrname():
     for skipped in ("_ZN20Ov33BackgroundLoaderD1Ev", "_ZN5Vec3iaSERKS_", "_Z3maxIiET_S0_S0_", "func_02000000"):
         if A.own_name(skipped):
             return "own_name accepted %s, which has no plain own name to extend" % skipped
+    if shutil.which("c++filt"):
+        info = ("_Z3FooP3Objit", None, "Foo", ["Obj*", "int", "short"], ["Obj*", "int", "unsigned short"])
+        decl = A.retype("struct Obj;\nvoid Foo(Obj* o, int a, short b);\nvoid g(Obj* o) { Foo(o, 1, 2); }\n",
+                        "_Z3FooP3Objis", info)
+        if "void Foo(Obj* o, int a, unsigned short b);" not in decl or "Foo(o, 1, 2); }" not in decl:
+            return "retype left the old declaration: %r" % decl
+        view = A.retype('struct Obj;\nextern "C" void _Z3FooP3Objis(Obj*, int, unsigned short);\n'
+                        "void h(Obj* o) { _Z3FooP3Objis(o, 1, 2); }\n", "_Z3FooP3Objis", info)
+        if "void Foo(Obj*, int, unsigned short);" not in view or "{ Foo(o, 1, 2); }" not in view:
+            return "retype left the extern \"C\" view: %r" % view
     sig = [(("_Z3Foov", 0, 4, "STT_FUNC", "STB_GLOBAL", ".text"), ("_Z3Barv", 0, 0, "STT_NOTYPE", "STB_GLOBAL",
                                                                   "SHN_UNDEF")),
            (".text", b"\x00" * 4), (".rela.text", ((0, 1, "_Z3Barv"),))]

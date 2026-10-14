@@ -345,12 +345,13 @@ def param_name(param):
     return m.group(1) if m and param_type(param) != re.sub(r"\s+", " ", param.strip()) else None
 
 
-def typed_def(text, name, with_header):
+def typed_def(text, name, with_header, real=None):
     parsed = demangle(name)
     m = re.search(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*\{' % re.escape(name), text)
     if not parsed or not m:
         return text
-    full, real, const = parsed
+    full, demangled, const = parsed
+    real = demangled if real is None else real
     qual, ident = full.rsplit("::", 1) if "::" in full else (None, full)
     declared = [p.strip() for p in split_args(m.group(3))] if m.group(3).strip() not in ("", "void") else []
     member = qual is not None and len(declared) == len(real) + 1
@@ -396,15 +397,16 @@ def typed_def(text, name, with_header):
     return text
 
 
-def typed_call(text, name, scalar_cast, with_header):
+def typed_call(text, name, scalar_cast, with_header, real=None):
     parsed = demangle(name)
     decls = list(re.finditer(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*;[ \t]*\n?'
                              % re.escape(name), text))
     if parsed and not decls:
-        return typed_def(text, name, with_header)
+        return typed_def(text, name, with_header, real)
     if not parsed:
         return None
-    full, real, const = parsed
+    full, demangled, const = parsed
+    real = demangled if real is None else real
     qual, ident = full.rsplit("::", 1) if "::" in full else (None, full)
     ret = decls[0].group(2).strip()
     declared = [p.strip() for p in split_args(decls[0].group(3))] if decls[0].group(3).strip() not in ("", "void") else []
@@ -467,7 +469,7 @@ def typed_call(text, name, scalar_cast, with_header):
         else:
             call = "%s::%s(%s)" % (qual, ident, ", ".join(conv))
         text = text[:start] + ("(%s)%s" % (re.sub(r"\bstruct\s+", "", ret), call) if wrap else call) + text[end:]
-    text = typed_def(text, name, with_header)
+    text = typed_def(text, name, with_header, real)
     return None if text is None or re.search(r"\b%s\b" % re.escape(name), text) else text
 
 
