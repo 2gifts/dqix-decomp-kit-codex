@@ -2630,6 +2630,23 @@ def _plausible_extern_c_mangled():
     return None
 
 
+@check("plausible.py blocks a source defining a game class a header already defines",
+       "cleanwork rewrote 0201e574's extern \"C\" view as a member of a local `class ZoneFeatures` with "
+       "an invented layout instead of including World/ZoneFeatures.h")
+def _plausible_type_redefined():
+    P = load("plausible")
+    P.GAME_TYPES = {"ZoneFeatures", "Vector3i", "VRAMSubregion"}
+    for bad in ("class ZoneFeatures {\npublic:\n    int count;\n};\n", "struct Vector3i { int x, y, z; };\n",
+                "enum VRAMSubregion {\n    VRAMSubregion_TexturePalette = 0\n};\n"):
+        if "TYPE-REDEFINED" not in [k for _, k, _ in P.blocking(bad)]:
+            return "plausible.py did not block %r" % bad
+    for good in ('#include "World/ZoneFeatures.h"\nstruct ZoneFeatures;\n', "struct Entry0201e574 { int f0; };\n",
+                 "// struct Vector3i { int x; };\n", "ZoneFeatures::Opcode64Entry* e;\n"):
+        if [k for _, k, _ in P.findings(good) if k == "TYPE-REDEFINED"]:
+            return "plausible.py flagged %r" % good
+    return None
+
+
 @check("addrname appends the USA address to a mangled function's own name and maps it through the object",
        "Eakeys maps our matches onto his branch by address: 1593 landed names like `_Z10SetWord0x0Pii` "
        "carried none")

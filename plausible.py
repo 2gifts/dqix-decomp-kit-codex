@@ -797,6 +797,34 @@ def _extern_c_mangled(src, out):
             _hit(out, src.line(m.start(1)), "EXTERN-C-MANGLED", m.group(1))
 
 
+TYPE_DEF = re.compile(r"(?m)^[ \t]*(?:typedef\s+)?(?:struct|class|union|enum)\s+([A-Za-z_]\w*)\s*(?::[^{;]*)?\{")
+GAME_TYPES = None
+
+
+def game_types():
+    global GAME_TYPES
+    if GAME_TYPES is None:
+        import glob
+        import kitpaths
+        defined, mangled = set(), set()
+        for path in glob.glob(f"{kitpaths.REPO}/include/**/*.h*", recursive=True):
+            code = strip_code(open(path, encoding="utf-8", errors="ignore").read())
+            defined.update(m.group(1) for m in TYPE_DEF.finditer(code)
+                           if code.count("{", 0, m.start()) == code.count("}", 0, m.start()))
+        for path in glob.glob(f"{kitpaths.REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
+            for name in re.findall(r"(?m)^(_Z\S+) kind:", open(path, encoding="utf-8", errors="ignore").read()):
+                for n in re.finditer(r"\d+", name):
+                    mangled.add(name[n.end():n.end() + int(n.group())])
+        GAME_TYPES = defined & mangled
+    return GAME_TYPES
+
+
+def _type_redefined(src, out):
+    for m in TYPE_DEF.finditer(src.code):
+        if m.group(1) in game_types():
+            _hit(out, src.line(m.start(1)), "TYPE-REDEFINED", m.group(1))
+
+
 ACCESSOR = re.compile(r"inline\s+[^;{}()]*?\b([A-Za-z_]\w*)\s*\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*\s*"
                       r"(?:const\s+)?([A-Za-z_]\w*)\s*\)\s*(?:const\s*)?\{\s*return\s+\2\s*->\s*([A-Za-z_]\w*)\s*;\s*\}")
 ALIAS = re.compile(r"(?m)^\s*(?:(?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*\s*\*\s*)?([A-Za-z_]\w*)\s*=\s*"
@@ -857,7 +885,7 @@ def _hand_asm(src, out):
 
 
 FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity,
-              _extern_c_mangled, _mixed_access, _transliterated, _hand_asm]
+              _extern_c_mangled, _type_redefined, _mixed_access, _transliterated, _hand_asm]
 
 
 def _body_start(lines):
