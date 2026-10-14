@@ -2,6 +2,7 @@ import collections
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -12,6 +13,7 @@ REPO, SP = kitpaths.REPO, kitpaths.SP
 WORK = f"{SP}/handwork/addrname"
 USAGE = """python addrname.py [--keep REF] [-j N] [--dry]
        python addrname.py --remangle [--keep REF] [-j N]
+       python addrname.py --shared [--keep REF]
 
 Renames every function symbol in config/usa whose name lacks its USA address, so the address stays
 visible: <name>_<addr> in main, <name>_ovNNN_<addr> in an overlay, in every region's symbols.txt and in
@@ -25,7 +27,11 @@ nothing.
 --remangle renames a symbol whose `extern "C"` mangled-name callers agree on scalar parameter widths its
 mangling contradicts (the name was guessed wrong; pointer types and arity are left to the mangling) to
 the name that signature mangles to: every region's symbols.txt, its definition and declarations retyped,
-its callers declaring the plain C++ function. It is kept on the same terms."""
+its callers declaring the plain C++ function. It is kept on the same terms.
+
+--shared renames the names whose identifier another symbol shares: the class's own declaration and
+qualified definitions directly, each unqualified call one at a time, kept when the unit's object moves to
+the new name and nothing else changes."""
 FUNC = re.compile(r"(?m)^(\S+) kind:function\([^)]*\) addr:0x([0-9a-fA-F]+)")
 SOURCES = (".c", ".cpp", ".h", ".hpp", ".inc")
 
@@ -221,6 +227,74 @@ def remangle(jobs, keep):
     return 0
 
 
+def distance(before, after, mapping):
+    if before is None or after is None:
+        return None
+    want = remap(before, mapping)
+    return sum(1 for a, b in zip(want, after) if a != b) + abs(len(want) - len(after))
+
+
+def shared_rename(original, new, name, renamed_to, prior=None):
+    base, fresh = ident(name), ident(renamed_to)
+    parsed = mechclean.demangle(name)
+    qual = parsed[0].rsplit("::", 1)[0] if parsed and "::" in parsed[0] else None
+    real = tuple(mechclean.norm_type(t) for t in parsed[1]) if parsed else None
+    call = re.compile(r"\b%s(?=\s*\()" % re.escape(base))
+    out = {}
+    for rel, text in ((r, new.get(r, t)) for r, t in original.items()):
+        if not rel.endswith(SOURCES + (".s", "symbols.txt")) or (name not in text and base not in text):
+            continue
+        t = re.sub(r"\b%s\b" % re.escape(name), renamed_to, text)
+        if rel.endswith(SOURCES) and qual:
+            t = re.sub(r"\b%s::%s(?=\s*\()" % (re.escape(qual), re.escape(base)), "%s::%s" % (qual, fresh), t)
+            body = mechclean.class_body(t, qual)
+            if body:
+                t = t[:body[0]] + call.sub(fresh, t[body[0]:body[1]]) + t[body[1]:]
+        elif rel.endswith(SOURCES):
+            def decl(m):
+                params = [p for p in mechclean.split_args(m.group(2))] if m.group(2).strip() not in ("", "void") else []
+                return m.group(0).replace(base, fresh, 1) if tuple(mechclean.norm_type(p) for p in params) == real \
+                    else m.group(0)
+            t = re.sub(r"\b(%s)\s*\(([^;{}()]*)\)(?=\s*[;{])" % re.escape(base), decl, t)
+        if t != text:
+            out[rel] = t
+    merged = {**new, **out}
+    mapping = {**(prior or {}), name: renamed_to}
+    headers = [rel for rel in out if rel.startswith("include/")]
+    tus = sorted(rel for rel in original if rel.endswith((".c", ".cpp")) and (
+        rel in out or base in original[rel] or any(h[len("include/"):] in original[rel] for h in headers)))
+    work = f"{WORK}/shared"
+    os.makedirs(f"{work}/tu", exist_ok=True)
+    shutil.rmtree(f"{work}/include", ignore_errors=True)
+    shutil.copytree(f"{REPO}/include", f"{work}/include")
+    for rel, text in merged.items():
+        if rel.startswith("include/"):
+            with open(f"{work}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+    for rel in tus:
+        path = f"{work}/tu/{rel.replace('/', '_')}"
+        regions = ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, original[rel])]
+        before = {r: mechclean.signature(original[rel], path, r, f"{REPO}/include") for r in regions}
+        if None in before.values():
+            continue
+        text = merged.get(rel, original[rel])
+        score = lambda t: [distance(before[r], mechclean.signature(t, path, r, f"{work}/include"), mapping)
+                           for r in regions]
+        current = score(text)
+        for m in reversed(list(call.finditer(text))):
+            if all(d == 0 for d in current if d is not None) and None not in current:
+                break
+            trial = text[:m.start()] + fresh + text[m.end():]
+            got = score(trial)
+            if None not in got and (None in current or sum(got) < sum(current)):
+                text, current = trial, got
+        if None in current or any(current):
+            return None, rel
+        if text != original[rel]:
+            merged[rel] = text
+    return merged, None
+
+
 def main():
     args = sys.argv[1:]
     ref, jobs, dry = None, 8, "--dry" in args
@@ -230,7 +304,7 @@ def main():
             ref = args.pop(0)
         elif a == "-j" and args:
             jobs = int(args.pop(0))
-        elif a not in ("--dry", "--remangle"):
+        elif a not in ("--dry", "--remangle", "--shared"):
             sys.exit(USAGE)
     keep = kept_names(ref)
     if "--remangle" in sys.argv:
@@ -238,6 +312,17 @@ def main():
     mapping = targets(keep)
     every = symbol_idents()
     shared = {m for m in mapping if len(every[ident(m)]) > 1}
+    if "--shared" in sys.argv:
+        blobs, original = mechclean.tree_texts()
+        new, done = {}, []
+        for name in sorted(shared):
+            merged, bad = shared_rename(original, new, name, mapping[name], {d: mapping[d] for d in done})
+            print(f"{name}: " + (f"left, {bad} differs" if merged is None else f"renamed to {mapping[name]}"),
+                  flush=True)
+            if merged is not None:
+                new, done = merged, done + [name]
+        new = {rel: text for rel, text in new.items() if text != original[rel]}
+        return 0 if not new or mechclean.queue(new, blobs, "addrname") else 1
     mapping = {m: n for m, n in mapping.items() if m not in shared}
     print(f"targets {len(mapping) + len(shared)}; one identifier for two symbols: {len(shared)}", flush=True)
     blobs, original = mechclean.tree_texts()

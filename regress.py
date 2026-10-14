@@ -1252,16 +1252,24 @@ def _staging_sweep_keeps_match():
     return None
 
 
-def _compile_elf(text, repo, postcompile=False):
+def _compile_elf(text, repo, postcompile=False, rev=None):
     import io
     import subprocess
+    import tarfile
     import buildcfg
     from elftools.elf.elffile import ELFFile
     with tempfile.TemporaryDirectory() as d:
         src, obj = os.path.join(d, "t.cpp"), os.path.join(d, "t.o")
         with open(src, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-        r = subprocess.run(buildcfg.tool_command(buildcfg.CC) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj], cwd=repo,
+        flags = list(buildcfg.FLAGS)
+        if rev:
+            subprocess.run(["git", "-C", repo, "archive", "-o", os.path.join(d, "inc.tar"), rev, "include"], check=True)
+            with tarfile.open(os.path.join(d, "inc.tar")) as tar:
+                tar.extractall(d)
+            flags = [os.path.join(d, "include") if f == "include" and flags[i - 1] == "-i" else f
+                     for i, f in enumerate(flags)]
+        r = subprocess.run(buildcfg.tool_command(buildcfg.CC) + flags + ["-c", src, "-o", obj], cwd=repo,
                            capture_output=True, text=True)
         if r.returncode:
             return "COMPILE " + (r.stdout + r.stderr)[-200:]
@@ -1292,7 +1300,7 @@ def _dataown_replay():
     own = os.path.normcase(os.path.abspath(os.path.join(repo, cfg, "relocs.txt")))
 
     def run(text, rom):
-        elf = _compile_elf(text, repo)
+        elf = _compile_elf(text, repo, rev=after)
         if isinstance(elf, str):
             return elf
         relocs = dataown.load_relocs(repo)
@@ -1649,8 +1657,8 @@ def _scaffold_symbols_name():
        "_Z23EnableSystemControlBit0v, which links to a symbol that does not exist")
 def _scaffold_mangled_callee():
     out = _scaffold("main", "020c8bd4")
-    if "void EnableSystemControlBit0();" not in out:
-        return "no C++ declaration of EnableSystemControlBit0: %s" % out[-300:]
+    if "void EnableSystemControlBit0_020c89f8();" not in out:
+        return "no C++ declaration of EnableSystemControlBit0_020c89f8: %s" % out[-300:]
     if re.search(r'(?m)^extern "C" void (?:_Z|EnableSystemControlBit0)', out):
         return "a mangled callee was declared extern \"C\""
     return None
@@ -1661,8 +1669,8 @@ def _scaffold_mangled_callee():
        "map left it out")
 def _scaffold_rom_call():
     out = _scaffold("main", "020c8bd4")
-    if not re.search(r"(?m)^\s+\+0x50\s+DisableSystemControlBit0$", out):
-        return "the call map has no +0x50 DisableSystemControlBit0: %s" % out[-300:]
+    if not re.search(r"(?m)^\s+\+0x50\s+DisableSystemControlBit0_020c8a08$", out):
+        return "the call map has no +0x50 DisableSystemControlBit0_020c8a08: %s" % out[-300:]
     return None
 
 

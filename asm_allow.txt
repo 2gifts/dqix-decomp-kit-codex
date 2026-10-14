@@ -43,16 +43,16 @@
 020c8bd4  func_020c8bd4                    NitroSDK OSi_DisplayExContext wraps its handler call in inline asm: mrs/msr cpsr, mov sp, ldr lr,=label (pokeheartgold os_exception.c:123)
 0200ae40  _d2f                             CW runtime soft-float, hand-written asm: andseq, cmn+bhs, subs+bls and an unfolded mov #0xff000000 have no C form (pokediamond RUNTIME_d_dtof.s)
 0200d8a8  func_0200d8a8                    MSL semihosting SYS_READC (mov r0,#7; swi 0x123456): a swi has no C form; neighbours func_0200d894 and sys_exit 0200d8bc are delinked as the same asm
-020ca7e0  _Z10AtomicSwapiPi                  swp has no C form (SonicRushAdventure-Decomp/mi_swap.c 100%)
-020c8b30  _Z28CallFunc020c8b44Then020c8bd4Pv NitroSDK OSi_GetAndDisplayContext: push r0/lr, two bl, pop, bx lr (pokediamond OS_exception.c, asm)
-020c9a4c  _Z17CountLeadingZerosj             hand asm (SonicRushAdventure-Decomp/os_vramExclusive.c 100%)
+020ca7e0  _Z19AtomicSwap_020ca7e0iPi         swp has no C form (SonicRushAdventure-Decomp/mi_swap.c 100%)
+020c8b30  _Z37CallFunc020c8b44Then020c8bd4_020c8b30Pv NitroSDK OSi_GetAndDisplayContext: push r0/lr, two bl, pop, bx lr (pokediamond OS_exception.c, asm)
+020c9a4c  _Z26CountLeadingZeros_020c9a4cj    hand asm (SonicRushAdventure-Decomp/os_vramExclusive.c 100%)
 020001c0  CpuSet                             swi has no C form (khdays-decomp/CpuSet.c 100%)
-020c8a08  _Z24DisableSystemControlBit0v      mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
-020c89d4  _Z13EnableDataTcmv                 mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
-020c89c4  _Z20EnableInstructionTcmv          mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
-020c89f8  _Z23EnableSystemControlBit0v       mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c8a08  _Z33DisableSystemControlBit0_020c8a08v mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c89d4  _Z22EnableDataTcm_020c89d4v        mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c89c4  _Z29EnableInstructionTcm_020c89c4v mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c89f8  _Z32EnableSystemControlBit0_020c89f8v mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
 020c6914  func_020c6914                      hand asm (SonicRushAdventure-Decomp/gxasm.c 100%)
-020c89e4  _Z20GetDataTcmRegionBasev          mrc has no C form
+020c89e4  _Z29GetDataTcmRegionBase_020c89e4v mrc has no C form
 0200056c  Halt                               swi has no C form (khdays-decomp/Halt.c 100%)
 0200062c  HuffUnCompReadByCallback           swi has no C form (khdays-decomp/HuffUnCompReadByCallback.c 100%)
 020c21dc  Mat4x4_WriteIdentity               hand asm (SonicRushAdventure-Decomp/fx_mtx44.c 100%)
@@ -64,12 +64,12 @@
 020c2208  Mat4x4_ConvertTo4x3                hand asm (SonicRushAdventure-Decomp/fx_mtx44.c 100%)
 020c7d80  RestoreContext                     mrs/msr has no C form (sm64ds-decomp/ARMRestoreContext.c 82%)
 020c7d34  SaveContext                        mrs/msr has no C form (SonicRushAdventure-Decomp/os_context.c 84%)
-020c8a2c  _Z20SetProtectionRegion1j          mcr has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
-020c8a34  _Z20SetProtectionRegion2j          mcr has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
-020c8a18  _Z26UpdateDataAccessPermissionjj   mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c8a2c  _Z29SetProtectionRegion1_020c8a2cj mcr has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c8a34  _Z29SetProtectionRegion2_020c8a34j mcr has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
+020c8a18  _Z35UpdateDataAccessPermission_020c8a18jj mcr/mrc has no C form (SonicRushAdventure-Decomp/os_protectionRegion.c 100%)
 020c9bf0  func_020c9bf0                      mcr has no C form (SonicRushAdventure-Decomp/os_cache.c 100%)
-020c8348  _Z17WaitForVCountZerov             hand asm (khdays-decomp/OSi_CancelDma0.c 100%)
-020c56dc  _Z20WriteGXFifoZeroBurstPVv        hand asm (pokediamond/GX_g3x.c 100%)
+020c8348  _Z26WaitForVCountZero_020c8348v    hand asm (khdays-decomp/OSi_CancelDma0.c 100%)
+020c56dc  _Z29WriteGXFifoZeroBurst_020c56dcPVv hand asm (pokediamond/GX_g3x.c 100%)
 0200bf68  _fgeq                              mrs/msr has no C form
 0200bfc4  _fgr                               mrs/msr has no C form
 0200c020  _fleq                              mrs/msr has no C form
