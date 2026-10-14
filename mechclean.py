@@ -1,3 +1,4 @@
+import collections
 import glob
 import os
 import re
@@ -22,7 +23,7 @@ LOG = f"{SP}/wlog/clean.log"
 CLAIMS = f"{SP}/clean/claims"
 MANIFEST = f"{SP}/clean/manifest.tsv"
 WORK = f"{SP}/handwork/mechclean"
-USAGE = """python mechclean.py [-j N] [--tree]
+USAGE = """python mechclean.py [-j N] [--tree | --headers]
 
 Rewrites, without a worker, the plausible.py kinds that have one natural form, for every row of
 $SP/wlog/clean_queue.tsv no worker has finished or claimed: NOOP-ADDR-CAST,
@@ -36,7 +37,9 @@ EXTERN-C-MANGLED drops `extern "C"` from a free function's `_Z<len><name>` decla
 calls it by <name>, one function at a time; a rename is kept only when every region the source names
 compiles to the same object (sections, relocations, symbols), so a signature the mangling contradicts
 stays for a worker. --tree runs that rewrite over every landed source on decomp-matching instead of
-the queue."""
+the queue. --headers declares, in the class's header, each member function a landed source still
+reaches through an `extern "C"` mangled name, kept only when every unit that includes it compiles to the
+same object."""
 EXTERN_C_FREE = re.compile(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b(_Z(\d+)(\w+))(?=\s*\()')
 REGION_DEFINES = {"usa": ["-d", "usa"], "jpn": ["-d", "jpn"], "eur": ["-d", "usa", "-d", "eur"]}
 BUILTIN_WORDS = set("const volatile unsigned signed char short int long float double bool void wchar_t".split())
@@ -404,6 +407,124 @@ def signature(text, path, region, include=None):
     return sig
 
 
+def tree_texts(roots=("src", "include", "config"), suffixes=(".c", ".cpp", ".h", ".hpp", ".inc", ".s", "symbols.txt")):
+    blobs = {}
+    for ln in subprocess.run(["git", "-C", REPO, "ls-tree", "-r", "HEAD", "--", *roots], capture_output=True,
+                             text=True, encoding="utf-8").stdout.splitlines():
+        meta, rel = ln.split("\t", 1)
+        if rel.endswith(suffixes):
+            blobs[rel] = meta.split()[2]
+    return blobs, {rel: open(f"{REPO}/{rel}", encoding="utf-8", errors="replace").read() for rel in blobs}
+
+
+def includes(text):
+    return re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]', text)
+
+
+def remap(sig, mapping):
+    syms = tuple(sorted((mapping.get(s[0], s[0]),) + tuple(s[1:]) for s in sig[0]))
+    rest = [(n, tuple((o, t, mapping.get(s, s)) for o, t, s in d)) if isinstance(d, tuple) else (n, d)
+            for n, d in sig[1:]]
+    return [syms] + rest
+
+
+def verify(original, new, mapping, jobs, work):
+    headers = {rel[len("include/"):]: rel for rel in original if rel.startswith("include/")}
+    closure = {h for h, rel in headers.items() if rel in new}
+    while True:
+        more = {h for h, rel in headers.items() if h not in closure and set(includes(original[rel])) & closure}
+        if not more:
+            break
+        closure |= more
+    tus = sorted(rel for rel in original if rel.endswith((".c", ".cpp"))
+                 and (rel in new or set(includes(original[rel])) & closure))
+    print(f"files {len(new)}; translation units to check {len(tus)}", flush=True)
+    os.makedirs(f"{work}/tu", exist_ok=True)
+    shutil.rmtree(f"{work}/include", ignore_errors=True)
+    shutil.copytree(f"{REPO}/include", f"{work}/include")
+    for rel, text in new.items():
+        if rel.startswith("include/"):
+            with open(f"{work}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+
+    def check(rel):
+        path = f"{work}/tu/{rel.replace('/', '_')}"
+        before = signature(original[rel], path, "usa", f"{REPO}/include")
+        if before is None:
+            return rel, rel not in new
+        after = signature(new.get(rel, original[rel]), path, "usa", f"{work}/include")
+        return rel, after is not None and remap(before, mapping) == after
+
+    with ThreadPoolExecutor(jobs) as pool:
+        bad = [rel for rel, ok in pool.map(check, tus) if not ok]
+    return bad, {rel: [headers[h] for h in set(includes(original[rel])) & closure] for rel in bad}
+
+
+def queue(new, blobs, why):
+    queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
+    clash = sorted(set(new) & queued)
+    if clash:
+        print(f"REFUSED: {len(clash)} file(s) already queued in the manifest, e.g. {clash[0]}; land them first")
+        return False
+    for rel, text in sorted(new.items()):
+        os.makedirs(os.path.dirname(f"{SP}/clean/{rel}"), exist_ok=True)
+        with open(f"{SP}/clean/{rel}", "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+    with open(MANIFEST, "a", encoding="utf-8", newline="\n") as fh:
+        fh.writelines(f"{rel}\t{blobs[rel]}\t{why}\n" for rel in sorted(new))
+    return True
+
+
+def method_decls(original):
+    groups = collections.defaultdict(collections.Counter)
+    for rel, text in original.items():
+        if not rel.startswith("src/") or not rel.endswith((".c", ".cpp")):
+            continue
+        for m in re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+([^;{}()=]*?)\b(_ZN\w+)\s*\(([^;{}]*)\)\s*;', text):
+            parsed, parts = demangle(m.group(2)), member_parts(m.group(2))
+            if not parsed or not parts or parts[2] is None:
+                continue
+            declared = len(split_args(m.group(3))) if m.group(3).strip() not in ("", "void") else 0
+            if declared in (parts[2], parts[2] + 1):
+                groups[(parts[0], parts[1], tuple(parsed[1]), parsed[2], declared == parts[2] + 1)][
+                    re.sub(r"\bARM\b|\bTHUMB\b", "", m.group(1)).strip()] += 1
+    new = {}
+    for (qual, method, real, const, member), rets in sorted(groups.items()):
+        header = class_header(qual)
+        if not header:
+            continue
+        rel = f"include/{header}"
+        text = new.get(rel, original[rel])
+        ret = rets.most_common(1)[0][0]
+        words = {w for t in list(real) + [ret] for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - BUILTIN_WORDS
+        body = class_body(text, qual)
+        if not body or re.search(r"\b%s\s*\(" % re.escape(method), text[body[0]:body[1]]) or \
+                any("::" in w or not re.search(r"\b%s\b" % w, text) for w in words - {qual}):
+            continue
+        line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", ret, method, ", ".join(real),
+                                        " const" if const else "")
+        new[rel] = text[:body[1]] + line + text[body[1]:]
+    return new
+
+
+def header_pass(jobs):
+    blobs, original = tree_texts()
+    new = method_decls(original)
+    while new:
+        bad, seen = verify(original, new, {}, jobs, f"{SP}/handwork/headerpass")
+        if not bad:
+            break
+        drop = {h for rel in bad for h in seen[rel]}
+        print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} header(s)", flush=True)
+        if not drop:
+            return 1
+        new = {rel: text for rel, text in new.items() if rel not in drop}
+    if new and not queue(new, blobs, "mechanical: method declarations"):
+        return 1
+    print(f"declared methods in {len(new)} header(s)")
+    return 0
+
+
 def externc_clean(text, path):
     members = re.findall(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_ZN\w+)\s*\([^;{}]*\)\s*;', text)
     names = list(free_mangled(text)) + sorted(set(members), key=members.index)
@@ -522,10 +643,12 @@ def tree_rows():
 
 
 def main():
-    args = [a for a in sys.argv[1:] if a != "--tree"]
+    args = [a for a in sys.argv[1:] if a not in ("--tree", "--headers")]
     if len(args) not in (0, 2) or (args and args[0] != "-j"):
         sys.exit(USAGE)
     os.makedirs(CLAIMS, exist_ok=True)
+    if "--headers" in sys.argv:
+        return header_pass(int(args[1]) if args else 8)
     if "--tree" in sys.argv:
         rows, run = list(tree_rows()), lambda row: job(row, True)
     else:

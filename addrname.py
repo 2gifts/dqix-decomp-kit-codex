@@ -2,17 +2,14 @@ import collections
 import glob
 import os
 import re
-import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor
 
 import kitpaths
 import mechclean
 
 REPO, SP = kitpaths.REPO, kitpaths.SP
 WORK = f"{SP}/handwork/addrname"
-MANIFEST = f"{SP}/clean/manifest.tsv"
 USAGE = """python addrname.py [--skip-author EMAIL]... [-j N] [--dry]
 
 Renames every mangled function symbol in config/usa whose name lacks its USA address, so the address
@@ -93,15 +90,7 @@ def rewrite(text, rel, mangled, idents):
     return text
 
 
-def remap(sig, mapping):
-    syms = tuple(sorted((mapping.get(s[0], s[0]),) + tuple(s[1:]) for s in sig[0]))
-    rest = [(n, tuple((o, t, mapping.get(s, s)) for o, t, s in d)) if isinstance(d, tuple) else (n, d)
-            for n, d in sig[1:]]
-    return [syms] + rest
-
-
-def includes(text):
-    return re.findall(r'(?m)^\s*#\s*include\s*[<"]([^>"]+)[>"]', text)
+remap = mechclean.remap
 
 
 def main():
@@ -124,49 +113,17 @@ def main():
     shared = {m for m in mapping if len(every[ident(m)]) > 1}
     mapping = {m: n for m, n in mapping.items() if m not in shared}
     print(f"targets {len(mapping) + len(shared)}; one identifier for two symbols: {len(shared)}", flush=True)
-    blobs = {}
-    for ln in git("ls-tree", "-r", "HEAD", "--", "src", "include", "config").splitlines():
-        meta, rel = ln.split("\t", 1)
-        if rel.endswith(SOURCES + (".s", "symbols.txt")):
-            blobs[rel] = meta.split()[2]
-    original = {rel: open(f"{REPO}/{rel}", encoding="utf-8", errors="replace").read() for rel in blobs}
-    headers = {rel[len("include/"):]: rel for rel in original if rel.startswith("include/")}
+    blobs, original = mechclean.tree_texts()
     if dry:
         return 0
-    os.makedirs(f"{WORK}/tu", exist_ok=True)
     while True:
+        print(f"renames {len(mapping)}", flush=True)
         mangled = (alternation(mapping), mapping)
         names = {ident(m): ident(n) for m, n in mapping.items()}
         idents = (alternation(names), names)
         new = {rel: t for rel, t in ((rel, rewrite(text, rel, mangled, idents)) for rel, text in original.items())
                if t != original[rel]}
-        changed = {h for h, rel in headers.items() if rel in new}
-        closure = set(changed)
-        while True:
-            more = {h for h, rel in headers.items() if h not in closure and set(includes(original[rel])) & closure}
-            if not more:
-                break
-            closure |= more
-        tus = sorted(rel for rel in original if rel.endswith((".c", ".cpp"))
-                     and (rel in new or set(includes(original[rel])) & closure))
-        print(f"renames {len(mapping)}; files {len(new)}; translation units to check {len(tus)}", flush=True)
-        shutil.rmtree(f"{WORK}/include", ignore_errors=True)
-        shutil.copytree(f"{REPO}/include", f"{WORK}/include")
-        for rel, text in new.items():
-            if rel.startswith("include/"):
-                with open(f"{WORK}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(text)
-
-        def check(rel):
-            path = f"{WORK}/tu/{rel.replace('/', '_')}"
-            before = mechclean.signature(original[rel], path, "usa", f"{REPO}/include")
-            if before is None:
-                return rel, rel not in new
-            after = mechclean.signature(new.get(rel, original[rel]), path, "usa", f"{WORK}/include")
-            return rel, after is not None and remap(before, mapping) == after
-
-        with ThreadPoolExecutor(jobs) as pool:
-            bad = [rel for rel, ok in pool.map(check, tus) if not ok]
+        bad, seen = mechclean.verify(original, new, mapping, jobs, WORK)
         if not bad:
             break
         back = collections.defaultdict(set)
@@ -174,28 +131,18 @@ def main():
             back[ident(m)].add(m)
         drop = set()
         for rel in bad:
-            seen = original[rel] + "".join(original[headers[h]] for h in set(includes(original[rel])) & closure)
-            drop |= set(mangled[0].findall(seen)) | {m for w in idents[0].findall(seen) for m in back[w]}
+            text = original[rel] + "".join(original[h] for h in seen[rel])
+            drop |= set(mangled[0].findall(text)) | {m for w in idents[0].findall(text) for m in back[w]}
         print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} rename(s)", flush=True)
         if not drop:
             return 1
         mapping = {m: n for m, n in mapping.items() if m not in drop}
-    queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
-    rows = []
-    for rel, text in sorted(new.items()):
-        if rel in queued:
-            print(f"SKIP {rel}: already queued in the manifest; land it first")
-            return 1
-        dest = f"{SP}/clean/{rel}"
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        with open(dest, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(text)
-        rows.append(f"{rel}\t{blobs[rel]}\taddrname\n")
-    with open(MANIFEST, "a", encoding="utf-8", newline="\n") as fh:
-        fh.writelines(rows)
+    if not mechclean.queue(new, blobs, "addrname"):
+        return 1
+    os.makedirs(WORK, exist_ok=True)
     with open(f"{WORK}/renamed.tsv", "w", encoding="utf-8", newline="\n") as fh:
         fh.writelines(f"{m}\t{n}\n" for m, n in sorted(mapping.items()))
-    print(f"renamed {len(mapping)} symbol(s) in {len(rows)} file(s); left {sorted(shared)}")
+    print(f"renamed {len(mapping)} symbol(s) in {len(new)} file(s); left {sorted(shared)}")
     return 0
 
 

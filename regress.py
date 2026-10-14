@@ -2672,6 +2672,16 @@ def _mechclean_extern_c():
         got = M.typed_call(member, "_ZN7Model3D4DrawEb", True, False) or ""
         if "    void Draw(bool);\n};" not in got or "((Model3D*)p)->Draw((short)k)" not in got:
             return "typed member rewrite gave %r" % got
+        header = "#pragma once\nclass Model3D {\npublic:\n    int x;\n};\n"
+        source = 'extern "C" void _ZN7Model3D4DrawEb(void* m, int on);\nvoid f(void* p) { _ZN7Model3D4DrawEb(p, 1); }\n'
+        old = M.class_header
+        M.class_header = lambda qual: "Graphics/Model3D.h" if qual == "Model3D" else None
+        try:
+            got = M.method_decls({"include/Graphics/Model3D.h": header, "src/A.cpp": source})
+        finally:
+            M.class_header = old
+        if got.get("include/Graphics/Model3D.h") != header.replace("};", "    void Draw(bool);\n};"):
+            return "method_decls gave %r" % got
         for arg, declared, real, want in (("(Actor*)self", "Actor*", "void*", "(Actor*)self"),
                                           ("(struct Ref*)(base + 0x4c8)", "struct Ref* r", "Mutex*",
                                            "(Mutex*)(base + 0x4c8)")):
