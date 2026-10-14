@@ -159,6 +159,14 @@ def decomp(decomp_tip):
             if gained > 0:
                 problems.append(f"CODEGEN PRAGMA {path}: adds {gained}; a match never lands behind one "
                                 f"(AGENTS.md rule 8): remove it and find what the source lacks")
+    for path in changed:
+        if path.startswith("config/usa/") and path.endswith("symbols.txt"):
+            before = names(show(REPO, decomp_tip, path))
+            for line in diff_lines(REPO, decomp_tip, path, "+"):
+                m = re.match(r"(_Z\S+) kind:function\S*\s+addr:0x([0-9a-fA-F]+)", line)
+                if m and m.group(1) not in before and m.group(2).lower()[-8:] not in m.group(1).lower():
+                    problems.append(f"NAME WITHOUT ADDRESS {m.group(1)} in {path}: end the C++ name with its USA "
+                                    "address, <name>_<addr> in main or <name>_ovNNN_<addr> in an overlay")
     regions = [p.rstrip("/").split("/")[-1] for p in git(REPO, "ls-tree", "-d", "--name-only", "HEAD", "config/").stdout.split()]
     for path in changed:
         m = SYMBOLS.match(path)

@@ -252,14 +252,28 @@ def plain_expr(arg):
                         r"|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*", arg) is not None
 
 
+def wrapped(expr):
+    if not expr.startswith("("):
+        return False
+    depth = 0
+    for i, ch in enumerate(expr):
+        depth += {"(": 1, ")": -1}.get(ch, 0)
+        if depth == 0:
+            return i == len(expr) - 1
+    return False
+
+
 def convert(arg, declared, real, scalar_cast):
     d, r = norm_type(declared), norm_type(real)
-    if d == r or (d.replace("const", "") == r.replace("const", "") and "const" in r):
+    if d == r or (d.replace("const", "") == r.replace("const", "") and "const" in r) or \
+            (r in ("void*", "voidconst*") and "*" in d):
         return arg
     if "*" in d or "*" in r or scalar_cast:
         inner = re.fullmatch(r"\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*+\s*\)\s*(.+)", arg)
-        if inner and plain_expr(inner.group(1)) and ("*" in d or "*" in r):
+        if inner and (plain_expr(inner.group(1)) or wrapped(inner.group(1))) and ("*" in d or "*" in r):
             arg = inner.group(1)
+            if wrapped(arg):
+                return "(%s)%s" % (real, arg)
         return "(%s)%s" % (real if "*" in d or "*" in r else param_type(declared), arg if plain_expr(arg) else "(%s)" % arg)
     return arg
 
@@ -360,11 +374,14 @@ def region_flags(region):
     return flags + REGION_DEFINES[region]
 
 
-def signature(text, path, region):
+def signature(text, path, region, include=None):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     obj = f"{path}.{region}.o"
-    r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + region_flags(region) + ["-c", path, "-o", obj],
+    flags = region_flags(region)
+    if include:
+        flags = [include if f == "include" and flags[i - 1] == "-i" else f for i, f in enumerate(flags)]
+    r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + flags + ["-c", path, "-o", obj],
                        cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if r.returncode:
         return None

@@ -1764,14 +1764,17 @@ def _prready():
                         "config/usa/arm9/symbols.txt": "Bar kind:function(arm,size=0x10) addr:0x02000010\n"
                                                        "data_02000030 kind:data(any) addr:0x02000030\n"
                                                        "data_02000040 kind:data(any) addr:0x02000040\n",
-                        "config/jpn/arm9/symbols.txt": "data_02000030 kind:data(any) addr:0x02000040\n"})
+                        "config/jpn/arm9/symbols.txt": "data_02000030 kind:data(any) addr:0x02000040\n",
+                        "config/usa/arm9/overlays/ov001/symbols.txt": "_Z3Bazv kind:function(arm,size=0x100) addr:0x02150000\n",
+                        "config/usa/arm9/overlays/ov002/symbols.txt":
+                            "_Z19Qux_ov002_02150010v kind:function(arm,size=0x10) addr:0x02150010\n"})
         commit(kit, {"worker_src/deadends.md": "# dead ends\n02000010\tstale\n02000040\topen\n",
                      "worker_src/core.md": "# core\nrule (02000010)\nrule (02000400)\nrule (02150010)\n"})
         commit(pub_decomp, {"src/A.cpp": "void Foo() { }\n"})
         commit(pub_kit, {"README.md": "x\n"})
         want = {"decomp": ("KIT BEHIND", "DECOMP BEHIND", "OUTSIDE A MATCH .github/workflows/match.yml",
                            "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2",
-                           "NO USA TAG src/Untagged.cpp"),
+                           "NO USA TAG src/Untagged.cpp", "NAME WITHOUT ADDRESS _Z3Bazv"),
                 "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400", "UNPROVEN CITATION 02150010")}
         for mode, needles in want.items():
             code, out = prready(mode)
@@ -1782,6 +1785,8 @@ def _prready():
                 return f"prready.py kit flagged a landed citation: {out.strip()[-400:]}"
             if mode == "decomp" and "HALF RENAME data_02000040" in out:
                 return f"prready.py decomp flagged a region port taking the USA name: {out.strip()[-400:]}"
+            if mode == "decomp" and "Qux_ov002_02150010" in out:
+                return f"prready.py decomp flagged a name that carries its address: {out.strip()[-400:]}"
         code, out = prready("--hook", stdin=json.dumps({"tool_input": {"command": "gh pr create -R ZevyaDev/dqix-decomp"}}))
         if code != 2 or "HALF RENAME" not in out:
             return f"the hook let gh pr create through on a stale decomp: exit {code}"
@@ -2610,6 +2615,29 @@ def _plausible_extern_c_mangled():
     return None
 
 
+@check("addrname appends the USA address to a mangled function's own name and maps it through the object",
+       "Eakeys maps our matches onto his branch by address: 1593 landed names like `_Z10SetWord0x0Pii` "
+       "carried none")
+def _addrname():
+    A = load("addrname")
+    cases = [("_Z10SetWord0x0Pii", "_0200fb84", "_Z19SetWord0x0_0200fb84Pii"),
+             ("_ZNK9GameState7GetTimeEv", "_ov017_021afe00", "_ZNK9GameState22GetTime_ov017_021afe00Ev"),
+             ("_ZN6Script9Parameter5ToIntEv", "_02030b0c", "_ZN6Script9Parameter14ToInt_02030b0cEv")]
+    for old, suffix, want in cases:
+        if A.renamed(old, suffix) != want:
+            return "renamed(%s) gave %s, want %s" % (old, A.renamed(old, suffix), want)
+    for skipped in ("_ZN20Ov33BackgroundLoaderD1Ev", "_ZN5Vec3iaSERKS_", "_Z3maxIiET_S0_S0_", "func_02000000"):
+        if A.own_name(skipped):
+            return "own_name accepted %s, which has no plain own name to extend" % skipped
+    sig = [(("_Z3Foov", 0, 4, "STT_FUNC", "STB_GLOBAL", ".text"), ("_Z3Barv", 0, 0, "STT_NOTYPE", "STB_GLOBAL",
+                                                                  "SHN_UNDEF")),
+           (".text", b"\x00" * 4), (".rela.text", ((0, 1, "_Z3Barv"),))]
+    got = A.remap(sig, {"_Z3Barv": "_Z12Bar_02000000v"})
+    if got[2] != (".rela.text", ((0, 1, "_Z12Bar_02000000v"),)) or "_Z12Bar_02000000v" not in repr(got[0]):
+        return "remap left the old name: %r" % got
+    return None
+
+
 @check("mechclean renames an extern \"C\" mangled free function only when the object stays identical",
        "the 5978 redeclarations whose parameters spell the mangling are a rename; the 410 whose widths "
        "contradict it change the call and need a worker")
@@ -2644,6 +2672,11 @@ def _mechclean_extern_c():
         got = M.typed_call(member, "_ZN7Model3D4DrawEb", True, False) or ""
         if "    void Draw(bool);\n};" not in got or "((Model3D*)p)->Draw((short)k)" not in got:
             return "typed member rewrite gave %r" % got
+        for arg, declared, real, want in (("(Actor*)self", "Actor*", "void*", "(Actor*)self"),
+                                          ("(struct Ref*)(base + 0x4c8)", "struct Ref* r", "Mutex*",
+                                           "(Mutex*)(base + 0x4c8)")):
+            if M.convert(arg, declared, real, False) != want:
+                return "convert(%r) gave %r, want %r" % (arg, M.convert(arg, declared, real, False), want)
     if M.TREE_FIXABLE != {"EXTERN-C-MANGLED"}:
         return "--tree rewrites kinds that need a gate, which it cannot run without a module: %s" % M.TREE_FIXABLE
     work = tempfile.mkdtemp()
