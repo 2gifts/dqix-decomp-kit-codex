@@ -4542,6 +4542,36 @@ def _git_bash():
     return None
 
 
+@check("psq.sh, fullstop.sh --dry and progress.py see a live pull_worker.sh off Windows",
+       "on Linux all three asked powershell.exe for the process table: psq.sh printed nothing, "
+       "fullstop --dry said 'none running' and STATE.md called the counts unknown, with a worker alive")
+def _posix_process_tools():
+    import subprocess
+    if os.name == "nt":
+        return None                      # the Win32_Process path; selfcheck's fullstop check runs it
+    with tempfile.TemporaryDirectory() as d:
+        drv = os.path.join(d, "pull_worker.sh")
+        with open(drv, "w") as fh:
+            fh.write("read -t 60 x\n")       # a builtin: no child to leak, and EOF on stdin ends it
+        sh, env = _kp.bash()
+        decoy = subprocess.Popen([sh, drv], stdin=subprocess.PIPE, env=env)
+        try:
+            time.sleep(0.5)
+            run = lambda *a: subprocess.run([sh, f"{KIT}/{a[0]}", *a[1:]], capture_output=True,
+                                            text=True, env=env, timeout=120).stdout
+            listed = run("psq.sh", "--list")
+            if not re.search(r"(?m)^%d " % decoy.pid, listed) or "psq.sh" in listed:
+                return "psq.sh --list: %r" % listed[:300]
+            if not re.search(r"pid %d " % decoy.pid, run("fullstop.sh", "--dry").split("TIER 2")[0]):
+                return "fullstop --dry did not list a live pull_worker.sh in TIER 1"
+            if load("progress").fleet()[1] < 1:
+                return "progress.fleet() counted no live pull_worker.sh"
+        finally:
+            decoy.stdin.close()
+            decoy.wait()
+    return None
+
+
 @check("compiler sweeps enumerate the configured compiler root",
        "ccsweep and pad/ccscore ignored a preinstalled compiler directory")
 def _compiler_sweep_root_fixture():

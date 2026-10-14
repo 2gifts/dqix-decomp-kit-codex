@@ -24,12 +24,16 @@ SP="$(python "$KIT/kitpaths.py" state)"
 MODE="${1:-workers}"
 DRY=0
 [ "$MODE" = "--dry" ] && { DRY=1; MODE="report"; }
+# Linux has no separate claude.exe: the worker IS the posix process, so the `DQIX decomp worker` pass
+# kills it, and plain `ps` there lists only this terminal's processes, so ask for all of them.
+WIN=0; PSALL=-e
+case "$OSTYPE" in msys*|cygwin*) WIN=1; PSALL= ;; esac
 
 say() { [ "$DRY" -eq 1 ] && echo "  would kill: $*" || echo "  killed: $*"; }
 
 posix_pids() {   # $1 = cmdline substring
-  for p in $(ps 2>/dev/null | awk 'NR>1{print $1}'); do
-    c=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null) || continue
+  for p in $(ps $PSALL 2>/dev/null | awk 'NR>1{print $1}'); do
+    c=$(tr '\0' ' ' 2>/dev/null < "/proc/$p/cmdline") || continue
     case "$c" in *"$1"*) echo "$p";; esac
   done
 }
@@ -48,6 +52,22 @@ kill_posix() {   # $1 = substring, $2 = label
 # interactive claude.exe has no such prompt and must survive.
 kill_windows_workers() {
   local only_orphans="$1"
+  if [ "$WIN" -eq 0 ]; then
+    # Linux reparents an orphan instead of leaving its parent id dangling: an orphan is a worker
+    # process with no pull_worker.sh above it. The other modes already killed every worker.
+    [ "$only_orphans" = "1" ] || return 0
+    local n=0 p q
+    for p in $(posix_pids "DQIX decomp worker"); do
+      q=$p
+      while q=$(ps -o ppid= -p "$q" 2>/dev/null | tr -d ' ') && [ "${q:-0}" -gt 1 ]; do
+        case "$(tr '\0' ' ' 2>/dev/null < "/proc/$q/cmdline")" in *pull_worker.sh*) continue 2 ;; esac
+      done
+      [ "$DRY" -eq 1 ] || kill -9 "$p" 2>/dev/null
+      n=$((n+1))
+    done
+    say "$n orphaned workers (posix)"
+    return 0
+  fi
   # NO -Filter. Written as "Name=''claude.exe''" inside a bash SINGLE-quoted string,
   # the doubled quotes close and reopen the bash quote instead of escaping anything,
   # so PowerShell received the invalid filter Name=claude.exe and matched NOTHING.
@@ -99,6 +119,8 @@ case "$MODE" in
 esac
 
 sleep 3
+if [ "$WIN" -eq 0 ]; then left=$(posix_pids "DQIX decomp worker" | wc -l); else
 left=$(powershell -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | Where-Object { \$_.CommandLine -like '*DQIX decomp worker*' }).Count" 2>/dev/null | tr -d '\r')
+fi
 echo "  verify: ${left:-?} worker claude.exe still alive (want 0)"
 [ "${left:-1}" = "0" ] || echo "  WARNING: workers survived — investigate before assuming the fleet is down"

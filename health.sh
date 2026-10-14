@@ -62,6 +62,23 @@ commit_age_min() {
   [ -z "$t" ] && { echo 0; return; }
   echo $(( ( $(now) - t ) / 60 ))
 }
+# POSIX has no Win32_Process: the same six counts from one `ps` snapshot, matched case-insensitively as
+# -match is. A worker there is the `claude` command itself, not its timeout wrapper; CPU sums its CPU
+# seconds where Windows sums UserModeTime, which only ever compares equal across cycles.
+case "$OSTYPE" in msys*|cygwin*) ;; *) snapshot() {
+  DRIVERS="" STRAYS="" WORKERS="" OLD="" CPU="" PULLW=""
+  local k v
+  while IFS='=' read -r k v; do
+    case "$k" in DRIVERS|STRAYS|WORKERS|OLD|CPU|PULLW) printf -v "$k" '%s' "$v" ;; esac
+  done <<< "$(ps -wweo etimes=,times=,args= 2>/dev/null | AGE="$WORKER_MAX_MIN" awk '
+    { c = $0; sub(/^ *[0-9]+ +[0-9]+ ?/, "", c); l = tolower(c)
+      if (l ~ /run_all\.sh|supervise\.sh|pull_all\.sh|pull_worker\.sh/) d++
+      if (l ~ /run_all\.sh|supervise\.sh|run_module\.sh/) s++
+      if (l ~ /pull_worker/) p++
+      if (l ~ /^([^ ]*\/)?claude[[:space:]](.*[[:space:]])?-p[[:space:]].*dqix/) {
+        w++; cpu += $2; if ($1 >= ENVIRON["AGE"] * 60) o++ } }
+    END { printf "DRIVERS=%d\nSTRAYS=%d\nWORKERS=%d\nOLD=%d\nCPU=%d\nPULLW=%d\n", d, s, w, o, cpu, p }')"
+} ;; esac
 # COMMITS ARRIVE AT THE FLEET'S PACE, so a fixed stall threshold is calibrated for one fleet size
 # only. At four slots 90m means something is wrong; at one slot it is a normal gap between landings
 # and fires every cycle until it stops being read.

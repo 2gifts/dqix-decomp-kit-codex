@@ -193,7 +193,9 @@ and `dqix-continue` skills point at it INSTEAD of carrying a hand-edited state b
 fleet stopped) · `health.sh` the monitor (alerts, not heartbeats; honours `FLEET_STOPPED` and then
 alerts on STRAYS instead) · `fullstop.sh [--hard|--dry]` two-tier stop: token
 spenders (workers + every driver that launches them) killed immediately in one pass, CPU-only jobs
-(finish_wave, integrators, sweeps) reported and left to finish unless `--hard`
+(finish_wave, integrators, sweeps) reported and left to finish unless `--hard`; on Linux it,
+`killfleet.sh`, `psq.sh`, `health.sh` and `progress.py` read one `ps` snapshot instead of
+`Win32_Process`, and a worker is the native `claude -p` process itself
 · `dqtool.py` analysis subcommands (`dis obj count find named staged stubs`) · `diffmine.py` +
 `sdiff.py` rank blocking idioms from real attempts · `vtry.py` score source variants ·
 `ccsweep.sh` every compiler build · `flagsweep.sh` optimisation settings ·
