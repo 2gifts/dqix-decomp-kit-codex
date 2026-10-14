@@ -26,13 +26,18 @@ green, commits what stays green, publishes, and moves every row to landed.tsv or
 Exit 0: landed or nothing to land. 1: refused."""
 
 
-def run(cwd, *args):
-    r = subprocess.run(list(args), cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+def run(cwd, *args, stdin=None):
+    r = subprocess.run(list(args), cwd=cwd, input=stdin, capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
     return r.returncode, r.stdout + r.stderr
 
 
 def git(tree, *args):
     return run(tree, "git", *args)
+
+
+def stage(tree, rels):
+    return run(tree, "git", "add", "--pathspec-from-file=-", stdin="".join(f"{rel}\n" for rel in rels))
 
 
 def rows():
@@ -126,7 +131,7 @@ def main():
         print(f"RED {rel}: a region does not build with it")
     apply(tree, tip, good)
     if good:
-        git(tree, "add", "--", *[rel for rel, _, _ in good])
+        stage(tree, [rel for rel, _, _ in good])
         if git(tree, "commit", "-q", "-m", f"Clean {len(good)} matched source(s)")[0]:
             print("REFUSED: nothing to commit")
             return 1

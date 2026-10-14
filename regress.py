@@ -2393,6 +2393,14 @@ def _landclean_settle():
             lc.CLEAN = old
         if [r for r, _, _ in fresh] != ["x.cpp"] or [r for r, _, _ in stale] != ["y.cpp"]:
             return "split_stale() kept %s and dropped %s" % (fresh, stale)
+        rels = ["src/%s_%04d.cpp" % ("n" * 100, i) for i in range(400)]
+        os.makedirs(f"{root}/src")
+        for rel in rels:
+            with open(f"{root}/{rel}", "w", encoding="utf-8") as fh:
+                fh.write("x")
+        lc.stage(root, rels)
+        if len(git("diff", "--cached", "--name-only").splitlines()) != len(rels):
+            return "landclean could not stage 400 long paths: 1586 cleaned sources once died at git add (WinError 206)"
     src = open(f"{KIT}/landclean.py", encoding="utf-8").read()
     if 'write_rows(MANIFEST, [], "w")' in src or "not in done" not in src:
         return "landclean empties the whole manifest, dropping rows cleanwork appended while it ran"
@@ -2616,6 +2624,15 @@ def _mechclean_extern_c():
             'void* table[] = { (void*)&Clear12Bytes020e46c4 };\n')
     if M.extern_c_mangled(text) != want:
         return "rewrite gave %r" % M.extern_c_mangled(text)
+    member = ('extern "C" int _ZNK9GameState7GetTimeEv(void* gs);\n'
+              'extern "C" GameState* _ZN9GameState11GetInstanceEv(void);\n'
+              'int f(S* s) { return _ZNK9GameState7GetTimeEv(s->gs) + '
+              '_ZNK9GameState7GetTimeEv(&s->state) + _ZNK9GameState7GetTimeEv(_ZN9GameState11GetInstanceEv()); }\n')
+    want = ('int f(S* s) { return s->gs->GetTime() + s->state.GetTime() + '
+            'GameState::GetInstance()->GetTime(); }\n')
+    got = M.apply_names(member, {"_ZNK9GameState7GetTimeEv", "_ZN9GameState11GetInstanceEv"})
+    if got != want:
+        return "member rewrite gave %r" % got
     work = tempfile.mkdtemp()
     try:
         path = f"{work}/probe.cpp"

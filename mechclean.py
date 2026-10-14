@@ -11,6 +11,7 @@ from elftools.elf.relocation import RelocationSection
 import buildcfg
 import cleancheck
 import kitpaths
+import mangle
 import plausible
 
 KIT, SP, REPO = kitpaths.KIT, kitpaths.SP, kitpaths.REPO
@@ -132,6 +133,94 @@ def extern_c_mangled(text, only=None):
     return new
 
 
+def member_parts(name):
+    m = re.match(r"_ZN(K?)(?=\d)", name)
+    if not m:
+        return None
+    i, parts = m.end(), []
+    while i < len(name) and name[i].isdigit():
+        j = re.match(r"\d+", name[i:]).end() + i
+        parts.append(name[j:j + int(name[i:j])])
+        i = j + int(name[i:j])
+    if name[i:i + 1] != "E" or len(parts) < 2 or name[i + 1:i + 2] == "I":
+        return None
+    return "::".join(parts[:-1]), parts[-1], mangle.mangled_arity(name)
+
+
+def call_sites(text, name):
+    out = []
+    for m in re.finditer(r"\b%s\s*\(" % re.escape(name), text):
+        depth, i, cur, args = 1, m.end(), m.end(), []
+        while depth and i < len(text):
+            if text[i] in "([{":
+                depth += 1
+            elif text[i] in ")]}":
+                depth -= 1
+            elif text[i] == "," and depth == 1:
+                args.append(text[cur:i].strip())
+                cur = i + 1
+            i += 1
+        args.append(text[cur:i - 1].strip())
+        out.append((m.start(), i, [] if args == [""] else args))
+    return out
+
+
+def receiver(expr):
+    postfix = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\[[^\[\]]*\]|\([^()]*\))*"
+    m = re.fullmatch(r"&\s*(%s)" % postfix, expr)
+    if m:
+        return m.group(1) + "."
+    return expr + "->" if re.fullmatch(postfix, expr) else "(%s)->" % expr
+
+
+def member_call(text, name):
+    parts = member_parts(name)
+    decls = list(re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b%s\s*\(([^;{}]*)\)\s*;[ \t]*\n?' % re.escape(name),
+                             text))
+    if not parts or parts[2] is None or not decls:
+        return text
+    qual, method, arity = parts
+    params = decls[0].group(1).strip()
+    declared = 0 if params in ("", "void") else len(split_args(params))
+    if declared not in (arity, arity + 1):
+        return text
+    for d in reversed(decls):
+        text = text[:d.start()] + text[d.end():]
+    for start, end, args in reversed(call_sites(text, name)):
+        if declared == arity + 1:
+            if not args:
+                return None
+            call = "%s%s(%s)" % (receiver(args[0]), method, ", ".join(args[1:]))
+        else:
+            call = "%s::%s(%s)" % (qual, method, ", ".join(args))
+        text = text[:start] + call + text[end:]
+    return None if re.search(r"\b%s\b" % re.escape(name), text) else text
+
+
+def split_args(params):
+    out, depth, cur = [], 0, ""
+    for ch in params:
+        if ch in "(<[":
+            depth += 1
+        elif ch in ")>]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return out + [cur]
+
+
+def apply_names(text, names):
+    text = extern_c_mangled(text, {n for n in names if not n.startswith("_ZN")})
+    for name in sorted(n for n in names if n.startswith("_ZN")):
+        text = member_call(text, name)
+        if text is None:
+            return None
+    return text
+
+
 def region_flags(region):
     flags = list(buildcfg.FLAGS)
     while len(flags) >= 2 and flags[-2] == "-d" and flags[-1] in REGION_DEFINES:
@@ -167,21 +256,22 @@ def signature(text, path, region):
 
 
 def externc_clean(text, path):
-    names = list(free_mangled(text))
+    members = re.findall(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_ZN\w+)\s*\([^;{}]*\)\s*;', text)
+    names = list(free_mangled(text)) + sorted(set(members), key=members.index)
     if not names:
         return text
     regions = ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, text)]
     base = {r: signature(text, path, r) for r in regions}
     if None in base.values():
         return text
-    same = lambda t: all(signature(t, path, r) == base[r] for r in regions)
-    if same(extern_c_mangled(text)):
-        return extern_c_mangled(text)
+    same = lambda t: t is not None and all(signature(t, path, r) == base[r] for r in regions)
+    if same(apply_names(text, set(names))):
+        return apply_names(text, set(names))
     kept = set()
     for name in names:
-        if same(extern_c_mangled(text, kept | {name})):
+        if same(apply_names(text, kept | {name})):
             kept.add(name)
-    return extern_c_mangled(text, kept)
+    return apply_names(text, kept)
 
 
 def gate(mod, addr, path):
@@ -274,7 +364,7 @@ def tree_rows():
         return subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True, encoding="utf-8",
                               errors="replace").stdout
     queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
-    for rel in git("grep", "-l", "-E", r'extern "C" .*_Z[0-9]', "origin/decomp-matching", "--", "src").split():
+    for rel in git("grep", "-l", "-E", r'extern "C" .*_Z[0-9N]', "origin/decomp-matching", "--", "src").split():
         rel = rel.split(":", 1)[1]
         if rel.endswith(".cpp") and rel not in queued:
             yield ["tree", rel.replace("/", "_"), rel, "", "EXTERN-C-MANGLED"]
