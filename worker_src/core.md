@@ -45,7 +45,8 @@ stop before one while the gate is still improving.
 
 **WHAT HAS ALREADY BEEN RULED OUT ON YOUR ADDRESS** is injected below under its own heading
 when there is any, straight from `worker_src/deadends.md`. If the section is absent, nothing
-has been ruled out yet. Add a row there when you spend real budget disproving something.
+has been ruled out yet. Never edit that file or anything else in the kit checkout: write what
+you disproved into the handoff section of the doc this prompt named.
 
 **INSTRUCTIONS mwcc WILL NOT EMIT FROM ANY C.** Not a residue to permute — if the target needs one of
 these, the function is `.s` work or not ours. Each was driven to exhaustion against the real gate.

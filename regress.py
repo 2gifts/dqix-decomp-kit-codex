@@ -3762,6 +3762,18 @@ def _reserved_skipped():
     return None
 
 
+@check("the worker doc never tells a worker to edit the kit checkout",
+       "core.md said to add a deadends.md row after spending budget; a worker edited the live kit "
+       "checkout, kit_update refused the dirty tree, and the dispatcher stopped claiming")
+def _workers_leave_kit_alone():
+    core = open(f"{KIT}/worker_src/core.md", encoding="utf-8").read()
+    if re.search(r"(?i)add a row (there|to [`']?worker_src/deadends)", core):
+        return "core.md still asks workers to add rows to deadends.md"
+    if "Never edit that file or anything else in the kit checkout" not in core:
+        return "core.md no longer tells workers to keep out of the kit checkout"
+    return None
+
+
 @check("the fleet's claims issue lists no claim older than CLAIM_TTL_MIN",
        "claim.py reaps stale claims only in the module it is claiming from, so #325 published 64 "
        "addresses, 48 of them landed, while no worker was running")
