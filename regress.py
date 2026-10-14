@@ -2633,6 +2633,17 @@ def _mechclean_extern_c():
     got = M.apply_names(member, {"_ZNK9GameState7GetTimeEv", "_ZN9GameState11GetInstanceEv"})
     if got != want:
         return "member rewrite gave %r" % got
+    if shutil.which("c++filt"):
+        free = ('struct Entry;\nextern "C" void _Z10SetFlag0x1Pj(Entry* e);\n'
+                'void f(Entry* e) { _Z10SetFlag0x1Pj((Entry*)g(e)); }\n')
+        want = 'struct Entry;\nvoid SetFlag0x1(unsigned int*);\nvoid f(Entry* e) { SetFlag0x1((unsigned int*)g(e)); }\n'
+        if M.typed_call(free, "_Z10SetFlag0x1Pj", False, False) != want:
+            return "typed rewrite gave %r" % M.typed_call(free, "_Z10SetFlag0x1Pj", False, False)
+        member = ('struct Model3D {\n    int x;\n};\nextern "C" void _ZN7Model3D4DrawEb(void* m, short b);\n'
+                  'void f(void* p, int k) { _ZN7Model3D4DrawEb(p, k); }\n')
+        got = M.typed_call(member, "_ZN7Model3D4DrawEb", True, False) or ""
+        if "    void Draw(bool);\n};" not in got or "((Model3D*)p)->Draw((short)k)" not in got:
+            return "typed member rewrite gave %r" % got
     if M.TREE_FIXABLE != {"EXTERN-C-MANGLED"}:
         return "--tree rewrites kinds that need a gate, which it cannot run without a module: %s" % M.TREE_FIXABLE
     work = tempfile.mkdtemp()

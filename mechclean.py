@@ -1,5 +1,7 @@
+import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -37,6 +39,8 @@ stays for a worker. --tree runs that rewrite over every landed source on decomp-
 the queue."""
 EXTERN_C_FREE = re.compile(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b(_Z(\d+)(\w+))(?=\s*\()')
 REGION_DEFINES = {"usa": ["-d", "usa"], "jpn": ["-d", "jpn"], "eur": ["-d", "usa", "-d", "eur"]}
+BUILTIN_WORDS = set("const volatile unsigned signed char short int long float double bool void wchar_t".split())
+DEMANGLED = {}
 SKIPPED_SECTIONS = re.compile(r"debug|^\.line|^\.comment|^\.mwcats|^\.rel\.|^\.rela\.|^\.symtab$|^\.strtab$|^\.shstrtab$")
 
 LVAL = r"[A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*|\[[^\]\[]*\])*"
@@ -213,10 +217,137 @@ def split_args(params):
     return out + [cur]
 
 
+def demangle(name):
+    if name not in DEMANGLED:
+        tool = shutil.which("c++filt")
+        DEMANGLED[name] = subprocess.run([tool, name], capture_output=True, text=True).stdout.strip() if tool else name
+    m = re.match(r"^(.*?)\((.*)\)( const)?$", DEMANGLED[name])
+    if not m or DEMANGLED[name] == name:
+        return None
+    params = [p.strip() for p in split_args(m.group(2))] if m.group(2).strip() not in ("", "void") else []
+    return m.group(1), params, bool(m.group(3))
+
+
+def param_type(param):
+    t = re.sub(r"\s*\[\s*\w*\s*\]\s*$", "*", param.strip())
+    t = re.sub(r"\(\s*\*\s*\w*\s*\)", "(*)", t)
+    toks = re.findall(r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*|\*|&|\(\*\)|\(|\)|,|\.\.\.", t)
+    if len(toks) >= 2 and re.match(r"[A-Za-z_]", toks[-1]) and toks[-1] not in BUILTIN_WORDS and "(*)" not in toks \
+            and any(x not in ("const", "volatile", "struct", "class", "enum", "union") for x in toks[:-1]):
+        toks = toks[:-1]
+    return " ".join(toks).replace(" *", "*").replace(" &", "&")
+
+
+def norm_type(t):
+    s = re.sub(r"\b(?:struct|class|enum|union)\s+", "", param_type(t))
+    s = re.sub(r"\bsigned\s+(?!char\b)", "", s)
+    s = re.sub(r"\bunsigned\b(?!\s+(?:char|short|int|long))", "unsigned int", s)
+    s = re.sub(r"\b(short|long) int\b", r"\1", s)
+    m = re.match(r"^const (.+?)(\**&?)$", s)
+    return (m.group(1) + " const" + m.group(2) if m else s).replace(" ", "")
+
+
+def plain_expr(arg):
+    return re.fullmatch(r"&?\s*[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\[[^\[\]]*\]|\([^()]*\))*"
+                        r"|-?(?:0[xX][0-9a-fA-F]+|\d+)[uUlL]*", arg) is not None
+
+
+def convert(arg, declared, real, scalar_cast):
+    d, r = norm_type(declared), norm_type(real)
+    if d == r or (d.replace("const", "") == r.replace("const", "") and "const" in r):
+        return arg
+    if "*" in d or "*" in r or scalar_cast:
+        inner = re.fullmatch(r"\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*+\s*\)\s*(.+)", arg)
+        if inner and plain_expr(inner.group(1)) and ("*" in d or "*" in r):
+            arg = inner.group(1)
+        return "(%s)%s" % (real if "*" in d or "*" in r else param_type(declared), arg if plain_expr(arg) else "(%s)" % arg)
+    return arg
+
+
+def class_body(text, qual):
+    m = re.search(r"(?m)^\s*(?:struct|class)\s+%s\b[^;{]*\{" % re.escape(qual.split("::")[-1]), text)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while depth and i < len(text):
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        i += 1
+    return m.end(), i - 1
+
+
+def class_header(qual):
+    for path in glob.glob(f"{REPO}/include/**/*.h", recursive=True):
+        if re.search(r"(?m)^\s*(?:struct|class)\s+%s\b[^;]*\{" % re.escape(qual), open(path, encoding="utf-8",
+                                                                                     errors="replace").read()):
+            return os.path.relpath(path, f"{REPO}/include").replace("\\", "/")
+    return None
+
+
+def typed_call(text, name, scalar_cast, with_header):
+    parsed = demangle(name)
+    decls = list(re.finditer(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*;[ \t]*\n?'
+                             % re.escape(name), text))
+    if not parsed or not decls:
+        return None
+    full, real, const = parsed
+    qual, ident = full.rsplit("::", 1) if "::" in full else (None, full)
+    ret = decls[0].group(2).strip()
+    declared = [p.strip() for p in split_args(decls[0].group(3))] if decls[0].group(3).strip() not in ("", "void") else []
+    member = qual is not None and len(declared) == len(real) + 1
+    if len(declared) != len(real) + member or (with_header and qual is None):
+        return None
+    for d in reversed(decls[1:]):
+        text = text[:d.start()] + text[d.end():]
+    first, at = decls[0], decls[0].start()
+    rest = text[:first.start()] + text[first.end():]
+    words = {w for t in real for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - BUILTIN_WORDS
+    if any("::" in w for w in words):
+        return None
+    insert = "".join("struct %s;\n" % w for w in sorted(words) if not re.search(r"\b%s\b" % w, rest))
+    if qual is None:
+        insert += "%s %s(%s);\n" % (ret, ident, ", ".join(real))
+    else:
+        body = class_body(rest, qual)
+        if body and not re.search(r"\b%s\s*\(" % re.escape(ident), rest[body[0]:body[1]]):
+            line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", ret, ident, ", ".join(real),
+                                            " const" if const else "")
+            rest = rest[:body[1]] + line + rest[body[1]:]
+            at += len(line) if body[1] <= at else 0
+    text = rest[:at] + insert + rest[at:]
+    if with_header:
+        header = class_header(qual)
+        if not header or '"%s"' % header in text:
+            return None
+        last = list(re.finditer(r"(?m)^#include[^\n]*\n", text))
+        at = last[-1].end() if last else 0
+        text = text[:at] + '#include "%s"\n' % header + text[at:]
+    for start, end, args in reversed(call_sites(text, name)):
+        if len(args) != len(declared):
+            return None
+        conv = [convert(a, d, r, scalar_cast) for a, d, r in zip(args[member:], declared[member:], real)]
+        if qual is None:
+            call = "%s(%s)" % (ident, ", ".join(conv))
+        elif member:
+            recv = receiver(args[0]) if norm_type(declared[0]) == norm_type(qual + "*") else \
+                "((%s*)%s)->" % (qual, args[0] if plain_expr(args[0]) else "(%s)" % args[0])
+            call = "%s%s(%s)" % (recv, ident, ", ".join(conv))
+        else:
+            call = "%s::%s(%s)" % (qual, ident, ", ".join(conv))
+        text = text[:start] + call + text[end:]
+    return None if re.search(r"\b%s\b" % re.escape(name), text) else text
+
+
+def strategies(name):
+    plain = (lambda t: member_call(t, name)) if name.startswith("_ZN") else \
+        (lambda t: extern_c_mangled(t, {name}))
+    typed = [lambda t, c=c, h=h: typed_call(t, name, c, h) for h in (False, True) for c in (False, True)]
+    return [plain] + typed
+
+
 def apply_names(text, names):
-    text = extern_c_mangled(text, {n for n in names if not n.startswith("_ZN")})
-    for name in sorted(n for n in names if n.startswith("_ZN")):
-        text = member_call(text, name)
+    plan = names if isinstance(names, dict) else {n: 0 for n in names}
+    for name in sorted(plan):
+        text = strategies(name)[plan[name]](text)
         if text is None:
             return None
     return text
@@ -268,10 +399,12 @@ def externc_clean(text, path):
     same = lambda t: t is not None and all(signature(t, path, r) == base[r] for r in regions)
     if same(apply_names(text, set(names))):
         return apply_names(text, set(names))
-    kept = set()
+    kept = {}
     for name in names:
-        if same(apply_names(text, kept | {name})):
-            kept.add(name)
+        for strategy in range(len(strategies(name))):
+            if same(apply_names(text, {**kept, name: strategy})):
+                kept[name] = strategy
+                break
     return apply_names(text, kept)
 
 
