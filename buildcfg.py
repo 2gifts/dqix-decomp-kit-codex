@@ -147,15 +147,18 @@ def tool_command(executable):
 # Frida scripts hook mwccarm.exe at fixed .text addresses. Natively the image is mapped before the
 # script loads. Under Wine nothing is mapped at spawn: the loader copies the sections into anonymous
 # memory and only then makes .text r-x, so a hook placed earlier is overwritten. Run the script at
-# that mprotect, on the loader's thread, before any compiler code executes. Frida knows 'mscdecl' only
-# on Windows; on ia32 Linux 'sysv' is the same cdecl for the int, uint32 and pointer signatures used.
+# that mprotect, on the loader's thread, before any compiler code executes. wibo reserves the whole
+# guest address space with no access at startup, so .text already has a range: only an executable one
+# means the image is mapped. Frida knows 'mscdecl' only on Windows; on ia32 Linux 'sysv' is the same
+# cdecl for the int, uint32 and pointer signatures used.
 _FRIDA_DEFER = """(function () {
 const MSCDECL = Process.platform === 'windows' ? 'mscdecl' : 'sysv';
 const text = ptr('0x401000');
 const body = function () {
 /*BODY*/
 };
-if (Process.findRangeByAddress(text) !== null) { body(); return; }
+const mapped = Process.findRangeByAddress(text);
+if (mapped !== null && mapped.protection.indexOf('x') !== -1) { body(); return; }
 const mprotect = Module.getGlobalExportByName ? Module.getGlobalExportByName('mprotect')
                                               : Module.getExportByName(null, 'mprotect');
 const gate = Interceptor.attach(mprotect, {
