@@ -340,11 +340,69 @@ def included_functions(text):
     return out
 
 
+def param_name(param):
+    m = re.search(r"([A-Za-z_]\w*)\s*(?:\[\s*\w*\s*\])?\s*$", param)
+    return m.group(1) if m and param_type(param) != re.sub(r"\s+", " ", param.strip()) else None
+
+
+def typed_def(text, name, with_header):
+    parsed = demangle(name)
+    m = re.search(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*\{' % re.escape(name), text)
+    if not parsed or not m:
+        return text
+    full, real, const = parsed
+    qual, ident = full.rsplit("::", 1) if "::" in full else (None, full)
+    declared = [p.strip() for p in split_args(m.group(3))] if m.group(3).strip() not in ("", "void") else []
+    member = qual is not None and len(declared) == len(real) + 1
+    if len(declared) - member > len(real):
+        return None
+    params, aliases = [], []
+    if member:
+        own, alias = param_name(declared[0]), param_type(declared[0])
+        if own is None:
+            return None
+        same = norm_type(alias) == norm_type(qual + "*") and not const
+        aliases.append("%s %s = %s;" % (alias, own, "this" if same else "(%s)this" % alias))
+    for i, rt in enumerate(real):
+        j = i + member
+        if j >= len(declared):
+            params.append(rt)
+            continue
+        own = param_name(declared[j])
+        if own is None or norm_type(declared[j]) == norm_type(rt):
+            params.append(declared[j] if own else rt)
+            continue
+        params.append("%s arg%d" % (rt, i))
+        aliases.append("%s %s = (%s)arg%d;" % (param_type(declared[j]), own, param_type(declared[j]), i))
+    head = "%s%s%s%s(%s)%s {" % (m.group(1), m.group(2), qual + "::" if qual else "", ident, ", ".join(params),
+                                 " const" if const else "")
+    body = "".join("\n%s    %s" % (m.group(1), a) for a in aliases)
+    text = text[:m.start()] + head + body + text[m.end():]
+    if qual is not None:
+        cls = class_body(text, qual)
+        if cls and cls[1] < m.start() and not re.search(r"\b%s\s*\(" % re.escape(ident), text[cls[0]:cls[1]]):
+            line = "    %s%s %s(%s)%s;\n" % ("" if member else "static ", re.sub(r"\b(?:ARM|THUMB)\b", "",
+                                                                                m.group(2)).strip(),
+                                            ident, ", ".join(real), " const" if const else "")
+            text = text[:cls[1]] + line + text[cls[1]:]
+        elif not cls and with_header:
+            header = class_header(qual)
+            if not header:
+                return None
+            if '"%s"' % header not in text:
+                last = list(re.finditer(r"(?m)^#include[^\n]*\n", text))
+                at = last[-1].end() if last else 0
+                text = text[:at] + '#include "%s"\n' % header + text[at:]
+    return text
+
+
 def typed_call(text, name, scalar_cast, with_header):
     parsed = demangle(name)
     decls = list(re.finditer(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b%s\s*\(([^;{}]*)\)\s*;[ \t]*\n?'
                              % re.escape(name), text))
-    if not parsed or not decls:
+    if parsed and not decls:
+        return typed_def(text, name, with_header)
+    if not parsed:
         return None
     full, real, const = parsed
     qual, ident = full.rsplit("::", 1) if "::" in full else (None, full)
@@ -391,6 +449,8 @@ def typed_call(text, name, scalar_cast, with_header):
     header_ret = method_return(qual, ident) if qual else known.get(ident)
     wrap = header_ret is not None and "*" in ret and norm_type(header_ret + " x") != norm_type(ret + " x")
     for start, end, args in reversed(call_sites(text, name)):
+        if 'extern "C"' in text[text.rfind("\n", 0, start) + 1:start]:
+            continue
         if len(args) != len(declared):
             return None
         conv = [convert(a, d, r, scalar_cast) for a, d, r in zip(args[member:], declared[member:], real)]
@@ -407,7 +467,8 @@ def typed_call(text, name, scalar_cast, with_header):
         else:
             call = "%s::%s(%s)" % (qual, ident, ", ".join(conv))
         text = text[:start] + ("(%s)%s" % (re.sub(r"\bstruct\s+", "", ret), call) if wrap else call) + text[end:]
-    return None if re.search(r"\b%s\b" % re.escape(name), text) else text
+    text = typed_def(text, name, with_header)
+    return None if text is None or re.search(r"\b%s\b" % re.escape(name), text) else text
 
 
 def strategies(name):
@@ -536,7 +597,7 @@ def method_decls(original):
     for rel, text in original.items():
         if not rel.startswith("src/") or not rel.endswith((".c", ".cpp")):
             continue
-        for m in re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+([^;{}()=]*?)\b(_ZN\w+)\s*\(([^;{}]*)\)\s*;', text):
+        for m in re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+([^;{}()=]*?)\b(_ZN\w+)\s*\(([^;{}]*)\)\s*[;{]', text):
             parsed, parts = demangle(m.group(2)), member_parts(m.group(2))
             if not parsed or not parts or parts[2] is None:
                 continue
@@ -582,7 +643,8 @@ def header_pass(jobs):
 
 
 def externc_clean(text, path):
-    members = re.findall(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_ZN\w+)\s*\([^;{}]*\)\s*;', text)
+    members = re.findall(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_ZN\w+)\s*\([^;{}]*\)\s*[;{]', text)
+    members = [n for n in members if not plausible.structor_variant(n)]
     names = list(free_mangled(text)) + sorted(set(members), key=members.index)
     if not names:
         return text

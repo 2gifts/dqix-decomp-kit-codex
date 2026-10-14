@@ -2680,6 +2680,14 @@ def _mechclean_extern_c():
             return "operator= rewrite gave %r" % got
         if M.apply_names(assign, {"_ZN8Vector3iaSERKS_": 0}) is not None:
             return "a strategy that leaves the mangled name in place counted as a rewrite"
+        definition = ('struct ZoneFeatures {\n    int n;\n};\nstruct Foo;\nstruct SafeAllocator;\n'
+                      'extern "C" ARM void _ZN12ZoneFeatures23AllocateOpcode64EntriesEiP13SafeAllocator('
+                      'struct Foo* obj, int count, SafeAllocator* alloc) {\n    g(obj, count, alloc);\n}\n')
+        got = M.typed_def(definition, "_ZN12ZoneFeatures23AllocateOpcode64EntriesEiP13SafeAllocator", False) or ""
+        if ("ARM void ZoneFeatures::AllocateOpcode64Entries(int count, SafeAllocator* alloc) {\n"
+                "    struct Foo* obj = (struct Foo*)this;\n    g(obj" not in got
+                or "    void AllocateOpcode64Entries(int, SafeAllocator*);\n};" not in got):
+            return "definition rewrite gave %r" % got
         header = "#pragma once\nclass Model3D {\npublic:\n    int x;\n};\n"
         source = 'extern "C" void _ZN7Model3D4DrawEb(void* m, int on);\nvoid f(void* p) { _ZN7Model3D4DrawEb(p, 1); }\n'
         old = M.class_header
