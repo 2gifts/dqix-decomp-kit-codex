@@ -579,11 +579,17 @@ def verify(original, new, mapping, jobs, work):
 
     def check(rel):
         path = f"{work}/tu/{rel.replace('/', '_')}"
-        before = signature(original[rel], path, "usa", f"{REPO}/include")
-        if before is None:
-            return rel, rel not in new
-        after = signature(new.get(rel, original[rel]), path, "usa", f"{work}/include")
-        return rel, after is not None and remap(before, mapping) == after
+        text = new.get(rel, original[rel])
+        for region in ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, original[rel] + text)]:
+            before = signature(original[rel], path, region, f"{REPO}/include")
+            if before is None:
+                if rel in new:
+                    return rel, False
+                continue
+            after = signature(text, path, region, f"{work}/include")
+            if after is None or remap(before, mapping) != after:
+                return rel, False
+        return rel, True
 
     with ThreadPoolExecutor(jobs) as pool:
         bad = [rel for rel, ok in pool.map(check, tus) if not ok]

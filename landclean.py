@@ -15,6 +15,7 @@ MANIFEST = f"{CLEAN}/manifest.tsv"
 LANDED = f"{CLEAN}/landed.tsv"
 REJECTED = f"{CLEAN}/rejected.tsv"
 REGIONS = ("usa", "jpn", "eur")
+COUPLED = ("addrname", "remangle")
 USAGE = """bash landclean.sh [reviewed.txt]
 
 With reviewed.txt (one repo path per line), only those rows land; the rest stay queued.
@@ -61,13 +62,28 @@ def split_stale(tree, entries):
     return fresh, stale
 
 
+def units(entries):
+    groups, out = {}, []
+    for entry in entries:
+        if entry[2] in COUPLED:
+            if entry[2] not in groups:
+                groups[entry[2]] = []
+                out.append(groups[entry[2]])
+            groups[entry[2]].append(entry)
+        else:
+            out.append([entry])
+    return out
+
+
 def settle(entries, check):
-    if not entries or check(entries):
-        return list(entries)
-    if len(entries) == 1:
-        return []
-    half = len(entries) // 2
-    return settle(entries[:half], check) + settle(entries[half:], check)
+    def halve(parts):
+        if not parts or check([e for p in parts for e in p]):
+            return list(parts)
+        if len(parts) == 1:
+            return []
+        half = len(parts) // 2
+        return halve(parts[:half]) + halve(parts[half:])
+    return [e for part in halve(units(entries)) for e in part]
 
 
 def green():
@@ -118,6 +134,9 @@ def main():
     tip = git(tree, "rev-parse", "FETCH_HEAD")[1].strip()
     git(tree, "checkout", "-q", "-f", "--detach", tip)
     fresh, stale = split_stale(tree, entries)
+    broken = {why for _, _, why in stale if why in COUPLED}
+    stale += [e for e in fresh if e[2] in broken]
+    fresh = [e for e in fresh if e[2] not in broken]
     for rel, _, _ in stale:
         print(f"STALE {rel}: changed on decomp-matching since it was rewritten; rewrite it again")
 

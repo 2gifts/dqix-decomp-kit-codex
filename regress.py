@@ -2376,6 +2376,13 @@ def _landclean_settle():
     got = lc.settle(entries, lambda part: not bad & {rel for rel, _, _ in part})
     if [rel for rel, _, _ in got] != ["src/a.cpp", "src/b.cpp", "src/d.cpp", "src/e.cpp"]:
         return "settle() kept %s" % [rel for rel, _, _ in got]
+    coupled = [(f"src/r{n}.cpp", "b", "remangle") for n in range(200)] + [("config/usa/s.txt", "b", "remangle")]
+    calls = []
+    got = lc.settle(coupled + [("src/x.cpp", "b", "")],
+                    lambda part: calls.append(len(part)) or not any(rel == "src/r7.cpp" for rel, _, _ in part))
+    if [rel for rel, _, _ in got] != ["src/x.cpp"] or len(calls) > 3:
+        return ("settle() split a rename batch whose symbols.txt and sources only build together "
+                "(%d checks, kept %d rows); 241 such rows once bisected for an hour" % (len(calls), len(got)))
     os.makedirs(f"{SP}/handwork", exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="landclean_regress_", dir=f"{SP}/handwork",
                                      ignore_cleanup_errors=True) as root:
