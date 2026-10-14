@@ -243,8 +243,9 @@ cracked r45 ·
 `pad/decomment.py <in.cpp> <out.cpp>` strips every comment except the `// USA:` tag, for a hand
 match about to be staged; re-gate the output ·
 `pad/repool.py [--apply] [--check] [--rev R] [--exclude a,b] [paths]` re-points parked sources after
-an upstream merge: renamed callees by ADDRESS (symbols.txt at R against HEAD), the declaration made
-`extern "C"`, a missing prototype synthesised from R's header, a deleted type's old definition when
+an upstream merge: renamed callees by ADDRESS (symbols.txt at R against HEAD), a C callee's
+declaration made `extern "C"`, a C++ callee renamed as a plain identifier (never its mangled name)
+with any `extern "C"` dropped and scalar widths retyped, a missing prototype synthesised from R's header, a deleted type's old definition when
 it is self-contained, moved includes; `merge_human.sh` runs it on every merge and selfcheck fails
 while any pool file would still change ·
 `pad/mapsyms.py <mod> <obj> <func> <base>` each undefined callee in a compiled object -> the ROM

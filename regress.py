@@ -3030,10 +3030,6 @@ def _repool_member():
     new, _what = R.rewrite(member, True, spell, {}, set(), {}, {})
     if new != member:
         return "rewrote a member declaration and its call"
-    free = 'extern "C" int Foo();\n\nvoid f() { Foo(); }\n'
-    new, _what = R.rewrite(free, True, spell, {}, set(), {}, {})
-    if not new or "_Z3Foov" not in new:
-        return "no longer rewrites a renamed free function"
     cxx = "int Foo();\n\nvoid f() { Foo(); }\n"
     new, _what = R.rewrite(cxx, True, spell, {}, set(), {}, {})
     if new != cxx:
@@ -3042,6 +3038,28 @@ def _repool_member():
     new, _what = R.rewrite(free_member, True, spell, {}, set(), {}, {})
     if new is not None:
         return "rewrote a free call into a member's mangled name, which does not compile"
+
+
+@check("repool renames a C++ callee as a plain identifier and never writes its mangled name",
+       "the address renames sent 812 parked sources through repool, which declared each callee as "
+       "extern \"C\" _Z19AppendXTag_02041a28Pci, the pattern plausible.py rejects as EXTERN-C-MANGLED")
+def _repool_cxx_identifier():
+    R = load("pad/repool")
+    free = 'extern "C" int Foo();\n\nvoid f() { Foo(); }\n'
+    new, _what = R.rewrite(free, True, {"Foo": "_Z3Foov"}, {}, set(), {}, {})
+    if new != "int Foo();\n\nvoid f() { Foo(); }\n":
+        return "a C declaration of a C++ function kept extern \"C\" or took its mangled name: %r" % new
+    spell = {"AppendXTag": "_Z19AppendXTag_02041a28Pci", "_Z10AppendXTagPci": "_Z19AppendXTag_02041a28Pci"}
+    renamed = "void AppendXTag(char*, int);\n\nvoid f(char* p) { AppendXTag(p, 1); }\n"
+    new, _what = R.rewrite(renamed, True, spell, {}, set(), {}, {})
+    if new != "void AppendXTag_02041a28(char*, int);\n\nvoid f(char* p) { AppendXTag_02041a28(p, 1); }\n":
+        return "an address rename did not stay a plain C++ identifier: %r" % new
+    retypes = {"_Z12SetByte0x1c8Phh": ("_Z12SetByte0x1c8Phi", None, "SetByte0x1c8",
+                                       ["unsigned char*", "unsigned char"], ["unsigned char*", "int"])}
+    widened = "void SetByte0x1c8(unsigned char* p, unsigned char v);\n\nvoid f(unsigned char* p) { SetByte0x1c8(p, 1); }\n"
+    new, _what = R.rewrite(widened, True, {"SetByte0x1c8": "_Z12SetByte0x1c8Phi"}, {}, set(), {}, {}, retypes)
+    if new != widened.replace("unsigned char v", "int v"):
+        return "a remangled callee's declaration was not retyped: %r" % new
 
 
 @check("wgate selects ISA and size by physical address, not raw-name suffix",
