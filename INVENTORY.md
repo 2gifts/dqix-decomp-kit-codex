@@ -210,7 +210,9 @@ table proves the original source used (numeric only by habit: DQIX put 0x99 next
 file and disassemble it, for testing a codegen shape without recompiling a 1500-line function ·
 `pad/declperm.py <mod> <addr> <template.cpp> <decls.json> [indent]` hill-climb the order of bare
 declarations substituted at `/*DECLS*/` · `pad/cf_multi.py <src> ovNNN <addr> <size> <pool_from> '<json>' [--order]`
-colorforce with several `moves`/`choices` at once, printing the colouring order · `pad/findmat.py [imm]`
+colorforce with several `moves`/`choices` at once, printing the colouring order ·
+`frida/proton.py <command...>` run a command with mwccarm under Steam's Proton wine, so the Frida
+tools work on Linux (wibo is statically linked and Frida cannot inject into it) · `pad/findmat.py [imm]`
 committed functions that keep a derived pointer in its own callee-saved register ·
 `pad/shiftdiff.py <mod> <addr> <file.cpp>` edit-distance aligned diff for a function whose size is
 off by a few instructions, where `wdiff` shows every later row as different ·

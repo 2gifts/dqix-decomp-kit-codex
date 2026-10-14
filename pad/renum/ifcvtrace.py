@@ -36,9 +36,8 @@ def run(src, flags):
     ev = []
     done = threading.Event()
     dev = frida.get_local_device()
-    pid = dev.spawn(argv, cwd=sf.REPO)
-    ses = dev.attach(pid)
-    sc = ses.create_script(JS)
+    pid, ses = sf.buildcfg.frida_spawn(dev, argv, sf.REPO)
+    sc = ses.create_script(sf.buildcfg.frida_script(JS))
     sc.on("message", lambda m, d: ev.append(m["payload"]) if m["type"] == "send" else print(m))
     sc.load()
     ses.on("detached", lambda *a: done.set())

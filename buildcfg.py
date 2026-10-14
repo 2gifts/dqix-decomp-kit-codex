@@ -144,6 +144,52 @@ def tool_command(executable):
     return ([runner] if runner else []) + [executable]
 
 
+# Frida scripts hook mwccarm.exe at fixed .text addresses. Natively the image is mapped before the
+# script loads. Under Wine nothing is mapped at spawn: the loader copies the sections into anonymous
+# memory and only then makes .text r-x, so a hook placed earlier is overwritten. Run the script at
+# that mprotect, on the loader's thread, before any compiler code executes. Frida knows 'mscdecl' only
+# on Windows; on ia32 Linux 'sysv' is the same cdecl for the int, uint32 and pointer signatures used.
+_FRIDA_DEFER = """(function () {
+const MSCDECL = Process.platform === 'windows' ? 'mscdecl' : 'sysv';
+const text = ptr('0x401000');
+const body = function () {
+/*BODY*/
+};
+if (Process.findRangeByAddress(text) !== null) { body(); return; }
+const mprotect = Module.getGlobalExportByName ? Module.getGlobalExportByName('mprotect')
+                                              : Module.getExportByName(null, 'mprotect');
+const gate = Interceptor.attach(mprotect, {
+  onEnter(a) { this.lo = a[0]; this.hi = a[0].add(a[1]); this.prot = a[2].toInt32(); },
+  onLeave(rv) {
+    if (rv.toInt32() === 0 && (this.prot & 7) === 5 && text.compare(this.lo) >= 0 && text.compare(this.hi) < 0) {
+      gate.detach();
+      body();
+    }
+  }
+});
+})();
+"""
+
+
+def frida_script(js):
+    return _FRIDA_DEFER.replace("/*BODY*/", js.replace("'mscdecl'", "MSCDECL"), 1)
+
+
+def frida_spawn(device, argv, cwd):
+    """Spawn suspended and attach. Under Wine about one spawn in fifty dies inside device.attach
+    (signal 5 or 11), still suspended at its entry, so nothing has run: spawn it again."""
+    # ponytail: retry hides an injector fault whose cause is unknown; serialising attach and
+    # disabling ASLR did not remove it. Three attempts; raise if a target keeps dying.
+    for attempt in range(3):
+        pid = device.spawn(argv, cwd=cwd)
+        try:
+            return pid, device.attach(pid)
+        except Exception as e:
+            if attempt == 2 or "terminated" not in str(e):
+                raise
+            print(f"frida: {e} during attach; respawning", file=sys.stderr)
+
+
 if __name__ == "__main__":
     if "--cc" in sys.argv:
         print(CC)

@@ -148,7 +148,9 @@ shape class.
     python -m pip install frida pyyaml
 
 These tools spawn the build's `mwccarm.exe` (2.0/sp2p2) under Frida and hook its backend while it
-compiles one source, so they need a system that runs the compiler natively.
+compiles one source, so they need a system that runs the compiler natively. On Linux, run them
+through `python frida/proton.py <command>`: it runs the compiler under Steam's Proton wine, building
+its own prefix on first use (`wibo` is statically linked and Frida cannot inject into it).
 
 | tool | hooks |
 |---|---|

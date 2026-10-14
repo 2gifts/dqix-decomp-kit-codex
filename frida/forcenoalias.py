@@ -52,9 +52,8 @@ def run(src, mode, out_obj):
     argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", out_obj]
     done = threading.Event()
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=REPO)
-    session = device.attach(pid)
-    script = session.create_script(JS % mode)
+    pid, session = buildcfg.frida_spawn(device, argv, REPO)
+    script = session.create_script(buildcfg.frida_script(JS % mode))
     script.on("message", lambda m, d: print(m))
     script.load()
     session.on("detached", lambda *a: done.set())
