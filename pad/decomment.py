@@ -1,7 +1,7 @@
 import re
 import sys
 
-KEEP = re.compile(r"^\s*//\s*(USA:|KEEP-NAME)")
+KEEP = re.compile(r"^\s*//\s*(USA:|JPN:|EUR:|KEEP-NAME)")
 
 
 def strip(src):

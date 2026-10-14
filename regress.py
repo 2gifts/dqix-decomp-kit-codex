@@ -55,14 +55,15 @@ def load(mod):
     return m
 
 
-@check("decomment keeps the KEEP-NAME marker integrate reads",
+@check("decomment keeps the KEEP-NAME marker and the region tags",
        "a staged file stripped by pad/decomment.py lost `// KEEP-NAME`, so integrate no longer "
-       "delinked it under its mangled symbol")
+       "delinked it under its mangled symbol; landpr's strip took `// JPN:` off #151's JPN-only files")
 def _decomment_keeps_markers():
     src = ("// KEEP-NAME: the ROM symbol here is the mangled C++ name, not a func_ tag.\n"
-           "// USA: 0x02000000\n// note\nint f() { return 0; } /* x */\n")
+           "// USA: 0x02000000\n// JPN: func_02043014\n// note\nint f() { return 0; } /* x */\n")
     out = load("pad/decomment").strip(src)
-    if "// KEEP-NAME" not in out or "// USA:" not in out or "note" in out or "/*" in out:
+    if ("// KEEP-NAME" not in out or "// USA:" not in out or "// JPN:" not in out or "note" in out
+            or "/*" in out):
         return "stripped to %r" % out
     return None
 
