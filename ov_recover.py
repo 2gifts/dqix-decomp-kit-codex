@@ -479,13 +479,10 @@ for _l in sh("git", "ls-files", "src/").stdout.split():
     if _l.endswith(('.c', '.cpp')) and os.path.dirname(_l) != SRCDIR:
         _FOREIGN_STEMS.add(os.path.basename(_l).rsplit('.', 1)[0])
 
-ASMPAT = re.compile(r'(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b')
+from pragmas import HAND_ASM as ASMPAT, asm_allow
 # The ONLY functions allowed to land as hand-written assembly, by address. See asm_allow.txt for
 # why each one is there. Everything else still falls under the no-hand-asm policy below.
-ASM_ALLOW = set()
-for _l in open(f"{KIT}/asm_allow.txt", encoding="utf-8").read().splitlines():
-    _l = _l.split('#', 1)[0].strip()
-    if _l: ASM_ALLOW.add(_l.split()[0].lower())
+ASM_ALLOW = asm_allow()
 
 
 def place(addrs):

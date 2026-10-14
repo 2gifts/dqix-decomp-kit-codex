@@ -1128,13 +1128,14 @@ def _loop_shape_class():
        "candidates deferred as wired-0 on every wave forever, silently. Six were hand asm (never to "
        "be landed) and one was real C that no naming rule covered")
 def _placement():
+    import pragmas
     src = open(f"{KIT}/ov_recover.py", encoding="utf-8").read()
-    m = re.search(r"ASMPAT = re\.compile\(r'(\(\?m\)\^\\s\*asm\\b[^']*)'", src)
-    if not m:
-        return "the asm-detection pattern is gone from place()"
-    if "ASM_ALLOW" not in src or "asm_allow.txt" not in src:
+    for tool in ("ov_recover.py", "integrate.py"):
+        if "from pragmas import HAND_ASM as ASMPAT, asm_allow" not in open(f"{KIT}/{tool}", encoding="utf-8").read():
+            return "%s no longer takes the asm pattern and allowlist from pragmas.py" % tool
+    if "ASM_ALLOW" not in src or "asm_allow.txt" not in open(f"{KIT}/pragmas.py", encoding="utf-8").read():
         return "the asm allowlist is gone, so refusal is all-or-nothing again"
-    pat = re.compile(m.group(1))
+    pat = pragmas.HAND_ASM
     asm_src = "// USA: func_1\nARM\nasm void MTX_Identity33_(register void* pDst)\n{\n}\n"
     c_src = "// USA: func_2\nchar* StringReplaceLanguageTag(const char* s, char* d, int l) {\n}\n"
     if not pat.search(asm_src):
@@ -1450,6 +1451,90 @@ def _dead_inline_section():
     for tool in ("wgate.py", "wdiff.py", "classify.py", "integrate.py", "tucheck.py"):
         if "buildcfg.postcompile(" not in open(f"{KIT}/{tool}", encoding="utf-8").read():
             return "%s no longer runs the build's postcompile step" % tool
+    return None
+
+
+def _main_function(landed):
+    import buildcfg
+    import delinked
+    cfg = f"{buildcfg.REPO}/{buildcfg.config_dir('main')}"
+    texts = [open(f"{cfg}/delinks.txt", encoding="utf-8", errors="ignore").read()]
+    allow = load("pragmas").asm_allow()
+    for m in re.finditer(r"(?m)^\S+ kind:function\(arm,size=0x[0-9a-f]+\) addr:0x([0-9a-f]{8})",
+                         open(f"{cfg}/symbols.txt", encoding="utf-8", errors="ignore").read()):
+        if m.group(1) not in allow and delinked.covers(int(m.group(1), 16), texts) == landed:
+            return m.group(1)
+    return None
+
+
+def _wgate(addr, text, name="t.cpp"):
+    import subprocess
+    with tempfile.TemporaryDirectory(dir=f"{SP}/handwork", ignore_cleanup_errors=True) as d:
+        src = os.path.join(d, name)
+        with open(src, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("WGATE_ALLOW")}
+        r = subprocess.run([sys.executable, f"{KIT}/wgate.py", "main", addr, src], capture_output=True,
+                           text=True, cwd=_kp.REPO, env={**env, "WGATE_SESSION": "regress"})
+    return r.returncode, r.stdout + r.stderr
+
+
+@check("wgate refuses hand asm off asm_allow.txt before spending a compile, and passes allowlisted asm",
+       "wgate gated main 020c8aac's pure asm body MATCH; place() then parked it, so the worker session "
+       "was paid for a file that could never land and the address was served again (#327)")
+def _gate_refuses_hand_asm():
+    pragmas = load("pragmas")
+    allowed = sorted(pragmas.asm_allow())[0]
+    asm = '#include <globaldefs.h>\nextern "C" ARM asm void f(void) {\n    bx lr\n}\n'
+    if not pragmas.refused_asm("0200aaaa", "x.cpp", asm) or not pragmas.refused_asm("0200aaaa", "x.s", ""):
+        return "refused_asm passes hand asm off the allowlist"
+    if pragmas.refused_asm(allowed, "x.cpp", asm) or pragmas.refused_asm(allowed, "x.s", ""):
+        return "refused_asm refuses %s, which asm_allow.txt lists" % allowed
+    if pragmas.refused_asm("0200aaaa", "x.cpp", 'extern "C" int f(int a) { return a; }\n'):
+        return "refused_asm refuses plain C"
+    addr = _main_function(landed=False)
+    if not addr:
+        return "no unlanded main function to gate"
+    rc, out = _wgate(addr, asm.replace("void f(", "void func_%s(" % addr))
+    if rc != 1 or "RESIDUE HAND-ASM 1" not in out:
+        return "wgate on an asm body for %s: exit %d, %r" % (addr, rc, out.strip()[-160:])
+    if not re.search(r'grep -qi "\^\$a " "\$KIT/asm_allow.txt"', open(f"{KIT}/stage_gated.sh", encoding="utf-8").read()):
+        return "stage_gated.sh copies hand asm off asm_allow.txt from gated/ back into staging/"
+    return None
+
+
+@check("wgate reports a landed address ALREADY-COMMITTED even when the source does not compile",
+       "the delink check ran after the compile, so a stale copy of a landed function wrote NO-COMPILE "
+       "to its gate ledger: 8 of 10 NO-COMPILE ledgers in one hour were landed addresses (#277)")
+def _committed_before_compile():
+    addr = _main_function(landed=True)
+    if not addr:
+        return "no landed main function to gate"
+    rc, out = _wgate(addr, "this is not C\n")
+    if rc != 2 or "RESIDUE ALREADY-COMMITTED 0" not in out:
+        return "wgate on an uncompilable source for landed %s: exit %d, %r" % (addr, rc, out.strip()[-160:])
+    return None
+
+
+@check("blockercheck counts no landed address as an open or pending blocker",
+       "blockers.tsv is append-only and half its rows are addresses landed since, so health raised "
+       "`CRACK: SHAPE blocks 6 function(s)` with 4 of the 6 already in decomp-matching (020a9eb8)")
+def _blockercheck_skips_landed():
+    import contextlib
+    import io
+    bc = load("blockercheck")
+    landed, open_ = _main_function(landed=True), _main_function(landed=False)
+    with tempfile.TemporaryDirectory(dir=f"{SP}/handwork", ignore_cleanup_errors=True) as d:
+        bc.TSV, bc.DOC, bc.DECLINED = f"{d}/b.tsv", f"{d}/core.md", f"{d}/declined.txt"
+        with open(bc.TSV, "w", encoding="utf-8", newline="\n") as fh:
+            for a in (landed, landed, open_, open_):
+                fh.write("1800000000\tmain\t%s\t600\tZZCLASS\t9\tx\n" % a)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            bc.main()
+    row = next((l for l in out.getvalue().splitlines() if l.startswith("ZZCLASS")), "")
+    if landed in row or open_ not in row or row.split()[1:3] != ["1", "1"]:
+        return "blockercheck row for a landed and an open address: %r" % row
     return None
 
 
@@ -3340,7 +3425,29 @@ PLAUSIBLE_CASES = [
      '    g(data_ov031_02249b54, &data_ov031_02249b54_arg);\n}\n',
      'extern int data_ov031_02249b54;\nextern "C" ARM void f(int start_arg) {\n'
      '    g(data_ov031_02249b54, &data_ov031_02249b54, start_arg);\n}\n'),
+    ("HAND-ASM",
+     "inline `__asm(\"mov a, b\")` forced registers in four landed functions and counted them as matches",
+     '// USA: func_02000000\nextern "C" ARM void f(int* p, int* q) {\n    int* a;\n'
+     '    __asm("mov a, p");\n    g(a, q);\n}\n',
+     '// USA: func_02000000\nextern "C" ARM void f(int* p, int* q) {\n    /* asm { mov r0, r1 } */\n'
+     '    g(p, q);\n}\n'),
 ]
+
+
+@check("plausible.py blocks hand asm unless asm_allow.txt names its address or function",
+       "landpr and merge_human landed asm with no gate, because only the integrators knew the allowlist")
+def _plausible_asm_allowlist():
+    P = load("plausible")
+    pragmas = load("pragmas")
+    allowed = sorted(pragmas.asm_allow())[0]
+    body = 'extern "C" ARM asm void %s(void) {\n    bx lr\n}\n'
+    if not [h for h in P.blocking("// USA: func_0200aaaa\n" + body % "func_0200aaaa") if h[1] == "HAND-ASM"]:
+        return "an asm function off the allowlist is not blocking"
+    if [h for h in P.blocking("// USA: func_%s\n" % allowed + body % ("func_" + allowed)) if h[1] == "HAND-ASM"]:
+        return "an asm function at allowlisted %s is blocking" % allowed
+    if [h for h in P.blocking(body % "Timer1OverflowInterruptRoutine") if h[1] == "HAND-ASM"]:
+        return "an untagged asm function the allowlist names is blocking"
+    return None
 
 
 def _plausible_case(kind, bad, good):

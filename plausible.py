@@ -11,6 +11,7 @@ import re
 import sys
 
 import mangle
+from pragmas import asm_allow, asm_allow_symbols
 
 HWADDR = r"0x0?(?:4[0-9a-fA-F]{6}|2[37]f[0-9a-fA-F]{4})\b"
 HWTARGET = re.compile(r"[\s(]*(?:%s|&?\s*[A-Z][A-Z0-9_]+\b(?!\s*(?:\.|->|\[)))" % HWADDR)
@@ -823,8 +824,24 @@ def _transliterated(src, out):
              ",".join(m.group(1) for m in labels))
 
 
+ASM_SITE = re.compile(r"(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b|\b__asm\b|\basm\s*[({]")
+
+
+def _enclosing(src, off):
+    for f in src.funcs:
+        if f["open"] <= off <= f["close"]:
+            return f["name"]
+    later = [f for f in src.funcs if f["open"] > off and not re.search(r"[;}]", src.code[off:f["open"]])]
+    return later[0]["name"] if later else "?"
+
+
+def _hand_asm(src, out):
+    for m in ASM_SITE.finditer(src.code):
+        _hit(out, src.line(m.start()), "HAND-ASM", _enclosing(src, m.start()).split("::")[-1])
+
+
 FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access,
-              _transliterated]
+              _transliterated, _hand_asm]
 
 
 def _body_start(lines):
@@ -942,7 +959,10 @@ def allowed():
 def blocking(text):
     addrs = {a.lower() for a in USA_ADDR.findall(text)}
     ok = allowed()
-    return [h for h in findings(text) if h[1] not in ADVISORY and not any((a, h[1]) in ok for a in addrs)]
+    asm_addrs, asm_names = asm_allow(), asm_allow_symbols()
+    asm_ok = lambda h: h[2] in asm_names or (addrs and addrs <= asm_addrs)
+    return [h for h in findings(text) if h[1] not in ADVISORY and not any((a, h[1]) in ok for a in addrs)
+            and not (h[1] == "HAND-ASM" and asm_ok(h))]
 
 
 def hold(path, mod, addr, sp=None):

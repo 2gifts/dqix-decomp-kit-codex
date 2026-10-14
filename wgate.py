@@ -9,6 +9,7 @@ import kitpaths as _kp
 import subprocess, re, sys, os
 from elftools.elf.elffile import ELFFile
 import residue, gatelog, buildcfg
+from pragmas import refused_asm
 REPO = _kp.REPO
 # Compiler scratch and proven candidates belong to external state, never the checkout.
 SCR=f"{_kp.SP}/handwork/compile"
@@ -133,6 +134,29 @@ if SEC is None:
 # (".rodata referenced but has not been written" -> symbol at 0x0 -> link-poison). One such name
 # poisons the whole wave's integration. Force clean names at the source.
 _txt=open(SRC,encoding='utf-8',errors='ignore').read()
+# ALREADY COMMITTED IS NOT A FRESH MATCH. This compiles a file and compares bytes; it never asked
+# whether that address is already delinked, so a source for work already in the repo reported MATCH
+# exactly like new work. staging/ therefore filled with duplicates that looked like pending wins --
+# 19 of 46 in one backlog -- and every wave re-copied and re-classified them. Report it distinctly so
+# gate_staging can drop them. WGATE_ALLOW_COMMITTED=1 keeps the old behaviour for pipetest, which
+# deliberately gates already-committed functions to prove the gate still works.
+# Before compiling: a stale copy of a landed function logged NO-COMPILE for finished work.
+if not os.environ.get("WGATE_ALLOW_COMMITTED"):
+    _rngs = [(int(a, 16), int(b, 16)) for a, b in
+             re.findall(r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$",
+                        delinks)]
+    if any(s <= int(ADDR, 16) < e for s, e in _rngs):
+        _gate_record("ALREADY-COMMITTED", 0)
+        print("RESIDUE ALREADY-COMMITTED 0")
+        print("ALREADY-COMMITTED: this address is already delinked; the function is in the repo. "
+              "Nothing to gate or integrate.")
+        sys.exit(2)
+    if refused_asm(ADDR, SRC, _txt):
+        print("RESIDUE HAND-ASM 1")
+        print("HAND-ASM: assembly reaches the bytes by definition, so it is not a match, and the "
+              "integrator parks it. Write C, or emit BLOCKED with your best C file "
+              "(core.md, NEVER WRITE HAND ASSEMBLY).")
+        sys.exit(1)
 _defm=re.search(r'\b(?:ARM|THUMB)\b[^\n(;{]*?\b([A-Za-z_]\w*)\s*\(', _txt)
 # EXEMPT THE CONFIG'S OWN NAME. Some ROM symbols legitimately contain 0x (AccumulateFlag0x800-
 # CombatantValue is committed and delinked; SubmitFlag0x800CombatantDataA0201fca0 is waiting).
@@ -313,22 +337,5 @@ try:
 except OSError as _e:
     print(f"PRESERVATION-FAILED: {_e}")
     sys.exit(1)
-# ALREADY COMMITTED IS NOT A FRESH MATCH. This compiles a file and compares bytes; it never asked
-# whether that address is already delinked, so a source for work already in the repo reported MATCH
-# exactly like new work. staging/ therefore filled with duplicates that looked like pending wins --
-# 19 of 46 in one backlog -- and every wave re-copied and re-classified them. Report it distinctly so
-# gate_staging can drop them. WGATE_ALLOW_COMMITTED=1 keeps the old behaviour for pipetest, which
-# deliberately gates already-committed functions to prove the gate still works.
-if not os.environ.get("WGATE_ALLOW_COMMITTED"):
-    _rngs = [(int(a, 16), int(b, 16)) for a, b in
-             re.findall(r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$",
-                        delinks)]
-    _a = int(ADDR, 16)
-    if any(s <= _a < e for s, e in _rngs):
-        _gate_record("ALREADY-COMMITTED", 0)
-        print("RESIDUE ALREADY-COMMITTED 0")
-        print("ALREADY-COMMITTED: this address is already delinked; the bytes match because the "
-              "function is in the repo. Nothing to integrate.")
-        sys.exit(2)
 _gate_record("MATCH", 0)
 print("MATCH"); sys.exit(0)

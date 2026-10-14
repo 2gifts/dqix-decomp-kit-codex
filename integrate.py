@@ -320,11 +320,8 @@ newdelinks = delinks
 RELOCS, RELOCS_TOUCHED = None, {}
 os.makedirs(f"{SP}/wlog", exist_ok=True)
 
-ASMPAT = re.compile(r'(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b')
-ASM_ALLOW = set()
-for _l in open(f"{KIT}/asm_allow.txt", encoding="utf-8").read().splitlines():
-    _l = _l.split('#', 1)[0].strip()
-    if _l: ASM_ALLOW.add(_l.split()[0].lower())
+from pragmas import HAND_ASM as ASMPAT, asm_allow
+ASM_ALLOW = asm_allow()
 
 ORIGINAL = {}
 for f, addr in pending:
