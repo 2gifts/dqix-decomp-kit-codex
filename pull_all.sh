@@ -185,7 +185,7 @@ while :; do
   # an operator remembering. Skipped while an integration holds the wave lock: both want the tree.
   if [ -n "$sweep_pid" ] && ! kill -0 "$sweep_pid" 2>/dev/null; then sweep_pid=""; fi
   if [ "$SWEEP_EVERY" -gt 0 ] && [ -z "$sweep_pid" ] && [ -z "$integ_pid" ] && [ -z "$update_wait" ] \
-     && [ $((SECONDS - last_sweep)) -ge "$SWEEP_EVERY" ]; then
+     && [ "${_behind:-0}" -eq 0 ] && [ $((SECONDS - last_sweep)) -ge "$SWEEP_EVERY" ]; then
     last_sweep=$SECONDS
     echo "$(date '+%H:%M') repair sweep (detached)" >> "$LOG"
     python -u "$KIT/repairsweep.py" >> "$SP/wlog/repairsweep_auto.log" 2>&1 &

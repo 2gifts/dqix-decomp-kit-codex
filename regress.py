@@ -2405,6 +2405,9 @@ def _cleancheck():
     pull = open(f"{KIT}/pull_all.sh", encoding="utf-8").read()
     if 'claim.py" --best 2>/dev/null); _rc=$?' not in pull or "update_blocked=$SECONDS" not in pull:
         return "pull_all.sh reads claim.py's refusal as drained pools, or latches a blocked kit update forever"
+    sweep = re.search(r'(?m)^\s*if \[ "\$SWEEP_EVERY" -gt 0 \].*\n.*then$', pull)
+    if not sweep or '[ "${_behind:-0}" -eq 0 ]' not in sweep.group(0):
+        return "pull_all.sh starts a 2.5h repair sweep while the kit is behind, so the update and every claim wait on it"
     old = os.environ.get("LEVERCHECK_DOCS")
     os.environ["LEVERCHECK_DOCS"] = "worker_src/core.md"
     try:
