@@ -1544,6 +1544,30 @@ def _blockercheck_skips_landed():
     return None
 
 
+@check("the linker's section symbols are known to the gate with their delinked addresses",
+       "0200f29c needed a fake size-0 `func_020e5920_dup` alias for its second pool word at the start of "
+       ".init; ARM9_INIT_START names that address, but the gate called it UNDEF-SYM (#335)")
+def _section_lcf_symbols():
+    import buildcfg
+    known = buildcfg.lcf_symbols()
+    head = open(f"{buildcfg.REPO}/{buildcfg.config_dir('main')}/delinks.txt", encoding="utf-8").read()
+    m = re.search(r"(?m)^\s*\.init\s+start:0x([0-9a-fA-F]+)\s+end:0x([0-9a-fA-F]+)", head)
+    if not m:
+        return "main delinks.txt has no .init section header"
+    if known.get("ARM9_INIT_START") != int(m.group(1), 16) or known.get("ARM9_INIT_END") != int(m.group(2), 16):
+        return "lcf_symbols() ARM9_INIT_START/END = %r/%r, delinks .init is %s-%s" % (
+            known.get("ARM9_INIT_START"), known.get("ARM9_INIT_END"), m.group(1), m.group(2))
+    elf = _compile_elf('extern "C" char ARM9_INIT_START[];\nextern "C" unsigned int F() { return (unsigned int)ARM9_INIT_START; }\n',
+                       buildcfg.REPO)
+    if isinstance(elf, str):
+        return elf
+    symtab = elf.get_section_by_name(".symtab")
+    undef = {s.name for s in symtab.iter_symbols() if s["st_shndx"] == "SHN_UNDEF" and s.name}
+    if undef - set(known):
+        return "not linker symbols: %s" % sorted(undef - set(known))
+    return None
+
+
 @check("the NitroSDK stack-size symbols are known linker symbols with the ROM's pool values",
        "main:020c6d48, 020c745c and 020c8548 load SDK_IRQ_STACKSIZE and SDK_SYS_STACKSIZE from their "
        "literal pools; lcf_symbols() did not list them, so wgate called every candidate UNDEF-SYM and "

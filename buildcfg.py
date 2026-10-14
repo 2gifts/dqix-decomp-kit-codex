@@ -83,7 +83,12 @@ SDK_LCF_SYMBOLS = {"SDK_IRQ_STACKSIZE": 0x400, "SDK_SYS_STACKSIZE": 0}
 
 def lcf_symbols():
     overlays = [d for d in os.listdir(f"{REPO}/{config_dir('main')}/overlays") if re.fullmatch(r"ov\d+", d)]
-    return {**SDK_LCF_SYMBOLS, **{f"OVERLAY_{int(d[2:])}_ID": int(d[2:]) for d in overlays}}
+    out = {**SDK_LCF_SYMBOLS, **{f"OVERLAY_{int(d[2:])}_ID": int(d[2:]) for d in overlays}}
+    head = open(f"{REPO}/{config_dir('main')}/delinks.txt", encoding="utf-8").read().split("\n\n")[0]
+    for name, lo, hi in re.findall(r"(?m)^\s*\.(\w+)\s+start:0x([0-9a-fA-F]+)\s+end:0x([0-9a-fA-F]+)", head):
+        out[f"ARM9_{name.upper()}_START"] = int(lo, 16)
+        out[f"ARM9_{name.upper()}_END"] = int(hi, 16)
+    return out
 
 
 def cc_path(version):
