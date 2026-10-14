@@ -10,13 +10,14 @@ import mechclean
 
 REPO, SP = kitpaths.REPO, kitpaths.SP
 WORK = f"{SP}/handwork/addrname"
-USAGE = """python addrname.py [--skip-author EMAIL]... [-j N] [--dry]
-       python addrname.py --remangle [--skip-author EMAIL]... [-j N]
+USAGE = """python addrname.py [--keep REF] [-j N] [--dry]
+       python addrname.py --remangle [--keep REF] [-j N]
 
-Renames every mangled function symbol in config/usa whose name lacks its USA address, so the address
-stays visible: <name>_<addr> in main, <name>_ovNNN_<addr> in an overlay, in every region's symbols.txt
-and in every source, header and .s file that names it. --skip-author leaves the symbols whose
-symbols.txt line that author last wrote. A rename is kept only when every C/C++ translation unit it
+Renames every function symbol in config/usa whose name lacks its USA address, so the address stays
+visible: <name>_<addr> in main, <name>_ovNNN_<addr> in an overlay, in every region's symbols.txt and in
+every source, header and .s file that names it. A mangled name gets the suffix on its own name; a plain
+C name only when it has a capital letter (runtime and C library names stay). --keep REF leaves every
+name REF's symbols.txt files already carry (e.g. upstream/main). A rename is kept only when every C/C++ translation unit it
 touches compiles to the same object, symbol names aside; an identifier that names two symbols is left.
 The rewrites go to $SP/clean/manifest.tsv for landclean.sh. --dry prints the counts and writes
 nothing.
@@ -50,38 +51,41 @@ def own_name(mangled):
     return span
 
 
-def renamed(mangled, suffix):
-    a, b, c = own_name(mangled)
-    ident = mangled[b:c] + suffix
-    return mangled[:a] + str(len(ident)) + ident + mangled[c:]
+def plain_name(name):
+    return re.fullmatch(r"[A-Za-z]\w*", name) is not None and re.search(r"[A-Z]", name) is not None \
+        and not name.startswith("func_")
 
 
-def authors(rel):
-    out, who = {}, None
-    for ln in git("blame", "--line-porcelain", "HEAD", "--", rel).split("\n"):
-        if ln.startswith("author-mail "):
-            who = ln.split()[1].strip("<>")
-        elif ln.startswith("\t") and FUNC.match(ln[1:]):
-            out[FUNC.match(ln[1:]).group(1)] = who
+def renamed(name, suffix):
+    if not own_name(name):
+        return name + suffix
+    a, b, c = own_name(name)
+    base = name[b:c] + suffix
+    return name[:a] + str(len(base)) + base + name[c:]
+
+
+def kept_names(ref):
+    out = set()
+    for rel in git("ls-tree", "-r", "--name-only", ref, "--", "config").split() if ref else []:
+        if rel.endswith("symbols.txt"):
+            out |= {n for n, _ in FUNC.findall(git("show", f"{ref}:{rel}"))}
     return out
 
 
-def targets(skip):
+def targets(keep):
     out = {}
     for cfg in [f"{REPO}/config/usa/arm9"] + sorted(glob.glob(f"{REPO}/config/usa/arm9/overlays/ov*")):
-        rel = os.path.relpath(f"{cfg}/symbols.txt", REPO).replace("\\", "/")
         tag = "" if cfg.endswith("arm9") else "ov%03d_" % int(os.path.basename(cfg)[2:])
-        who = authors(rel) if skip else {}
         for name, addr in FUNC.findall(open(f"{cfg}/symbols.txt", encoding="utf-8").read()):
             addr = addr.lower()[-8:]
-            if addr not in name.lower() and own_name(name) and who.get(name) not in skip:
+            if addr not in name.lower() and (own_name(name) or plain_name(name)) and name not in keep:
                 out[name] = renamed(name, "_%s%s" % (tag, addr))
     return out
 
 
-def ident(mangled):
-    a, b, c = own_name(mangled)
-    return mangled[b:c]
+def ident(name):
+    span = own_name(name)
+    return name[span[1]:span[2]] if span else name
 
 
 def alternation(words):
@@ -114,11 +118,7 @@ def probe_name(qual, ident, params, const):
     return names[0] if names else None
 
 
-def remangle_targets(original, every, skip=()):
-    owners = {}
-    if skip:
-        for cfg in [f"{REPO}/config/usa/arm9"] + sorted(glob.glob(f"{REPO}/config/usa/arm9/overlays/ov*")):
-            owners.update(authors(os.path.relpath(f"{cfg}/symbols.txt", REPO).replace("\\", "/")))
+def remangle_targets(original, every, keep=()):
     seen = collections.defaultdict(list)
     for rel, text in original.items():
         if rel.endswith((".c", ".cpp")):
@@ -128,7 +128,7 @@ def remangle_targets(original, every, skip=()):
     out = {}
     for name, lists in seen.items():
         parsed = mechclean.demangle(name)
-        if not parsed or not own_name(name) or len(every[ident(name)]) > 1 or owners.get(name) in skip:
+        if not parsed or not own_name(name) or len(every[ident(name)]) > 1 or name in keep:
             continue
         full, real, const = parsed
         qual = full.rsplit("::", 1)[0] if "::" in full else None
@@ -176,14 +176,18 @@ def retype(text, name, info):
     return pattern.sub(fix, text)
 
 
-def remangle(jobs, skip):
-    blobs, original = mechclean.tree_texts()
+def symbol_idents():
     every = collections.defaultdict(set)
     for path in glob.glob(f"{REPO}/config/*/arm9/**/symbols.txt", recursive=True):
         for name, _ in FUNC.findall(open(path, encoding="utf-8").read()):
-            if own_name(name):
-                every[ident(name)].add(name)
-    targets = remangle_targets(original, every, skip)
+            every[ident(name)].add(name)
+    return every
+
+
+def remangle(jobs, keep):
+    blobs, original = mechclean.tree_texts()
+    every = symbol_idents()
+    targets = remangle_targets(original, every, keep)
     print(f"symbols whose callers agree on another signature: {len(targets)}", flush=True)
     while targets:
         mapping = {name: info[0] for name, info in targets.items()}
@@ -219,23 +223,20 @@ def remangle(jobs, skip):
 
 def main():
     args = sys.argv[1:]
-    skip, jobs, dry = set(), 8, "--dry" in args
+    ref, jobs, dry = None, 8, "--dry" in args
     while args:
         a = args.pop(0)
-        if a == "--skip-author" and args:
-            skip.add(args.pop(0))
+        if a == "--keep" and args:
+            ref = args.pop(0)
         elif a == "-j" and args:
             jobs = int(args.pop(0))
         elif a not in ("--dry", "--remangle"):
             sys.exit(USAGE)
+    keep = kept_names(ref)
     if "--remangle" in sys.argv:
-        return remangle(jobs, skip)
-    mapping = targets(skip)
-    every = collections.defaultdict(set)
-    for path in glob.glob(f"{REPO}/config/*/arm9/**/symbols.txt", recursive=True):
-        for name, _ in FUNC.findall(open(path, encoding="utf-8").read()):
-            if own_name(name):
-                every[ident(name)].add(name)
+        return remangle(jobs, keep)
+    mapping = targets(keep)
+    every = symbol_idents()
     shared = {m for m in mapping if len(every[ident(m)]) > 1}
     mapping = {m: n for m, n in mapping.items() if m not in shared}
     print(f"targets {len(mapping) + len(shared)}; one identifier for two symbols: {len(shared)}", flush=True)

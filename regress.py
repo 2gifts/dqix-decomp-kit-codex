@@ -2630,6 +2630,11 @@ def _addrname():
     for skipped in ("_ZN20Ov33BackgroundLoaderD1Ev", "_ZN5Vec3iaSERKS_", "_Z3maxIiET_S0_S0_", "func_02000000"):
         if A.own_name(skipped):
             return "own_name accepted %s, which has no plain own name to extend" % skipped
+    if A.renamed("fix32_Atan2_Rescaled", "_02001234") != "fix32_Atan2_Rescaled_02001234":
+        return "a plain C name did not take the suffix"
+    for name, want in (("fix32_Atan2_Rescaled", True), ("labs", False), ("_dmul", False), ("func_02000000", False)):
+        if A.plain_name(name) != want:
+            return "plain_name(%s) is %s; runtime and C library names keep theirs" % (name, not want)
     if shutil.which("c++filt"):
         info = ("_Z3FooP3Objit", None, "Foo", ["Obj*", "int", "short"], ["Obj*", "int", "unsigned short"])
         decl = A.retype("struct Obj;\nvoid Foo(Obj* o, int a, short b);\nvoid g(Obj* o) { Foo(o, 1, 2); }\n",
