@@ -901,6 +901,9 @@ Each was a byte-exact replacement for an invented construct; write these first.
   `(obj->*table[i])()` (`021dc488`, `021b228c`).
 - A null test the ROM re-reads is an inline predicate on the owner,
   `static inline bool HasInner(const Outer* o) { return o->f0 != NULL; }` (`020bc158`, `020bc1ac`).
+- A local copy of a table read through `int* w = (int*)&copy;` is a struct with one array member indexed
+  directly, `struct Words4 { int v[4]; }; Words4 w = table; w.v[i] = x;`. The pointer alias moves
+  loads and stores around the copy; the array member restores the ROM's schedule (`020733d8`).
 - An offset added to reach an embedded sub-object is a member accessor, `Sub* GetSub() { return &sub; }`
   (`021e62a8`, `0215707c`).
 - A null test on `&node->allocator` is a null test on a member accessor's result:
