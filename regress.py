@@ -1678,6 +1678,11 @@ def _prready_region_only():
         return "prready.py refused a region-only JPN source or a USA-tagged one"
     if P.region_tagged(bare) or P.region_tagged(unguarded):
         return "prready.py accepted a source with no USA tag outside a region guard"
+    old = "_Z26TryApplyElemFields0205d5d0P15StructA0205d5d0iiih"
+    if not P.signature_only(old, "_Z26TryApplyElemFields0205d5d0P15StructA0205d5d0iii"):
+        return "prready.py calls a one-region signature change (a region-split prototype) a half rename"
+    if P.signature_only(old, "_Z26TryApplyElemFieldsXXXXXXXXP15StructA0205d5d0iiih") or P.signature_only("Foo", "Bar"):
+        return "prready.py treats a changed function name as a signature-only change"
     return None
 
 

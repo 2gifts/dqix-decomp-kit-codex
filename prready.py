@@ -31,6 +31,17 @@ USA_TAG = re.compile(r"(?m)^// USA: \S+")
 REGION_ONLY = re.compile(r"(?m)^#if defined\((jpn|eur)\)\s*$")
 
 
+MANGLED_FREE = re.compile(r"^_Z(\d+)")
+
+
+def signature_only(old, new):
+    a, b = MANGLED_FREE.match(old), MANGLED_FREE.match(new or "")
+    if not a or not b or a.group(1) != b.group(1):
+        return False
+    n = int(a.group(1))
+    return old[a.end():a.end() + n] == new[b.end():b.end() + n] and old != new
+
+
 def region_tagged(text):
     if USA_TAG.search(text):
         return True
@@ -162,7 +173,8 @@ def decomp(decomp_tip):
             if other != path:
                 theirs = names(show(REPO, "HEAD", other))
                 for name in sorted(gone & theirs):
-                    if now_named.get(was_at.get(name)) in theirs:
+                    renamed = now_named.get(was_at.get(name))
+                    if renamed in theirs or signature_only(name, renamed):
                         continue
                     problems.append(f"HALF RENAME {name}: gone from {path}, still in {other}; rename it there too")
     return problems
