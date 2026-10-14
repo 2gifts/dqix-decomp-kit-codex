@@ -51,6 +51,14 @@ if __name__ == "__main__":
         sys.exit(f"no Proton wine at {wine}; set DQIX_PROTON to a Proton install's files/ directory")
     if not os.path.isdir(PFX):
         make_prefix()
+    # configure.py writes the -w runner into build.ninja unquoted, and Steam's "Proton 9.0 (Beta)" path
+    # broke /bin/sh on every assembler step. Reach wine through a link without spaces beside the prefix.
+    link = os.path.join(os.path.dirname(PFX), "files")
+    if os.path.realpath(link) != os.path.realpath(PROTON):
+        tmp = f"{link}.{os.getpid()}"
+        os.symlink(PROTON, tmp)
+        os.replace(tmp, link)
+    wine = os.path.join(link, "bin", "wine")
     env = dict(os.environ, DQIX_WINE=wine, WINEPREFIX=PFX, WINEDEBUG="-all", WINEDLLOVERRIDES="mscoree=;mshtml=",
                WINELOADERNOEXEC="1")  # no re-exec into the static preloader: Frida's agent would not survive it
     env.pop("DISPLAY", None)  # mwccarm needs no display; with one, user32 init waits on a desktop window

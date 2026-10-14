@@ -4091,6 +4091,31 @@ def _integ_extract_link_ignored():
     return None
 
 
+@check("proton.py hands configure a wine path without spaces",
+       "configure.py writes the -w runner into build.ninja unquoted; Steam's \"Proton 9.0 (Beta)\" path "
+       "failed every assembler step with `/bin/sh: Syntax error: \"(\" unexpected`, and the wave parked "
+       "main 0209a218 as drift")
+def _proton_wine_path():
+    import subprocess
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        proton, pfx = Path(d, "Proton 9.0 (Beta)/files"), Path(d, "share/pfx")
+        (proton / "bin").mkdir(parents=True)
+        (proton / "bin/wine").write_text("")
+        pfx.mkdir(parents=True)
+        r = subprocess.run([sys.executable, f"{KIT}/frida/proton.py", sys.executable, "-c",
+                            "import os; print(os.environ['DQIX_WINE'])"], capture_output=True, text=True,
+                           env=dict(os.environ, DQIX_PROTON=str(proton), DQIX_PROTON_PREFIX=str(pfx)))
+        wine = r.stdout.strip()
+        if r.returncode or not wine:
+            return "proton.py failed: %s" % r.stderr[-300:]
+        if re.search(r"[\s()]", wine):
+            return "DQIX_WINE is %r" % wine
+        if os.path.realpath(wine) != os.path.realpath(proton / "bin/wine"):
+            return "DQIX_WINE %r does not reach Proton's wine" % wine
+    return None
+
+
 @check("both integrators skip sha1 without an ARM7 BIOS and still require it with one",
        "finish_wave exited 5 at `RED: sha1 mismatch` on every module for a contributor without the "
        "BIOS dump, so countfix, regionsync and the push never ran; CONTRIBUTING.md asks for sha1 only "
