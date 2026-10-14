@@ -2484,8 +2484,9 @@ def _plausible_mangle_arity():
     member = 'extern "C" void _ZN16BackgroundLoader13AddLockGlobalEv(void*);\n'
     if "MANGLE-ARITY-MISMATCH" not in repr(P.findings(bad)):
         return "plausible.py missed a fourth argument to a three-parameter mangled function"
-    if P.findings(good) or P.findings(member):
-        return "plausible.py flagged a declaration that matches its mangling: %r" % (P.findings(good) + P.findings(member))
+    arity = [h for h in P.findings(good) + P.findings(member) if h[1] == "MANGLE-ARITY-MISMATCH"]
+    if arity:
+        return "plausible.py flagged a declaration that matches its mangling: %r" % arity
     return None
 
 
@@ -2579,6 +2580,53 @@ def _plausible_same_arms():
         if [k for _, k, _ in P.findings(wrap % good) if k == "TERNARY-SAME-ARMS"]:
             return "plausible.py flagged %r" % good
     return None
+
+
+@check("plausible.py blocks an extern \"C\" declaration or definition of a mangled C++ name",
+       "Eakeys: 9332 `extern \"C\" void _Z20Clear12Bytes020e46c4Pv(void*);` redeclarations in 2362 landed "
+       "sources call C++ functions under their symbol instead of their name")
+def _plausible_extern_c_mangled():
+    P = load("plausible")
+    for bad in ('extern "C" void* _Z20Clear12Bytes020e46c4Pv(void*);\n',
+                'extern "C" ARM int _Z3Fooi(int x) { return x; }\n',
+                'extern "C" void _ZN16BackgroundLoader13AddLockGlobalEv(void);\n'):
+        if "EXTERN-C-MANGLED" not in [k for _, k, _ in P.blocking(bad)]:
+            return "plausible.py did not block %r" % bad
+    dtor = 'extern "C" ARM Loader* _ZN20Ov33BackgroundLoaderD1Ev(Loader* self)%s\n'
+    if "EXTERN-C-MANGLED" not in [k for _, k, _ in P.blocking(dtor % ";")]:
+        return "plausible.py did not block a destructor declared under its mangled name"
+    for good in ('void* Clear12Bytes020e46c4(void*);\n', 'extern "C" void func_0204500c(void*);\n',
+                 '// extern "C" void _Z3Fooi(int);\n', dtor % " { return self; }"):
+        if [k for _, k, _ in P.findings(good) if k == "EXTERN-C-MANGLED"]:
+            return "plausible.py flagged %r" % good
+    return None
+
+
+@check("mechclean renames an extern \"C\" mangled free function only when the object stays identical",
+       "the 5978 redeclarations whose parameters spell the mangling are a rename; the 410 whose widths "
+       "contradict it change the call and need a worker")
+def _mechclean_extern_c():
+    import shutil
+    M = load("mechclean")
+    text = ('extern "C" void* _Z20Clear12Bytes020e46c4Pv(void*);\nextern "C" void _ZN3Foo3BarEv(void*);\n'
+            'extern "C" ARM void f(void* p) { _Z20Clear12Bytes020e46c4Pv(p); _ZN3Foo3BarEv(p); }\n'
+            'void* table[] = { (void*)&_Z20Clear12Bytes020e46c4Pv };\n')
+    want = ('void* Clear12Bytes020e46c4(void*);\nextern "C" void _ZN3Foo3BarEv(void*);\n'
+            'extern "C" ARM void f(void* p) { Clear12Bytes020e46c4(p); _ZN3Foo3BarEv(p); }\n'
+            'void* table[] = { (void*)&Clear12Bytes020e46c4 };\n')
+    if M.extern_c_mangled(text) != want:
+        return "rewrite gave %r" % M.extern_c_mangled(text)
+    work = tempfile.mkdtemp()
+    try:
+        path = f"{work}/probe.cpp"
+        mixed = ('#include <globaldefs.h>\nextern "C" void _Z3Bari(int);\nextern "C" void _Z3Foot(int);\n'
+                 'extern "C" ARM void f(int x) { _Z3Bari(x); _Z3Foot(x); }\n')
+        got = M.externc_clean(mixed, path)
+        if "void Bar(int);" not in got or 'extern "C" void _Z3Foot(int);' not in got:
+            return "externc_clean kept the wrong renames: %r" % got
+        return None
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 @check("implausible code is held, not landed: prready refuses new findings and the fleet holds a flagged match",

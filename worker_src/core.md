@@ -658,8 +658,6 @@ A byte-typed local sourced from a `ldrb` changes which callee-saved pair mwcc pi
 is register NUMBERS around a byte value, retype it before touching anything else:
 
 - `int id = *ids;` instead of `unsigned char id` flipped an r8/sb callee-saved pair.
-- a parameter typed `int` (not `unsigned char`) -- with the callee declared `extern "C"` under its
-  mangled name so the narrow-width prototype stops applying -- fixed the argument setup.
 - SIGNEDNESS PICKS THE MNEMONIC. A struct field typed `int` rather than `unsigned int` makes
   `f >> 2` emit `asr` not `lsr`, and `f >= 0x38` emit `blt`/`bge` not `blo`/`bhs`. When the only
   wrong mnemonics are shift or compare flavours, retype the FIELD, not the local (`020c0a40`).
@@ -793,8 +791,8 @@ lists diverge -- everything below that rank agrees, so the object just under it 
 size is wrong.
 
 Every local 0xc too high with an `ldm`/`stm` copy from the lowest slot is a struct RETURNED BY
-VALUE: declare the out-pointer callee `extern "C"` under its mangled name returning the `Vec3` and
-write `Vec3 to = Select(entry);`. The result lands in a compiler temp at the bottom of the frame
+VALUE: declare the out-pointer callee returning the `Vec3` (`Vec3 Select(Entry*);` mangles the same,
+the return type is not in the name) and write `Vec3 to = Select(entry);`. The result lands in a compiler temp at the bottom of the frame
 and is copied into the named local (`021b8e8c`).
 
 A `#pragma opt_common_subs off` or `#pragma opt_dead_assignments off` in your file is a SIZE bug
@@ -1230,14 +1228,16 @@ wrong and a byte-perfect function still fails the gate:
   (`02020fc4`, found only after the bytes already matched). The bound name can also carry a
   DIFFERENT overlay number than the module you are working in — `021d8a40` is bound as
   `func_ov023_021d8a40`, not ov026. Read the name out of the config; never construct it.
-- to call a C++ callee with specific argument widths, declare it `extern "C"` under its MANGLED name
-  (`_Z25EnqueueEventTag8_021cc4b8hhi`) with the widths you need — an int param home is then emitted
-  in declaration order with no `and #0xff` truncation at the call (`021cc388`). The reverse: a
-  parameter the mangling spells `j` is `unsigned int`; declaring it `unsigned char` reorders the
-  argument setup. Keep `unsigned int` and narrow at the call, `(unsigned char)(idx + 1) & 0xff`
-  (`021539a0`; the cast or the mask alone stays SCHED 7).
-- **but pool-word FUNCTION ADDRESSES resolve to mangled symbols** (`_Z22TransferMainObjPaletteiij`)
-  — declare those as plain C++ declarations, NOT `extern "C"` (`0222d1b8`).
+- a `_Z` callee is a plain C++ declaration with exactly the parameters its mangling spells, called by
+  its C++ name: `_Z25EnqueueEventTag8_021cc4b8hhi` is `void EnqueueEventTag8_021cc4b8(unsigned char,
+  unsigned char, int);`, and a `_ZN<len><Class>...` callee is a member, called `obj->Method(...)` on a
+  declared `Class`. NEVER `extern "C"` a `_Z` name, not even to change an argument width:
+  plausible.py blocks EXTERN-C-MANGLED. When the real prototype adds an `and #0xff` the ROM lacks,
+  the value passed was already that narrow type in the caller: retype the local or field feeding it.
+  A parameter the mangling spells `j` is `unsigned int`; narrow at the call,
+  `(unsigned char)(idx + 1) & 0xff` (`021539a0`; the cast or the mask alone stays SCHED 7).
+- pool-word FUNCTION ADDRESSES resolve to mangled symbols too (`_Z22TransferMainObjPaletteiij`):
+  `&TransferMainObjPalette` on the plain C++ declaration (`0222d1b8`).
 - Mixed in one file is normal and is what let `0202b0f4` match FIRST TRY: mangled `_Z` callees as
   plain C++ declarations, `func_` callees as `extern "C"`, in the same source.
 
@@ -1311,7 +1311,8 @@ declared after the word pointer (`020c04e8`).
 ## A DESTRUCTOR WRITTEN AS A C++ DESTRUCTOR EMITS THREE OF THEM
 `Class::~Class()` makes mwcc emit the D0 (deleting), D1 (complete) and D2 (base) variants, and under
 `-nodead` all three are kept — the ROM has one, so the slot OVERGENs and the whole module shifts.
-Write the one the ROM has, under its mangled name, and none of the others exist:
+Write the one the ROM has, under its mangled name, and none of the others exist (the one `extern "C"`
+`_Z` form plausible.py allows is this definition of a constructor or destructor variant):
 
     extern "C" ARM Ov33BackgroundLoader* _ZN20Ov33BackgroundLoaderD1Ev(Ov33BackgroundLoader* self);
 

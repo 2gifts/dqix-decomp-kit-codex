@@ -780,6 +780,23 @@ def _mangle_arity(src, out):
             _hit(out, line, "MANGLE-ARITY-MISMATCH", "%s mangled %d declared %d" % (name, mangled, declared))
 
 
+EXTERN_C_MANGLED = re.compile(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_Z\w+)\s*\(([^;{}]*)\)\s*([;{])')
+def structor_variant(name):
+    i = 3
+    while name.startswith("_ZN") and i < len(name) and name[i].isdigit():
+        j = i
+        while j < len(name) and name[j].isdigit():
+            j += 1
+        i = j + int(name[i:j])
+    return name.startswith("_ZN") and re.match(r"[CD][0-3]E", name[i:]) is not None
+
+
+def _extern_c_mangled(src, out):
+    for m in EXTERN_C_MANGLED.finditer(src.code):
+        if not (m.group(3) == "{" and structor_variant(m.group(1))):
+            _hit(out, src.line(m.start(1)), "EXTERN-C-MANGLED", m.group(1))
+
+
 ACCESSOR = re.compile(r"inline\s+[^;{}()]*?\b([A-Za-z_]\w*)\s*\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*\s*"
                       r"(?:const\s+)?([A-Za-z_]\w*)\s*\)\s*(?:const\s*)?\{\s*return\s+\2\s*->\s*([A-Za-z_]\w*)\s*;\s*\}")
 ALIAS = re.compile(r"(?m)^\s*(?:(?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*\s*\*\s*)?([A-Za-z_]\w*)\s*=\s*"
@@ -839,8 +856,8 @@ def _hand_asm(src, out):
         _hit(out, src.line(m.start()), "HAND-ASM", _enclosing(src, m.start()).split("::")[-1])
 
 
-FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity, _mixed_access,
-              _transliterated, _hand_asm]
+FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity,
+              _extern_c_mangled, _mixed_access, _transliterated, _hand_asm]
 
 
 def _body_start(lines):

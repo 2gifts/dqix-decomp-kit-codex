@@ -5,6 +5,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from elftools.elf.elffile import ELFFile
+from elftools.elf.relocation import RelocationSection
+
+import buildcfg
 import cleancheck
 import kitpaths
 import plausible
@@ -15,15 +19,24 @@ LOG = f"{SP}/wlog/clean.log"
 CLAIMS = f"{SP}/clean/claims"
 MANIFEST = f"{SP}/clean/manifest.tsv"
 WORK = f"{SP}/handwork/mechclean"
-USAGE = """python mechclean.py [-j N]
+USAGE = """python mechclean.py [-j N] [--tree]
 
 Rewrites, without a worker, the plausible.py kinds that have one natural form, for every row of
 $SP/wlog/clean_queue.tsv no worker has finished or claimed: NOOP-ADDR-CAST,
-TERNARY-SELF, SELF-ASSIGN, INLINE-LOCAL-RETURN. An inline whose local the ROM needs gets the
-compiled-out assert instead (`{ SDK_NULL_ASSERT(p); return e; }`: any statement before the return
-makes mwcc expand the body where the call statement starts). A rewrite is kept only when the function
-still gates MATCH and cleancheck.py accepts it; it goes to $SP/clean/manifest.tsv, a staging row's
-to $SP/staging/<module>/, and clean.log records CLEAN."""
+TERNARY-SELF, SELF-ASSIGN, INLINE-LOCAL-RETURN, EXTERN-C-MANGLED. An inline whose local the ROM needs
+gets the compiled-out assert instead (`{ SDK_NULL_ASSERT(p); return e; }`: any statement before the
+return makes mwcc expand the body where the call statement starts). A rewrite is kept only when the
+function still gates MATCH and cleancheck.py accepts it; it goes to $SP/clean/manifest.tsv, a staging
+row's to $SP/staging/<module>/, and clean.log records CLEAN.
+
+EXTERN-C-MANGLED drops `extern "C"` from a free function's `_Z<len><name>` declaration or definition and
+calls it by <name>, one function at a time; a rename is kept only when every region the source names
+compiles to the same object (sections, relocations, symbols), so a signature the mangling contradicts
+stays for a worker. --tree runs that rewrite over every landed source on decomp-matching instead of
+the queue."""
+EXTERN_C_FREE = re.compile(r'(?m)^([ \t]*)extern\s+"C"\s+([^;{}()=]*?)\b(_Z(\d+)(\w+))(?=\s*\()')
+REGION_DEFINES = {"usa": ["-d", "usa"], "jpn": ["-d", "jpn"], "eur": ["-d", "usa", "-d", "eur"]}
+SKIPPED_SECTIONS = re.compile(r"debug|^\.line|^\.comment|^\.mwcats|^\.rel\.|^\.rela\.|^\.symtab$|^\.strtab$|^\.shstrtab$")
 
 LVAL = r"[A-Za-z_]\w*(?:(?:->|\.)[A-Za-z_]\w*|\[[^\]\[]*\])*"
 
@@ -50,6 +63,7 @@ def self_assign(line):
 
 LINE_FIX = {"NOOP-ADDR-CAST": noop_addr_cast,
             "TERNARY-SELF": ternary_self, "SELF-ASSIGN": self_assign}
+FIXABLE = set(LINE_FIX) | {"INLINE-LOCAL-RETURN", "EXTERN-C-MANGLED"}
 
 
 LOCAL_RETURN = re.compile(r"(?:\(([^()]*)\)(\s*const)?\s*)?\{\s*(?!static\b)(?:const\s+)?[A-Za-z_][\w\s\*]*?\b"
@@ -98,6 +112,78 @@ def rewrite(text, kinds, asserted=False):
     return text
 
 
+def free_mangled(text):
+    out = {}
+    for m in EXTERN_C_FREE.finditer(text):
+        n, rest = int(m.group(4)), m.group(5)
+        if len(rest) > n and re.match(r"[A-Za-z_]\w*$", rest[:n]) and rest[n] != "I":
+            out[m.group(3)] = rest[:n]
+    return out
+
+
+def extern_c_mangled(text, only=None):
+    names = {k: v for k, v in free_mangled(text).items() if only is None or k in only}
+    if not names:
+        return text
+    new = EXTERN_C_FREE.sub(lambda m: m.group(1) + m.group(2) + names[m.group(3)] if m.group(3) in names
+                            else m.group(0), text)
+    for mangled, plain in names.items():
+        new = re.sub(r"\b%s\b" % re.escape(mangled), plain, new)
+    return new
+
+
+def region_flags(region):
+    flags = list(buildcfg.FLAGS)
+    while len(flags) >= 2 and flags[-2] == "-d" and flags[-1] in REGION_DEFINES:
+        del flags[-2:]
+    return flags + REGION_DEFINES[region]
+
+
+def signature(text, path, region):
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+    obj = f"{path}.{region}.o"
+    r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + region_flags(region) + ["-c", path, "-o", obj],
+                       cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode:
+        return None
+    with open(obj, "rb") as fh:
+        elf = ELFFile(fh)
+        names = [s.name for s in elf.iter_sections()]
+        kept = lambda i: isinstance(i, int) and not SKIPPED_SECTIONS.search(names[i])
+        syms = list(elf.get_section_by_name(".symtab").iter_symbols())
+        sig = [tuple(sorted((s.name, s["st_value"], s["st_size"], s["st_info"]["type"], s["st_info"]["bind"],
+                             names[s["st_shndx"]] if isinstance(s["st_shndx"], int) else s["st_shndx"])
+                            for s in syms if not isinstance(s["st_shndx"], int) or kept(s["st_shndx"])))]
+        for sec in elf.iter_sections():
+            if isinstance(sec, RelocationSection):
+                if kept(sec["sh_info"]):
+                    sig.append((sec.name, tuple((r["r_offset"], r["r_info_type"], syms[r["r_info_sym"]].name)
+                                                for r in sec.iter_relocations())))
+            elif not SKIPPED_SECTIONS.search(sec.name):
+                sig.append((sec.name, sec.data()))
+    os.remove(obj)
+    return sig
+
+
+def externc_clean(text, path):
+    names = list(free_mangled(text))
+    if not names:
+        return text
+    regions = ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, text)]
+    base = {r: signature(text, path, r) for r in regions}
+    if None in base.values():
+        return text
+    same = lambda t: all(signature(t, path, r) == base[r] for r in regions)
+    if same(extern_c_mangled(text)):
+        return extern_c_mangled(text)
+    kept = set()
+    for name in names:
+        if same(extern_c_mangled(text, kept | {name})):
+            kept.add(name)
+    return extern_c_mangled(text, kept)
+
+
 def gate(mod, addr, path):
     r = subprocess.run([sys.executable, f"{KIT}/wgate.py", mod, addr, path], capture_output=True, text=True,
                        encoding="utf-8", errors="replace", env=dict(os.environ, WGATE_ALLOW_COMMITTED="1"))
@@ -140,22 +226,28 @@ def job(row, force=False):
                                   capture_output=True, text=True).stdout.strip()
             text = subprocess.run(["git", "-C", REPO, "cat-file", "blob", base], capture_output=True, text=True,
                                   encoding="utf-8", errors="replace").stdout
-        found = sorted({k for _, k, _ in plausible.findings(text)} & (set(LINE_FIX) | {"INLINE-LOCAL-RETURN"}))
+        found = sorted({k for _, k, _ in plausible.findings(text)} & FIXABLE)
         if not found:
             return None
-        path = f"{WORK}/{mod}/{os.path.basename(rel)}"
+        path = f"{WORK}/{mod}/{rel.replace('/', '_') if mod == 'tree' else os.path.basename(rel)}"
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tried = False
-        for kinds, asserted in candidates(found):
-            new = rewrite(text, kinds, asserted)
-            if new == text:
+        renamed = externc_clean(text, path) if "EXTERN-C-MANGLED" in found else text
+        new, kinds = renamed, ["EXTERN-C-MANGLED"] if renamed != text else []
+        tried = bool(kinds)
+        for subset, asserted in candidates([k for k in found if k != "EXTERN-C-MANGLED"]):
+            trial = rewrite(renamed, subset, asserted)
+            if trial == renamed:
                 continue
             tried = True
             with open(path, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(new)
-            if accepted(mod, addr, path, text, new, staged):
+                fh.write(trial)
+            if accepted(mod, addr, path, renamed, trial, staged):
+                new, kinds = trial, kinds + subset
                 break
-        else:
+        if new == text or (staged and plausible.blocking(new)):
+            if new != text:
+                with open(rel, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(new)
             return f"{addr} kept for a worker ({','.join(found)})" if tried else None
         if staged:
             dest = f"{SP}/staging/{'main' if mod == 'main' else 'ov' + mod}/{os.path.basename(rel)}"
@@ -169,20 +261,36 @@ def job(row, force=False):
         else:
             with open(MANIFEST, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(f"{rel}\t{base}\tmechanical: {','.join(kinds)}\n")
-        with open(LOG, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(f"{time.strftime('%H:%M')} CLEAN {addr} $0 mechanical {','.join(kinds)}\n")
+        if mod != "tree":
+            with open(LOG, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"{time.strftime('%H:%M')} CLEAN {addr} $0 mechanical {','.join(kinds)}\n")
         return f"{addr} CLEAN ({','.join(kinds)})"
     finally:
         os.rmdir(f"{CLAIMS}/{addr}")
 
 
+def tree_rows():
+    def git(*args):
+        return subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True, encoding="utf-8",
+                              errors="replace").stdout
+    queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
+    for rel in git("grep", "-l", "-E", r'extern "C" .*_Z[0-9]', "origin/decomp-matching", "--", "src").split():
+        rel = rel.split(":", 1)[1]
+        if rel.endswith(".cpp") and rel not in queued:
+            yield ["tree", rel.replace("/", "_"), rel, "", "EXTERN-C-MANGLED"]
+
+
 def main():
-    if len(sys.argv) not in (1, 3) or (len(sys.argv) == 3 and sys.argv[1] != "-j"):
+    args = [a for a in sys.argv[1:] if a != "--tree"]
+    if len(args) not in (0, 2) or (args and args[0] != "-j"):
         sys.exit(USAGE)
     os.makedirs(CLAIMS, exist_ok=True)
-    rows = [ln.rstrip("\n").split("\t") for ln in open(QUEUE, encoding="utf-8") if ln.count("\t") >= 2]
-    with ThreadPoolExecutor(int(sys.argv[2]) if len(sys.argv) == 3 else 3) as pool:
-        for result in pool.map(job, rows):
+    if "--tree" in sys.argv:
+        rows, run = list(tree_rows()), lambda row: job(row, True)
+    else:
+        rows, run = [ln.rstrip("\n").split("\t") for ln in open(QUEUE, encoding="utf-8") if ln.count("\t") >= 2], job
+    with ThreadPoolExecutor(int(args[1]) if args else 3) as pool:
+        for result in pool.map(run, rows):
             if result:
                 print(result, flush=True)
     return 0
