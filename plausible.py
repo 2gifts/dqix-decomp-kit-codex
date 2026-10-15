@@ -760,8 +760,24 @@ def _symbol_alias(src, out):
                 _hit(out, line, "SYMBOL-ALIAS", name)
 
 
+BYTE_POINTER = {"char*", "unsignedchar*", "signedchar*", "u8*", "s8*"}
+
+
+def _param_retyped(src, fn, out):
+    for t, n in fn.f["params"]:
+        if not n or re.sub(r"\s+|\bconst\b|\bstruct\b", "", t) not in BYTE_POINTER:
+            continue
+        cast = re.compile(r"(?:\(\s*(?:const\s+)?(?:struct\s+|class\s+)?([A-Za-z_]\w*)\s*\*\s*\)|"
+                          r"static_cast\s*<\s*(?:const\s+)?([A-Za-z_]\w*)\s*\*\s*>)\s*\(?\s*%s\b(?!\s*(?:[-+\[]|->))"
+                          % re.escape(n))
+        for m in cast.finditer(fn.body):
+            if (m.group(1) or m.group(2)) in game_types():
+                _hit(out, src.line(fn.body_off + m.start()), "PARAM-RETYPED",
+                     "%s %s cast to %s*" % (t.strip(), n, m.group(1) or m.group(2)))
+
+
 FN_RULES = [_split_pointer_add, _pointer_round_trip, _int_pun_null_test, _noop_addr_cast,
-            _member_addr_null_test, _self_store]
+            _member_addr_null_test, _self_store, _param_retyped]
 MANGLED_DECL = re.compile(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()]*?\b(_Z\w+)\s*\(([^()]*)\)\s*;')
 
 
@@ -825,6 +841,16 @@ def _type_redefined(src, out):
             _hit(out, src.line(m.start(1)), "TYPE-REDEFINED", m.group(1))
 
 
+REINTERPRET = re.compile(r"\breinterpret_cast\s*<\s*([^>]*?)\s*>")
+
+
+def _reinterpret_cast(src, out):
+    for m in REINTERPRET.finditer(src.code):
+        _hit(out, src.line(m.start()), "REINTERPRET-CAST", m.group(1))
+
+
+
+
 ACCESSOR = re.compile(r"inline\s+[^;{}()]*?\b([A-Za-z_]\w*)\s*\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*\s*"
                       r"(?:const\s+)?([A-Za-z_]\w*)\s*\)\s*(?:const\s*)?\{\s*return\s+\2\s*->\s*([A-Za-z_]\w*)\s*;\s*\}")
 ALIAS = re.compile(r"(?m)^\s*(?:(?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*\s*\*\s*)?([A-Za-z_]\w*)\s*=\s*"
@@ -885,7 +911,7 @@ def _hand_asm(src, out):
 
 
 FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity,
-              _extern_c_mangled, _type_redefined, _mixed_access, _transliterated, _hand_asm]
+              _extern_c_mangled, _type_redefined, _reinterpret_cast, _mixed_access, _transliterated, _hand_asm]
 
 
 def _body_start(lines):

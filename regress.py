@@ -30,7 +30,7 @@ sys.path.insert(0, KIT)
 FAILED = []
 PASSED = [0]
 CHECKS = []
-SHARDS = 8
+TIMES = f"{SP}/wlog/regress_times.json"
 
 
 def check(name, fault):
@@ -41,6 +41,7 @@ def check(name, fault):
 
 
 def run_check(name, fault, fn):
+    start = time.perf_counter()
     try:
         bad = fn()
     except Exception as e:                       # a test that explodes is a failure
@@ -53,19 +54,34 @@ def run_check(name, fault, fn):
         PASSED[0] += 1
         print("ok    %s" % name)
     sys.stdout.flush()
+    return time.perf_counter() - start
 
 
-def run_shard(k, n):
-    for name, fault, fn in CHECKS[k::n]:
-        run_check(name, fault, fn)
-    print("RESULT " + json.dumps({"passed": PASSED[0], "failed": FAILED}))
+def run_shard(indices):
+    times = {CHECKS[i][0]: run_check(*CHECKS[i]) for i in indices}
+    print("RESULT " + json.dumps({"passed": PASSED[0], "failed": FAILED, "times": times}))
 
 
-def run_checks(shards=SHARDS):
+def plan(shards):
+    try:
+        with open(TIMES, encoding="utf-8") as fh:
+            known = json.load(fh)
+    except (OSError, ValueError):
+        known = {}
+    loads = [[0.0, []] for _ in range(shards)]
+    for i in sorted(range(len(CHECKS)), key=lambda i: -known.get(CHECKS[i][0], 1.0)):
+        slot = min(loads, key=lambda s: s[0])
+        slot[0] += known.get(CHECKS[i][0], 1.0)
+        slot[1].append(i)
+    return [sorted(s[1]) for s in loads if s[1]], known
+
+
+def run_checks(shards=None):
     import subprocess
-    procs = [subprocess.Popen([sys.executable, os.path.abspath(__file__), "--shard", "%d/%d" % (k, shards)],
+    groups, known = plan(shards or max(4, min(16, (os.cpu_count() or 8) - 2)))
+    procs = [subprocess.Popen([sys.executable, os.path.abspath(__file__), "--shard", ",".join(map(str, g))],
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
-                              errors="replace") for k in range(shards)]
+                              errors="replace") for g in groups]
     for k, p in enumerate(procs):
         out = p.communicate()[0]
         result = None
@@ -75,11 +91,17 @@ def run_checks(shards=SHARDS):
             else:
                 print(line)
         if result is None:
-            FAILED.append(("shard %d/%d" % (k, shards), "a regress shard must report its result",
+            FAILED.append(("shard %d/%d" % (k, len(procs)), "a regress shard must report its result",
                            "exit %s without a RESULT line: %s" % (p.returncode, out.strip()[-300:])))
             continue
         PASSED[0] += result["passed"]
         FAILED.extend(tuple(f) for f in result["failed"])
+        known.update(result.get("times", {}))
+    try:
+        with open(TIMES, "w", encoding="utf-8") as fh:
+            json.dump(known, fh)
+    except OSError:
+        pass
     return FAILED
 
 
@@ -3178,6 +3200,26 @@ def _plausible_type_redefined():
     return None
 
 
+@check("plausible.py blocks reinterpret_cast and a byte-pointer parameter cast to the game class it really is",
+       "a source took `char* self` and wrote `reinterpret_cast<MessageSystem*>(self)` under jpn instead of "
+       "typing the parameter MessageSystem* and carrying that type to its callers")
+def _plausible_casts():
+    P = load("plausible")
+    P.GAME_TYPES = {"MessageSystem"}
+    hack = 'extern "C" void f(char* self, int state) {\n    MessageSystem* m = %s;\n}\n'
+    for bad, kind in ((hack % "reinterpret_cast<MessageSystem*>(self)", "REINTERPRET-CAST"),
+                      (hack % "(MessageSystem*)self", "PARAM-RETYPED"),
+                      ("int g(void* p) { return reinterpret_cast<int>(p); }\n", "REINTERPRET-CAST")):
+        if kind not in [k for _, k, _ in P.blocking(bad)]:
+            return "plausible.py did not block %s in %r" % (kind, bad)
+    for good in ('extern "C" void f(MessageSystem* self, int state) {\n    MessageSystem* m = self;\n}\n',
+                 'void f(char* buf) {\n    char* p = (char*)(buf + 4);\n}\n',
+                 'void f(void* p) {\n    MessageSystem* m = (MessageSystem*)p;\n}\n'):
+        if [k for _, k, _ in P.findings(good) if k in ("REINTERPRET-CAST", "PARAM-RETYPED")]:
+            return "plausible.py flagged %r" % good
+    return None
+
+
 @check("addrname appends the USA address to a mangled function's own name and maps it through the object",
        "Eakeys maps our matches onto his branch by address: 1593 landed names like `_Z10SetWord0x0Pii` "
        "carried none")
@@ -3209,22 +3251,30 @@ def _addrname():
         if "void Foo(Obj*, int, unsigned short);" not in view or "{ Foo(o, 1, 2); }" not in view:
             return "retype left the extern \"C\" view: %r" % view
         import collections
-        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z7Get_0x1Pvi"
-        try:
-            got = A.remangle_targets(
-                {"src/a.cpp": 'struct Ctx;\nextern "C" int _Z7Get_0x1v(Ctx* c, int i);\n'
+        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z7Get_0x1P3Ctxi"
+        views = {"src/a.cpp": 'struct Ctx;\nextern "C" int _Z7Get_0x1v(Ctx* c, int i);\n'
                               "int f(Ctx* c) { return _Z7Get_0x1v(c, 1); }\n",
-                 "src/b.cpp": 'extern "C" int _Z7Get_0x1v(unsigned char* p, int i);\n'
-                              "int g(unsigned char* p) { return _Z7Get_0x1v(p, 2); }\n"},
-                collections.defaultdict(set, {"Get_0x1": {"_Z7Get_0x1v"}}))
+                 "src/b.cpp": 'struct Ctx;\nextern "C" int _Z7Get_0x1v(Ctx* p, int i);\n'
+                              "int g(Ctx* p) { return _Z7Get_0x1v(p, 2); }\n"}
+        try:
+            got = A.remangle_targets(views, collections.defaultdict(set, {"Get_0x1": {"_Z7Get_0x1v"}}))
+            split = A.remangle_targets(dict(views, **{"src/b.cpp": views["src/b.cpp"].replace("Ctx* p", "char* p")}),
+                                       collections.defaultdict(set, {"Get_0x1": {"_Z7Get_0x1v"}}))
+            generic = A.remangle_targets({rel: t.replace("Ctx* ", "void* ") for rel, t in views.items()},
+                                         collections.defaultdict(set, {"Get_0x1": {"_Z7Get_0x1v"}}))
         finally:
             A.probe_name = probe
-        if got.get("_Z7Get_0x1v", (None,) * 5)[4] != ["void*", "int"]:
-            return "callers passing two arguments to a no-parameter name were not remangled to (void*, int): %r" % got
+        if got.get("_Z7Get_0x1v", (None,) * 5)[4] != ["Ctx*", "int"]:
+            return "callers passing two arguments to a no-parameter name were not remangled to (Ctx*, int): %r" % got
+        if split or generic:
+            return "callers disagreeing on the added pointer's class, or passing void*, still renamed it: %r" % (
+                split or generic)
         info = got["_Z7Get_0x1v"]
         body = A.retype("int Get_0x1(void) {\n    return 0;\n}\n", "_Z7Get_0x1v", info)
-        if "int Get_0x1(void*, int) {" not in body:
+        if "int Get_0x1(Ctx*, int) {" not in body:
             return "the definition did not take the callers' parameters: %r" % body
+        if "struct Ctx;\n" not in A.declare('#include "a.h"\n' + body, "int Get_0x1(void) {}\n", info[4]):
+            return "a definition retyped to a class its file never names got no forward declaration"
         probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z3BarP3Obj"
         try:
             got = A.remangle_targets({"src/a.cpp": 'struct Obj;\nextern "C" void _Z3Bari(Obj* o);\n'
@@ -3237,6 +3287,30 @@ def _addrname():
         cast = A.uncast("void Bar(Obj*);\nvoid f(Obj* o) { Bar((int)o); }\n", got["_Z3Bari"])
         if "{ Bar(o); }" not in cast:
             return "the (int) an earlier rewrite added to fit the old name was kept: %r" % cast
+        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z3BazP10GameObjecti"
+        try:
+            got = A.cast_targets({"src/b.cpp": "struct GameObject;\nint Baz(int, int);\n"
+                                               "int g(GameObject* self, short s) { return Baz((int)self, (int)s); }\n"
+                                               "int h(char* raw) { return Baz((int)raw, 0); }\n"},
+                                 collections.defaultdict(set, {"Baz": {"_Z3Bazii"}}))
+            refined = A.refine_targets({"src/c.cpp": "struct GameObject;\nint Baz(void*, int);\n"
+                                                     "int k(GameObject* g) { return Baz(g, 1); }\n"},
+                                       collections.defaultdict(set, {"Baz": {"_Z3BazPvi"}}), {"_Z3BazPvi"})
+        finally:
+            A.probe_name = probe
+        if got:
+            return "calls casting a GameObject* and a char* to the same parameter still proposed a type: %r" % got
+        if refined.get("_Z3BazPvi", (None,) * 5)[4] != ["GameObject*", "int"]:
+            return "a void* parameter every call passes a GameObject* to was not retyped: %r" % refined
+        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z3BazP10GameObjecti"
+        try:
+            got = A.cast_targets({"src/b.cpp": "struct GameObject;\nint Baz(int, int);\n"
+                                               "int g(GameObject* self, short s) { return Baz((int)self, (int)s); }\n"},
+                                 collections.defaultdict(set, {"Baz": {"_Z3Bazii"}}))
+        finally:
+            A.probe_name = probe
+        if got.get("_Z3Bazii", (None,) * 5)[4] != ["GameObject*", "int"]:
+            return "an (int) cast of a GameObject* did not type the parameter GameObject*: %r" % got
     sig = [(("_Z3Foov", 0, 4, "STT_FUNC", "STB_GLOBAL", ".text"), ("_Z3Barv", 0, 0, "STT_NOTYPE", "STB_GLOBAL",
                                                                   "SHN_UNDEF")),
            (".text", b"\x00" * 4), (".rela.text", ((0, 1, "_Z3Barv"),))]
@@ -5367,8 +5441,7 @@ def _repairsweep_sweeps_once():
 
 if __name__ == "__main__":
     if "--shard" in sys.argv:
-        k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
-        run_shard(k, n)
+        run_shard([int(i) for i in sys.argv[sys.argv.index("--shard") + 1].split(",") if i])
         sys.exit(0)
     run_checks()
     slow = "--slow" in sys.argv

@@ -9,11 +9,12 @@ import sys
 import gitread
 import kitpaths
 import mechclean
+import plausible
 
 REPO, SP = kitpaths.REPO, kitpaths.SP
 WORK = f"{SP}/handwork/addrname"
 USAGE = """python addrname.py [--keep REF] [-j N] [--dry]
-       python addrname.py --remangle [--history REV]... [--keep REF] [-j N]
+       python addrname.py --remangle [--history REV]... [--casts] [--refine FILE] [--keep REF] [-j N]
        python addrname.py --shared [--keep REF]
 
 Renames every function symbol in config/usa whose name lacks its USA address, so the address stays
@@ -27,11 +28,15 @@ nothing.
 
 --remangle renames a symbol whose `extern "C"` mangled-name callers agree on a parameter count or scalar
 widths its mangling contradicts (the name was guessed wrong; the mangling's pointer types are kept, an
-added pointer parameter takes the callers' type when they agree, else void*) to the name that signature
-mangles to: every region's symbols.txt, its definition and declarations retyped,
-its callers declaring the plain C++ function. A call never gains a cast; a cast an earlier rewrite added to fit
-the old name (`(int)ptr`, `(unsigned char)v`) is removed. --history REV also takes the views REV's parent had,
-for a symbol whose calls still carry a cast REV added to fit the old name. It is kept on the same terms, each symbol verified alone when a unit differs.
+added pointer parameter takes the callers' type when they agree on a real class, never void*) to the name that
+signature mangles to: every region's symbols.txt, its definition and declarations retyped, its callers
+declaring the plain C++ function, a file that never names the new class given `struct <class>;`. A call never
+gains a cast; a cast an earlier rewrite added to fit the old name (`(int)ptr`, `(unsigned char)v`) is removed.
+--history REV also takes the views REV's parent had, for a symbol whose calls still carry a cast REV added to
+fit the old name. --casts types an integer parameter as the class every call casts to it (`Foo((int)self)`
+with `GameObject* self` gives `GameObject*`), dropping the casts. --refine FILE retypes each listed symbol's
+void* parameters as the one class every call passes. It is kept on the same terms, each symbol verified alone
+when a unit differs.
 
 --shared renames the names whose identifier another symbol shares: the class's own declaration and
 qualified definitions directly, each unqualified call one at a time, kept when the unit's object moves to
@@ -130,6 +135,10 @@ def pointer(t):
     return any(c in mechclean.norm_type(t) for c in "*&")
 
 
+def placeholder(t):
+    return mechclean.norm_type(t) in ("void*", "voidconst*")
+
+
 def remangle_targets(original, every, keep=()):
     seen = collections.defaultdict(list)
     for rel, text in original.items():
@@ -161,8 +170,11 @@ def remangle_targets(original, every, keep=()):
         key = votes.most_common(1)[0][0]
         if key == tuple(mechclean.norm_type(r) for r in real):
             continue
-        spelled = [col[0] if k != "*" or len({mechclean.norm_type(t) for t in col}) == 1 else "void*"
-                   for k, col in zip(key, zip(*spelling[key]))]
+        columns = list(zip(*spelling[key]))
+        if any(k == "*" and (len({mechclean.norm_type(t) for t in col}) > 1 or placeholder(col[0]))
+               for k, col in zip(key, columns)):
+            continue
+        spelled = [col[0] for col in columns]
         new = probe_name(qual, ident(name), spelled, const)
         if new and new != name:
             out[name] = (new, qual, ident(name), real, spelled)
@@ -214,6 +226,116 @@ def uncast(text, info):
     return text
 
 
+INTEGER = {"int", "unsignedint", "long", "unsignedlong"}
+CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+
+
+def call_args(text, at):
+    depth, i, cur, args = 1, at, at, []
+    while depth and i < len(text):
+        if text[i] in "([{":
+            depth += 1
+        elif text[i] in ")]}":
+            depth -= 1
+        elif text[i] == "," and depth == 1:
+            args.append(text[cur:i].strip())
+            cur = i + 1
+        i += 1
+    args.append(text[cur:i - 1].strip())
+    return [] if args == [""] else args
+
+
+def class_pointer(fn, expr):
+    expr = expr.strip()
+    while mechclean.wrapped(expr):
+        expr = expr[1:-1].strip()
+    m = re.fullmatch(r"(&\s*)?([A-Za-z_]\w*)", expr)
+    t = fn.types.get(m.group(2)) if m and fn else None
+    if not t or "[" in t:
+        return None
+    t = re.sub(r"\b(?:const|volatile|struct|class)\b", "", t).replace(" ", "")
+    base, stars = t.rstrip("*"), t.count("*") + (1 if m.group(1) else 0)
+    if stars != 1 or not re.fullmatch(r"[A-Za-z_]\w*(?:::\w+)*", base) or base in mechclean.BUILTIN_WORDS \
+            or base in plausible.SCALAR_TYPEDEFS:
+        return None
+    return base + "*"
+
+
+def typed_calls(original, names, pick):
+    votes = collections.defaultdict(lambda: collections.defaultdict(set))
+    for rel, text in original.items():
+        if not rel.endswith((".c", ".cpp")) or not any(n in text for n in names):
+            continue
+        src, fns = plausible.Src(text), {}
+        for m in CALL.finditer(src.code):
+            name = names.get(m.group(1))
+            if not name:
+                continue
+            f = next((f for f in src.funcs if f["open"] < m.start() < f["close"]), None)
+            if f is None:
+                continue
+            if f["open"] not in fns:
+                try:
+                    fns[f["open"]] = plausible.Fn(src, f)
+                except Exception:
+                    fns[f["open"]] = None
+            fn = fns[f["open"]]
+            for i, arg in enumerate(call_args(text, m.end())):
+                operand = pick(name, i, arg)
+                if operand is not None:
+                    votes[name][i].add(class_pointer(fn, operand))
+    return votes
+
+
+def retyped(name, real, votes, wanted):
+    spelled = list(real)
+    for i, types in votes.items():
+        if i < len(real) and wanted(real[i]) and len(types) == 1 and None not in types:
+            spelled[i] = next(iter(types))
+    if spelled == real:
+        return None
+    new = probe_name(None, ident(name), spelled, mechclean.demangle(name)[2])
+    return (new, None, ident(name), real, spelled) if new and new != name else None
+
+
+def free_functions(every, keep):
+    return {base: next(iter(names)) for base, names in every.items()
+            if len(names) == 1 and next(iter(names)).startswith("_Z") and not next(iter(names)).startswith("_ZN")
+            and own_name(next(iter(names))) and next(iter(names)) not in keep}
+
+
+def cast_targets(original, every, keep=()):
+    def pick(name, i, arg):
+        c = CAST.fullmatch(arg)
+        if c and mechclean.norm_type(c.group(1)) in INTEGER and \
+                (mechclean.plain_expr(c.group(2)) or mechclean.wrapped(c.group(2))):
+            return c.group(2)
+        return None
+    votes = typed_calls(original, free_functions(every, keep), pick)
+    mechclean.demangle_all(votes)
+    out = {}
+    for name, at in votes.items():
+        if mechclean.demangle(name):
+            info = retyped(name, mechclean.demangle(name)[1], at,
+                           lambda r: mechclean.norm_type(r) in INTEGER)
+            if info:
+                out[name] = info
+    return out
+
+
+def refine_targets(original, every, names):
+    free = {b: n for b, n in free_functions(every, ()).items() if n in names}
+    votes = typed_calls(original, free, lambda name, i, arg: arg)
+    out = {}
+    for name, at in votes.items():
+        parsed = mechclean.demangle(name)
+        if parsed:
+            info = retyped(name, parsed[1], at, placeholder)
+            if info:
+                out[name] = info
+    return out
+
+
 def history(revs):
     current = {}
     for path in glob.glob(f"{REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
@@ -246,6 +368,17 @@ def symbol_idents():
     return every
 
 
+def declare(text, before, params):
+    words = sorted({w for t in params for w in re.findall(r"[A-Za-z_]\w*", t)} - mechclean.BUILTIN_WORDS
+                   - set(plausible.SCALAR_TYPEDEFS) - {"struct", "class", "const", "volatile"})
+    missing = [w for w in words if not re.search(r"\b%s\b" % w, before)]
+    if not missing:
+        return text
+    last = list(re.finditer(r"(?m)^#include[^\n]*\n", text))
+    at = last[-1].end() if last else 0
+    return text[:at] + "".join("struct %s;\n" % w for w in missing) + text[at:]
+
+
 def remangle_texts(original, targets):
     mapping = {name: info[0] for name, info in targets.items()}
     literal = alternation(mapping)
@@ -255,20 +388,27 @@ def remangle_texts(original, targets):
         if rel.endswith(SOURCES):
             for name, info in targets.items():
                 if name in out or info[2] in out:
+                    before = out
                     out = retype(out, name, info)
                     if rel.endswith((".c", ".cpp")):
                         out = uncast(out, info)
+                    if out != before:
+                        out = declare(out, before, info[4])
         out = literal.sub(lambda m: mapping[m.group(0)], out)
         if out != text:
             new[rel] = out
     return new, mapping
 
 
-def remangle(jobs, keep, revs=()):
+def remangle(jobs, keep, revs=(), casts=False, refine=()):
     blobs, original = mechclean.tree_texts()
     every = symbol_idents()
     landed = remangle_targets(history(revs), every, keep) if revs else {}
     targets = remangle_targets(original, every, keep)
+    if casts:
+        targets.update({n: i for n, i in cast_targets(original, every, keep).items() if n not in targets})
+    if refine:
+        targets.update({n: i for n, i in refine_targets(original, every, set(refine)).items() if n not in targets})
     calls = [text for rel, text in original.items() if rel.endswith((".c", ".cpp"))]
     targets.update({name: info for name, info in landed.items() if name not in targets and
                     any(info[2] in text and uncast(text, info) != text for text in calls)})
@@ -367,7 +507,7 @@ def shared_rename(original, new, name, renamed_to, prior=None):
 
 def main():
     args = sys.argv[1:]
-    ref, jobs, dry, revs = None, 8, "--dry" in args, []
+    ref, jobs, dry, revs, refine = None, 8, "--dry" in args, [], []
     while args:
         a = args.pop(0)
         if a == "--keep" and args:
@@ -376,11 +516,13 @@ def main():
             jobs = int(args.pop(0))
         elif a == "--history" and args:
             revs.append(args.pop(0))
-        elif a not in ("--dry", "--remangle", "--shared"):
+        elif a == "--refine" and args:
+            refine = open(args.pop(0), encoding="utf-8").read().split()
+        elif a not in ("--dry", "--remangle", "--shared", "--casts"):
             sys.exit(USAGE)
     keep = kept_names(ref)
     if "--remangle" in sys.argv:
-        return remangle(jobs, keep, revs)
+        return remangle(jobs, keep, revs, "--casts" in sys.argv, refine)
     mapping = targets(keep)
     every = symbol_idents()
     shared = {m for m in mapping if len(every[ident(m)]) > 1}
