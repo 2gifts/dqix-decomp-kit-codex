@@ -22,7 +22,6 @@ _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
 import glob
 import json
-import subprocess
 import os
 import re
 import sys
@@ -144,15 +143,43 @@ def verified_gap(mod, addr, path, cache):
     key = f"{path}|{st.st_size}|{int(st.st_mtime)}"
     if key in cache:
         return cache[key]
-    r = subprocess.run([sys.executable, f"{KIT}/wgate.py", mod, addr, path],
-                       capture_output=True, text=True, cwd=REPO)
-    txt = r.stdout + r.stderr
+    import wgate
+    out = []
+    try:
+        wgate.gate(mod, addr, path, out=out)
+    except Exception:
+        pass
+    txt = "\n".join(out)
     gap = 0 if re.search(r"(?m)^MATCH\b", txt) else None
     if gap is None:
         m = re.search(r"(?m)^RESIDUE\s+\S+\s+(\d+)", txt)
         gap = int(m.group(1)) if m else -1
     cache[key] = gap
     return gap
+
+
+def verified_gaps(mod, addr, paths, cache):
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max(1, min(GATE_JOBS, len(paths)))) as pool:
+        return list(pool.map(lambda p: verified_gap(mod, addr, p, cache), paths))
+
+
+GATE_JOBS = min(8, os.cpu_count() or 1)
+
+
+def _verified_best(mod, addr, paths, maxb, cache):
+    seen, real = set(), None
+    for p in paths:
+        p = p.replace("\\", "/")
+        if p in seen:
+            continue
+        seen.add(p)
+        g = verified_gap(mod, addr, p, cache)
+        if g is not None and g >= 0 and (real is None or g < real):
+            real = g
+        if real is not None and real <= maxb:
+            break
+    return real
 
 
 def rows(maxb, verify=True, include_worked=False):
@@ -188,7 +215,7 @@ def rows(maxb, verify=True, include_worked=False):
         return []
 
     cache = _cache() if verify else {}
-    out, dirty = [], False
+    todo = []
     for gap, mod, addr, size, cls, detail, evidence in sorted(best.values()):
         if cls in never or addr in skip or ASMONLY.search(detail):
             continue
@@ -196,22 +223,21 @@ def rows(maxb, verify=True, include_worked=False):
             continue
         if not 0 < gap <= maxb:
             continue
+        paths = []
         if verify:
             cand = f"{SP}/clsbest/{addr}.cpp"
             paths = [p for p in (evidence, cand) if p and os.path.exists(p)]
             paths += sorted(glob.glob(f"{SP}/attempts/*{addr}*.cpp"))
-            seen, real = set(), None
-            for p in paths:
-                p = p.replace("\\", "/")
-                if p in seen:
-                    continue
-                seen.add(p)
-                g = verified_gap(mod, addr, p, cache)
-                dirty = True
-                if g is not None and g >= 0 and (real is None or g < real):
-                    real = g
-                if real is not None and real <= maxb:
-                    break
+        todo.append((gap, mod, addr, size, cls, detail, paths))
+    reals = []
+    if verify and todo:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max(1, min(GATE_JOBS, len(todo)))) as pool:
+            reals = list(pool.map(lambda t: _verified_best(t[1], t[2], t[6], maxb, cache), todo))
+    out, dirty = [], verify and any(t[6] for t in todo)
+    for i, (gap, mod, addr, size, cls, detail, paths) in enumerate(todo):
+        if verify:
+            real = reals[i]
             if real is None or real > maxb:
                 continue
             if not include_worked and addr in newest and real >= newest[addr]:

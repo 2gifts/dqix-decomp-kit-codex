@@ -423,7 +423,7 @@ def remangle(jobs, keep, revs=(), casts=False, refine=()):
             text = original[rel] + "".join(original[h] for h in seen[rel])
             suspects |= {name for name, info in targets.items() if name in text or re.search(r"\b%s\b" % info[2], text)}
         drop = {name for name in suspects if len(suspects) == 1 or
-                mechclean.verify(original, *remangle_texts(original, {name: targets[name]}), jobs, WORK)[0]} or suspects
+                mechclean.verify(original, *remangle_texts(original, {name: targets[name]}), jobs, WORK, True)[0]} or suspects
         print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} of {len(suspects)} symbol(s) there",
               flush=True)
         if not drop:

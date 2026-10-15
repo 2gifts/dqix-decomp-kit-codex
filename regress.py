@@ -132,23 +132,20 @@ def _decomment_keeps_markers():
 
 
 def _evo_score(sites_list):
-    class _R:
-        def __init__(self, stdout):
-            self.stdout = stdout
-
     argv, sys.argv = sys.argv, ["evo_score.py", "main", "02011b68"]
     try:
         es = load("pad/evo_score")
 
-        def fake_run(cmd, **kw):
-            n = int((kw.get("env") or {}).get("WDIFF_MAXRUNS") or 12)
-            kept = sites_list[:n]
+        def fake_diff(ov, addr, src, sec=None, out=None, diagnose=True, ctx=None, maxruns=None):
+            kept = sites_list[:maxruns or 12]
             lost = len(sites_list) - len(kept)
-            return _R("BYTEDIFF %d bytes in %d run(s), slot=0x44c isa=thumb\n"
-                      % (len(sites_list), len(sites_list)) + "".join(kept)
-                      + (" ... %d more run(s) suppressed (raise WDIFF_MAXRUNS)\n" % lost if lost else ""))
+            text = ("BYTEDIFF %d bytes in %d run(s), slot=0x44c isa=thumb\n"
+                    % (len(sites_list), len(sites_list)) + "".join(kept)
+                    + (" ... %d more run(s) suppressed (raise WDIFF_MAXRUNS)\n" % lost if lost else ""))
+            out.extend(text.rstrip("\n").split("\n"))
+            return 0
 
-        es.subprocess = type("_sub", (), {"run": staticmethod(fake_run)})
+        es._wdiff = lambda: type("_wdiff", (), {"diff": staticmethod(fake_diff)})
         return es
     finally:
         sys.argv = argv
@@ -3762,9 +3759,10 @@ def _repool_cxx_identifier():
 @check("wgate selects ISA and size by physical address, not raw-name suffix",
        "JP021d4af8 was584B but raw name func_ov017_021d4af8 belonged at021d4f48/164B; name-first selected the wrong slot")
 def _gate_slot_address():
+    import textwrap
     source = open(f"{KIT}/wgate.py", encoding="utf-8").read()
-    start = source.index("# accept THUMB as well as ARM.")
-    selection = source[start:source.index("if SEC is None:", start)]
+    start = source.rindex("\n", 0, source.index("# accept THUMB as well as ARM.")) + 1
+    selection = textwrap.dedent(source[start:source.index("if SEC is None:", start)])
     def missing(message, *args, **kwargs):
         raise ValueError(message)
     cases = [
@@ -4676,7 +4674,7 @@ def _git_bash():
                 open(os.path.join(d, p), "w").close()
             which = {"bash": os.path.join(d, "Windows/System32/bash.exe")}
             with mock.patch.dict(os.environ, {"PATH": "x"}, clear=True), \
-                    mock.patch.object(_kp.shutil, "which", lambda n: which.get(n)):
+                    mock.patch("shutil.which", lambda n: which.get(n)):
                 try:
                     _kp.bash()
                     return "kitpaths.bash() accepted WSL's System32 bash"
@@ -5333,7 +5331,7 @@ def _mechclean_verify_cached():
     compiled, scanned = [], []
     real_resolved = M.resolved
 
-    def fake_signature(text, path, region, include=None):
+    def fake_signature(text, path, region, include=None, deps=None):
         compiled.append((include, region))
         return [(), (".text", text.strip().encode())]
 
@@ -5360,6 +5358,238 @@ def _mechclean_verify_cached():
         return "the original src/a.cpp was compiled %d then %d time(s)" % (runs[0][1], runs[1][1])
     if runs[1][2]:
         return "the second verify re-read %d include list(s)" % runs[1][2]
+    return None
+
+
+@check("mechclean verify recompiles a unit only when its text or a header it read changed",
+       "the addrname and header-pass loops call verify again after dropping renames, and every call "
+       "recompiled every affected unit although half of them read no header the drop changed")
+def _mechclean_verify_reuses_units():
+    import shutil
+    M = load("mechclean")
+    real, compiled = M.signature, []
+
+    def counted(text, path, region, include=None, deps=None):
+        if include != f"{M.REPO}/include":
+            compiled.append(os.path.basename(path))
+        return real(text, path, region, include, deps)
+    M.signature = counted
+    head = open(f"{M.REPO}/include/globaldefs.h", encoding="utf-8").read()
+    original = {"include/globaldefs.h": head,
+                "src/x.cpp": '#include <globaldefs.h>\nextern "C" int X(int a) { return a + 1; }\n',
+                "src/y.cpp": '#include <globaldefs.h>\nextern "C" int Y(int a) { return a + 2; }\n'}
+    edited = {"include/globaldefs.h": head + "\n"}
+    calls = [edited, edited, {**edited, "src/y.cpp": original["src/y.cpp"] + "\n"},
+             {"include/globaldefs.h": head + "\n\n"}]
+    want = [["src_x.cpp", "src_y.cpp"], [], ["src_y.cpp"], ["src_x.cpp", "src_y.cpp"]]
+    work = tempfile.mkdtemp(prefix="mcr_", dir=f"{SP}/handwork")
+    try:
+        got = []
+        for new in calls:
+            compiled.clear()
+            bad, _seen = M.verify(original, new, {}, 2, work)
+            if bad:
+                return "verify reported %s for a blank line" % bad
+            got.append(sorted(compiled))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if got != want:
+        return "units compiled per call %s, want %s" % (got, want)
+    return None
+
+
+@check("mechclean verify answers yes/no at the first unit that differs",
+       "addrname --remangle asks verify only whether one symbol's rename breaks anything, and verify "
+       "compiled every unit the rename reached before answering")
+def _mechclean_verify_first():
+    import shutil
+    M = load("mechclean")
+    calls = []
+
+    def fake_signature(text, path, region, include=None, deps=None):
+        calls.append(include)
+        return [(), (".text", (text + ("" if include == f"{M.REPO}/include" else "!")).encode())]
+    M.signature = fake_signature
+    original = {"src/u%d.cpp" % i: "int u%d;\n" % i for i in range(6)}
+    new = {rel: text + "\n" for rel, text in original.items()}
+    work = tempfile.mkdtemp(prefix="mcf_")
+    try:
+        every, _seen = M.verify(original, new, {}, 1, work)
+        calls.clear()
+        first, _seen = M.verify(original, new, {}, 1, work, True)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if len(every) != 6:
+        return "a full verify reported %d of 6 differing units" % len(every)
+    if len(first) != 1 or first[0] not in every:
+        return "a yes/no verify reported %r" % first
+    if len(calls) > 2:
+        return "a yes/no verify compiled %d time(s) after the first difference" % (len(calls) - 1)
+    return None
+
+
+@check("elfobj reads an mwcc object exactly as pyelftools does",
+       "wgate, wdiff and mechclean.verify parse every object with elfobj, so a field it decoded "
+       "differently from pyelftools would change a verdict with no compile changing")
+def _elfobj_matches_pyelftools():
+    import io
+    import elfobj
+    text = ('struct Vec3 { int x, y, z; ~Vec3() {} };\nextern "C" void Use(void*);\n'
+            'extern char data_0201aaaa[];\nstatic int s_bss;\nint g_data = 3;\nconst char* g_str = "abc";\n'
+            'extern "C" char* F(char* p) { Vec3 v = *(Vec3*)(p + 8); Use(p); s_bss++;\n'
+            '    return data_0201aaaa + 5 + g_data + s_bss; }\n')
+    full = _compile_elf(text, _kp.REPO)
+    if isinstance(full, str):
+        return full
+    mini = elfobj.ELFFile(io.BytesIO(full.stream.getvalue()))
+    if not isinstance(mini, elfobj._Elf):
+        return "elfobj handed an mwcc object to pyelftools"
+
+    def dump(elf):
+        out = []
+        for i, sec in enumerate(elf.iter_sections()):
+            row = [i, sec.name, {k: sec.header[k] for k in elfobj.HEADER_KEYS}, sec.data(),
+                   hasattr(sec, "iter_relocations")]
+            if hasattr(sec, "iter_symbols"):
+                row.append([(s.name, s["st_value"], s["st_size"], s["st_info"]["bind"], s["st_info"]["type"],
+                             s["st_shndx"]) for s in sec.iter_symbols()])
+            if hasattr(sec, "iter_relocations"):
+                row.append([(r["r_offset"], r["r_info_sym"], r["r_info_type"], r.is_RELA(),
+                             r["r_addend"] if r.is_RELA() else None) for r in sec.iter_relocations()])
+            out.append(row)
+        names = sorted({s.name for s in elf.iter_sections()})
+        return out + [[(n, elf.get_section_by_name(n)["sh_offset"]) for n in names]]
+    want, got = dump(full), dump(mini)
+    for a, b in zip(want, got):
+        if a != b:
+            return "pyelftools %s, elfobj %s" % (str(a)[:160], str(b)[:160])
+    if len(want) != len(got):
+        return "pyelftools saw %d sections, elfobj %d" % (len(want), len(got))
+    return None
+
+
+@check("plausible caches game_types by header and symbols.txt stamps and recomputes when one changes",
+       "every plausible.py and cleancheck.py process re-read and stripped every header to answer "
+       "TYPE-REDEFINED, 90 ms each")
+def _game_types_cache():
+    import json as _json
+    P = load("plausible")
+    old = _kp.REPO, _kp.SP
+    with tempfile.TemporaryDirectory() as d:
+        repo, sp = os.path.join(d, "repo"), os.path.join(d, "sp")
+        os.makedirs(os.path.join(repo, "include"))
+        os.makedirs(os.path.join(repo, "config", "usa", "arm9"))
+        with open(os.path.join(repo, "config", "usa", "arm9", "symbols.txt"), "w") as fh:
+            fh.write("_ZN3Foo3GetEv kind:function(arm,size=0x4) addr:0x02000000\n"
+                     "_ZN3Bar3GetEv kind:function(arm,size=0x4) addr:0x02000004\n")
+        header = os.path.join(repo, "include", "a.h")
+        with open(header, "w") as fh:
+            fh.write("struct Foo { int x; };\n")
+        _kp.REPO, _kp.SP = repo, sp
+        try:
+            P.GAME_TYPES = None
+            first = set(P.game_types())
+            cache = os.path.join(sp, "wlog", "game_types.json")
+            saved = _json.load(open(cache, encoding="utf-8"))
+            saved["types"] = ["Cached"]
+            with open(cache, "w", encoding="utf-8") as fh:
+                _json.dump(saved, fh)
+            P.GAME_TYPES = None
+            second = set(P.game_types())
+            with open(header, "w") as fh:
+                fh.write("struct Bar { int y; long z; };\n")
+            P.GAME_TYPES = None
+            third = set(P.game_types())
+        finally:
+            _kp.REPO, _kp.SP = old
+            P.GAME_TYPES = None
+    if first != {"Foo"}:
+        return "computed %s, want {'Foo'}" % first
+    if second != {"Cached"}:
+        return "an unchanged tree recomputed instead of reading the cache (%s)" % second
+    if third != {"Bar"}:
+        return "a changed header still answered %s" % third
+    return None
+
+
+@check("gate history keeps every row when one process gates in parallel",
+       "nearmiss, recipe_select and evo_score gate attempts on threads, and unlocked appends to one "
+       "wlog/gates file lost 665 of 20000 rows")
+def _gatelog_parallel_rows():
+    from concurrent.futures import ThreadPoolExecutor
+    G = load("gatelog")
+    with tempfile.TemporaryDirectory() as d:
+        G.SP = d
+        with ThreadPoolExecutor(16) as pool:
+            list(pool.map(lambda i: G.record("main", "02000000", "-", "SHAPE", i, "f%d.cpp" % i), range(20000)))
+        rows = G.read("main", "02000000")
+    if len(rows) != 20000 or sorted(int(r[3]) for r in rows) != list(range(20000)):
+        return "%d of 20000 rows survived" % len(rows)
+    return None
+
+
+@check("wgate.gate in-process prints what the wgate.py command prints",
+       "nearmiss, recipe_select, evo_score and mechclean gate in-process; a gate() that drifted from "
+       "the command would rank, score and accept candidates on verdicts no worker sees")
+def _wgate_inprocess_matches_cli():
+    import subprocess
+    W = load("wgate")
+    landed, open_addr = _main_function(True), _main_function(False)
+    if not landed or not open_addr:
+        return "no landed and unlanded main function to gate"
+    cases = [(landed, "int x;\n", {}), (open_addr, 'extern "C" ARM void func_%s() {}\n' % open_addr, {}),
+             (open_addr, "this is not C\n", {}), ("02000001", "int x;\n", {"WGATE_ALLOW_COMMITTED": "1"})]
+    with tempfile.TemporaryDirectory(dir=f"{SP}/handwork", ignore_cleanup_errors=True) as d:
+        for addr, text, env in cases:
+            src = os.path.join(d, "t_%s.cpp" % addr).replace("\\", "/")
+            with open(src, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            r = subprocess.run([sys.executable, f"{KIT}/wgate.py", "main", addr, src], capture_output=True,
+                               text=True, env=dict(os.environ, DQIX_NO_FRESHNESS="1", **env))
+            out = []
+            rc = W.gate("main", addr, src, out=out, env=dict(os.environ, **env))
+            got = "".join(line + "\n" for line in out)
+            if (rc, got) != (r.returncode, r.stdout):
+                return "%s: command exit %d %r, gate() %d %r" % (addr, r.returncode, r.stdout[-120:], rc, got[-120:])
+    return None
+
+
+@check("nearmiss gates a list of candidates in parallel and answers in their order",
+       "recipe_select gated each earlier attempt one process at a time, 45-90 s for an address with a "
+       "hundred attempts")
+def _nearmiss_parallel_gaps():
+    N = load("nearmiss")
+    seen = []
+
+    class FakeGate:
+        @staticmethod
+        def gate(mod, addr, src, sec=None, out=None, env=None):
+            seen.append(src)
+            n = int(open(src).read())
+            out.append("MATCH" if n == 0 else "RESIDUE SHAPE %d x" % n)
+            return 0 if n == 0 else 1
+    real = sys.modules.get("wgate")
+    sys.modules["wgate"] = FakeGate
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            paths = []
+            for i, n in enumerate([7, 0, 3, 12, 5, 9, 1, 4, 8, 2, 6, 11]):
+                p = os.path.join(d, "a%02d.cpp" % i)
+                with open(p, "w") as fh:
+                    fh.write(str(n))
+                paths.append(p)
+            cache = {}
+            got = N.verified_gaps("main", "02000000", paths, cache)
+            again = N.verified_gaps("main", "02000000", paths, cache)
+    finally:
+        if real is None:
+            sys.modules.pop("wgate", None)
+        else:
+            sys.modules["wgate"] = real
+    if got != [7, 0, 3, 12, 5, 9, 1, 4, 8, 2, 6, 11] or again != got:
+        return "gaps %s then %s" % (got, again)
+    if len(seen) != 12:
+        return "%d gates for 12 files, the second pass should hit the cache" % len(seen)
     return None
 
 

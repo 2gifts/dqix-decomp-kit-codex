@@ -19,7 +19,7 @@ _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
 import subprocess, re, sys, os, io, threading
 
-from elftools.elf.elffile import ELFFile
+from elfobj import ELFFile
 
 import residue
 import buildcfg
@@ -67,16 +67,17 @@ def _module(ov):
     return _MODULES[ov]
 
 
-def diff(ov, addr, src, sec=None, out=None, diagnose=True):
+def diff(ov, addr, src, sec=None, out=None, diagnose=True, ctx=None, maxruns=None):
     out = [] if out is None else out
     try:
-        return _diff(ov, addr, src, sec, out, diagnose)
+        return _diff(ov, addr, src, sec, out, diagnose, CTX if ctx is None else ctx,
+                     MAXRUNS if maxruns is None else maxruns)
     except Fail as e:
         out.append(str(e))
         return 1
 
 
-def _diff(OV, ADDR, SRC, SEC, out, diagnose):
+def _diff(OV, ADDR, SRC, SEC, out, diagnose, CTX, MAXRUNS):
     CFG, PRISTINE, PFX, BASE, symtxt, _head = _module(OV)
     m = re.search(rf'{PFX}{ADDR} kind:function\((arm|thumb),size=0x([0-9a-fA-F]+)\)', symtxt, re.I)
     if not m:

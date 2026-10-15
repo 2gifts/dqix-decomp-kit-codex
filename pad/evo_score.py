@@ -13,7 +13,6 @@ import kitpaths as _kp
 import json
 import os
 import re
-import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -68,10 +67,24 @@ def body_status(ours):
     return bad
 
 
+def _wgate():
+    import wgate
+    return wgate
+
+
+def _wdiff():
+    import wdiff
+    return wdiff
+
+
 def gate(path):
-    r = subprocess.run([sys.executable, KIT + "/wgate.py", MOD, ADDR, path], cwd=REPO,
-                       capture_output=True, text=True)
-    lines = [l for l in (r.stdout + r.stderr).splitlines() if l.strip() and not l.startswith("HINT")]
+    out = []
+    try:
+        _wgate().gate(MOD, ADDR, path, out=out)
+    except Exception:
+        import traceback
+        out.append(traceback.format_exc())
+    lines = [l for l in "\n".join(out).splitlines() if l.strip() and not l.startswith("HINT")]
     return lines[0] if lines else "NO OUTPUT"
 
 
@@ -89,10 +102,12 @@ MAXRUNS = 4096
 
 
 def sites(path):
-    r = subprocess.run([sys.executable, KIT + "/wdiff.py", MOD, ADDR, path], cwd=REPO,
-                       capture_output=True, text=True,
-                       env=dict(os.environ, WDIFF_CTX="0", WDIFF_MAXRUNS=str(MAXRUNS)))
-    return sig_from_wdiff(r.stdout)
+    out = []
+    try:
+        _wdiff().diff(MOD, ADDR, path, out=out, ctx=0, maxruns=MAXRUNS)
+    except Exception:
+        pass
+    return sig_from_wdiff("".join(line + "\n" for line in out))
 
 
 def sig_from_wdiff(out):

@@ -817,21 +817,54 @@ TYPE_DEF = re.compile(r"(?m)^[ \t]*(?:typedef\s+)?(?:struct|class|union|enum)\s+
 GAME_TYPES = None
 
 
+def _game_types_stamp(paths):
+    out = []
+    for path in paths:
+        try:
+            st = os.stat(path)
+            out.append([path, st.st_mtime_ns, st.st_size])
+        except OSError:
+            out.append([path, None, None])
+    return out
+
+
 def game_types():
     global GAME_TYPES
     if GAME_TYPES is None:
         import glob
+        import json
         import kitpaths
+        headers = glob.glob(f"{kitpaths.REPO}/include/**/*.h*", recursive=True)
+        symbols = glob.glob(f"{kitpaths.REPO}/config/usa/arm9/**/symbols.txt", recursive=True)
+        stamp = _game_types_stamp(headers + symbols)
+        cache = os.path.join(kitpaths.SP, "wlog", "game_types.json")
+        try:
+            with open(cache, encoding="utf-8") as fh:
+                saved = json.load(fh)
+            if saved["repo"] == kitpaths.REPO and saved["stamp"] == stamp:
+                GAME_TYPES = set(saved["types"])
+                return GAME_TYPES
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
         defined, mangled = set(), set()
-        for path in glob.glob(f"{kitpaths.REPO}/include/**/*.h*", recursive=True):
+        for path in headers:
             code = strip_code(open(path, encoding="utf-8", errors="ignore").read())
             defined.update(m.group(1) for m in TYPE_DEF.finditer(code)
                            if code.count("{", 0, m.start()) == code.count("}", 0, m.start()))
-        for path in glob.glob(f"{kitpaths.REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
+        for path in symbols:
             for name in re.findall(r"(?m)^(_Z\S+) kind:", open(path, encoding="utf-8", errors="ignore").read()):
                 for n in re.finditer(r"\d+", name):
                     mangled.add(name[n.end():n.end() + int(n.group())])
         GAME_TYPES = defined & mangled
+        if _game_types_stamp(headers + symbols) == stamp:
+            try:
+                os.makedirs(os.path.dirname(cache), exist_ok=True)
+                tmp = "%s.%d.tmp" % (cache, os.getpid())
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump({"repo": kitpaths.REPO, "stamp": stamp, "types": sorted(GAME_TYPES)}, fh)
+                os.replace(tmp, cache)
+            except OSError:
+                pass
     return GAME_TYPES
 
 

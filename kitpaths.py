@@ -10,7 +10,6 @@
     python kitpaths.py behind             commits the published kit is ahead of this checkout
 """
 import os
-import shutil
 import sys
 
 
@@ -19,6 +18,7 @@ def _norm(p):
 
 
 def bash(base=None):
+    import shutil
     env = dict(os.environ if base is None else base)
     if os.name != "nt":
         found = shutil.which("bash")

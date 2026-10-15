@@ -16,6 +16,7 @@ file that does not exist, nothing keys symbol lookups on the `func_` name, nothi
 |---|---|
 | `kitpaths.py [kit\|state\|repo]` | `KIT` (this checkout: code only), `SP` (the state directory outside it: `$DQIX_STATE`, else `state.path`, else `../dqix-kit-state`), `REPO` (`$DQIX_REPO`, default `../dqix-decomp`), `CLAUDE_PROJECTS`; every script reads its paths here, shell scripts through the CLI |
 | `spans.py` | `Spans(ranges)`: merged half-open address ranges answering `addr in spans` by bisection; a script that asks whether an address is delinked uses it instead of scanning every range |
+| `elfobj.py` | `ELFFile(stream)`: the sections, symbols and relocations of a 32-bit ARM object read with `struct`, field for field what pyelftools reports (anything else is handed to pyelftools); `wgate`, `wdiff` and `mechclean.verify` parse with it |
 | `gitread.py` | read many git blobs in one `git cat-file --batch` and a whole diff's added/removed lines per file in one `git diff`; a script that reads files at a revision or per-file diffs uses it instead of one git process per file |
 | `export_priors.py <source-sp> [-j N] [--dry-run]` | gate every saved attempt at an unmatched function in a pipeline directory's pools and keep the closest per address in `priors/<main\|ovNNN>/<addr>.cpp` + `priors/INDEX.tsv`; `resumable.py` reads `priors/` as a pool, so a fresh kit starts from the work already paid for |
 | `regress_fixtures/` | the prior sources `regress.py --slow` cracks end to end |
@@ -72,7 +73,7 @@ constructs developers would not write; the evo_score penalty).
 | `integrate.py` | wire matched source into `symbols.txt` + `delinks.txt` (+ `relocs.txt` when it defines data) | identical decisions to both retired originals; landed ov026:021d8ba0 in a pre-landing worktree to a green `ninja sha1 check` |
 | `dataown.py` | place a source's own data: derive each section's address from its relocations, prove bytes and relocs, give the range to the file, rename/retire symbols, rewrite interior references as `add:` | `regress.py` replays the 021d8ba0 hand landing exactly and refuses a body static (LOCALREF) and a flipped byte (BYTEDIFF) |
 | `classify.py` | pre-gate verdicts so one bad function cannot red a wave; SIZE/BYTEDIFF (never COMPILE, which a crashed compiler also reports) are cached in `wlog/classify_cache.tsv` by source, compiler, flags, committed headers and classify.py itself (no cache while `include/` or `libs/` is dirty) | TRUSTED on two committed matches, SIZE on a mutation |
-| `wgate.py` | THE gate: compile, byte-compare, verify relocations | MATCH on a committed function; no longer leaks objects |
+| `wgate.py` | THE gate: compile, byte-compare, verify relocations; `wgate.gate()` prints the same lines in-process for `nearmiss`, `recipe_select`, `evo_score` and `mechclean` | MATCH on a committed function; no longer leaks objects |
 | `buildcfg.py` | the compiler and flags read out of `tools/configure.py`, so no gate can measure on a toolchain the ROM is not built with | prints `2.0/sp2p2` and the build's own flag line |
 | `pragmas.py` | the codegen-`#pragma` pattern `buildcfg.py`, `wgate.py`, `selfcheck.py` and `prready.py` share, importable without a decomp tree | `regress.py` prready case |
 | `srcdir.py` | where a module's new work goes, read out of its `delinks.txt` | resolves ov033 to `src/Filesystem/Overlay_33` |

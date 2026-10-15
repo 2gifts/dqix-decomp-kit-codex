@@ -1,20 +1,19 @@
 import collections
 import functools
 import glob
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
-
-from elftools.elf.elffile import ELFFile
-from elftools.elf.relocation import RelocationSection
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import buildcfg
 import cleancheck
 import gitread
+from elfobj import ELFFile
 import kitpaths
 import mangle
 import plausible
@@ -522,15 +521,36 @@ def region_flags(region):
     return flags + REGION_DEFINES[region]
 
 
-def signature(text, path, region, include=None):
+def dependencies(dfile, cwd, obj):
+    try:
+        with open(dfile, encoding="utf-8", errors="replace") as fh:
+            text = fh.read().replace("\\\n", " ")
+    except OSError:
+        return []
+    target, sep, rest = text.partition(": ")
+    found = [os.path.normpath(os.path.join(cwd, word)) for word in rest.split()]
+    ours = os.path.normcase(os.path.normpath(os.path.join(cwd, target.strip()))) == os.path.normcase(os.path.normpath(obj))
+    return found if sep and ours and found and all(os.path.isfile(p) for p in found) else []
+
+
+def signature(text, path, region, include=None, deps=None):
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
     obj = f"{path}.{region}.o"
     flags = region_flags(region)
     if include:
         flags = [include if f == "include" and flags[i - 1] == "-i" else f for i, f in enumerate(flags)]
-    r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + flags + ["-c", path, "-o", obj],
-                       cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    track = deps is not None and bool(include)
+    cwd = os.path.dirname(os.path.abspath(path)) if track else REPO
+    r = subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + flags + ["-MD"] * track + ["-c", path, "-o", obj],
+                       cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if track:
+        dfile = os.path.join(cwd, os.path.splitext(os.path.basename(path))[0] + ".d")
+        deps.extend(dependencies(dfile, cwd, obj))
+        try:
+            os.remove(dfile)
+        except OSError:
+            pass
     if r.returncode:
         return None
     with open(obj, "rb") as fh:
@@ -542,7 +562,7 @@ def signature(text, path, region, include=None):
                              names[s["st_shndx"]] if isinstance(s["st_shndx"], int) else s["st_shndx"])
                             for s in syms if not isinstance(s["st_shndx"], int) or kept(s["st_shndx"])))]
         for sec in elf.iter_sections():
-            if isinstance(sec, RelocationSection):
+            if sec.header["sh_type"] in ("SHT_REL", "SHT_RELA"):
                 if kept(sec["sh_info"]):
                     sig.append((sec.name, tuple((r["r_offset"], r["r_info_type"], syms[r["r_info_sym"]].name)
                                                 for r in sec.iter_relocations())))
@@ -630,11 +650,42 @@ def include_state(root):
 def original_signature(text, path, region, state):
     key = (text, path, region, state)
     if key not in BEFORE:
-        BEFORE[key] = signature(text, path, region, f"{REPO}/include")
+        BEFORE[key] = signature(text, path, region, f"{REPO}/include", [])
     return BEFORE[key]
 
 
-def verify(original, new, mapping, jobs, work):
+AFTER = {}
+
+
+def _digest(path, memo):
+    if path not in memo:
+        try:
+            with open(path, "rb") as fh:
+                memo[path] = hashlib.sha1(fh.read()).digest()
+        except OSError:
+            memo[path] = None
+    return memo[path]
+
+
+def after_signature(text, path, region, include, memo):
+    key = (text, path, region, include)
+    hit = AFTER.get(key)
+    if hit is not None and hit[0] == memo[None] and all(_digest(p, memo) == d for p, d in hit[1]):
+        return hit[2]
+    deps = []
+    sig = signature(text, path, region, include, deps)
+    if deps:
+        own = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+        AFTER[key] = (memo[None], tuple((p, _digest(p, memo)) for p in deps if os.path.normcase(p) != own), sig)
+    return sig
+
+
+def include_listing(root):
+    return tuple(sorted(os.path.relpath(os.path.join(d, f), root).replace("\\", "/")
+                        for d, _dirs, files in os.walk(root) for f in files))
+
+
+def verify(original, new, mapping, jobs, work, first=False):
     headers, closure, tus = affected(original, new)
     state = include_state(f"{REPO}/include")
     print(f"files {len(new)}; translation units to check {len(tus)}", flush=True)
@@ -645,23 +696,34 @@ def verify(original, new, mapping, jobs, work):
         if rel.startswith("include/"):
             with open(f"{work}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(text)
+    stop, memo = [], {None: include_listing(f"{work}/include")}
 
     def check(rel):
         path = f"{work}/tu/{rel.replace('/', '_')}"
         text = new.get(rel, original[rel])
         for region in ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, original[rel] + text)]:
+            if stop:
+                return rel, True
             before = original_signature(original[rel], path, region, state)
             if before is None:
                 if rel in new:
                     return rel, False
                 continue
-            after = signature(text, path, region, f"{work}/include")
+            after = after_signature(text, path, region, f"{work}/include", memo)
             if after is None or remap(before, mapping) != after:
                 return rel, False
         return rel, True
 
     with ThreadPoolExecutor(jobs) as pool:
-        bad = [rel for rel, ok in pool.map(check, tus) if not ok]
+        if first:
+            bad = []
+            for done in as_completed([pool.submit(check, rel) for rel in tus]):
+                rel, ok = done.result()
+                if not ok and not bad:
+                    bad.append(rel)
+                    stop.append(rel)
+        else:
+            bad = [rel for rel, ok in pool.map(check, tus) if not ok]
     edges = include_graph(original)[1]
     return bad, {rel: [headers[h] for h in edges[rel] & closure] for rel in bad}
 
@@ -754,9 +816,13 @@ def externc_clean(text, path):
 
 
 def gate(mod, addr, path):
-    r = subprocess.run([sys.executable, f"{KIT}/wgate.py", mod, addr, path], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", env=dict(os.environ, WGATE_ALLOW_COMMITTED="1"))
-    return any(ln.startswith("MATCH") for ln in (r.stdout + r.stderr).splitlines())
+    import wgate
+    out = []
+    try:
+        wgate.gate(mod, addr, path, out=out, env=dict(os.environ, WGATE_ALLOW_COMMITTED="1"))
+    except Exception:
+        return False
+    return any(ln.startswith("MATCH") for ln in "\n".join(out).splitlines())
 
 
 def finished(addr):
