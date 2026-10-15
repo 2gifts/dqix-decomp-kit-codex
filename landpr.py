@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 
+import gitread
 import kitpaths
 
 sys.path.insert(0, f"{kitpaths.KIT}/pad")
@@ -73,12 +74,12 @@ def keep_both_delinks(tree, head):
     if not conflicts or not all(p.endswith("delinks.txt") for p in conflicts):
         return False
     base = git(tree, "merge-base", "HEAD", head)[1].strip()
+    shown = gitread.blobs(tree, [f"{rev}:{path}" for path in conflicts for rev in ("HEAD", head, base)])
     for path in conflicts:
-        ours, theirs, old = (dict(regionsync.BLOCK.findall(git(tree, "show", f"{rev}:{path}")[1]))
-                             for rev in ("HEAD", head, base))
+        ours, theirs, old = (dict(regionsync.BLOCK.findall(shown[f"{rev}:{path}"])) for rev in ("HEAD", head, base))
         if any(src in old and old[src] != body for src, body in theirs.items()) or not old.keys() <= theirs.keys():
             return False
-        merged = git(tree, "show", f"HEAD:{path}")[1].rstrip("\n")
+        merged = shown[f"HEAD:{path}"].rstrip("\n")
         for src, body in theirs.items():
             if src not in old and src not in ours:
                 merged += f"\n\n{src}:\n{body.rstrip(chr(10))}"

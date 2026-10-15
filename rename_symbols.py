@@ -20,6 +20,7 @@ Usage: python rename_symbols.py <old-rev> [<new-rev>]     new-rev defaults to th
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import gitread
 import regionblocks
 import os
 import re
@@ -45,10 +46,11 @@ def symbol_files():
 
 def table(rev):
     out = {}
-    for p in symbol_files():
+    paths = symbol_files()
+    committed = gitread.blobs(REPO, ["%s:%s" % (rev, p) for p in paths]) if rev else {}
+    for p in paths:
         if rev:
-            r = subprocess.run(["git", "show", "%s:%s" % (rev, p)], capture_output=True, text=True)
-            text = r.stdout if r.returncode == 0 else ""
+            text = committed["%s:%s" % (rev, p)]
         else:
             text = open(p, encoding="utf-8", errors="replace").read() if os.path.exists(p) else ""
         for line in text.splitlines():

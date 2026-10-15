@@ -4751,6 +4751,66 @@ def _mechclean_batched_reads():
         shutil.rmtree(repo, ignore_errors=True)
 
 
+@check("landpr, rename_symbols and relink_undefined read a revision's files in one git process",
+       "each ran `git show` once per file per revision: 35 symbols.txt files twice per merge repair, and "
+       "four per conflicted delinks.txt")
+def _revision_reads_batched():
+    import ast
+    import shutil
+    import subprocess
+    root = tempfile.mkdtemp(prefix="rv_")
+    try:
+        def git(*args):
+            return subprocess.run(["git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "-b", "main")
+        for i, cfg in enumerate(("config/usa/arm9", "config/usa/arm9/overlays/ov001", "config/usa/arm9/overlays/ov002")):
+            os.makedirs(os.path.join(root, cfg))
+            with open(os.path.join(root, cfg, "symbols.txt"), "w", newline="\n") as fh:
+                fh.write("Name%d kind:function(arm,size=0x4) addr:0x0200000%d\n" % (i, i))
+        with open(os.path.join(root, "delinks.txt"), "w", newline="\n") as fh:
+            fh.write("src/A.cpp:\n    complete\n    .text start:0x0 end:0x4\n")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "pr")
+        for name, branch in (("2", "pr"), ("1", "main")):
+            git("checkout", "-q", branch)
+            with open(os.path.join(root, "delinks.txt"), "a", newline="\n") as fh:
+                fh.write("\nsrc/%s.cpp:\n    complete\n    .text start:0x%s end:0x%s4\n" % (name, name, name))
+            git("commit", "-qam", name)
+        pr = git("rev-parse", "pr")
+        git("merge", "--no-ff", "-m", "Merge #5", pr)
+        lp = load("landpr")
+        calls, real = [], lp.git
+        lp.git = lambda tree, *a: calls.append(a[0]) or real(tree, *a)
+        if not lp.keep_both_delinks(root, pr) or "show" in calls:
+            return "keep_both_delinks returned without merging, or ran git show (%s)" % calls
+        spawned, real_run = [], subprocess.run
+        subprocess.run = lambda *a, **kw: spawned.append(a[0] if a else kw.get("args")) or real_run(*a, **kw)
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            for script, fn, helpers in (("relink_undefined", "load_symbols", ["symbol_paths"]),
+                                        ("rename_symbols", "table", ["symbol_files"])):
+                tree = ast.parse(open(f"{KIT}/{script}.py", encoding="utf-8").read())
+                nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in [fn] + helpers]
+                ns = dict(os=os, re=re, subprocess=subprocess, REPO=root, ADDR=re.compile(r"addr:0x([0-9a-fA-F]+)"),
+                          gitread=load("gitread"))
+                exec(compile(ast.Module(body=nodes, type_ignores=[]), script, "exec"), ns)
+                spawned.clear()
+                got = ns[fn](base)
+                shows = [c for c in spawned if "show" in c]
+                if got != {0x02000000: "Name0", 0x02000001: "Name1", 0x02000002: "Name2"} or shows:
+                    return "%s.%s read %r with %d git show call(s)" % (script, fn, got, len(shows))
+        finally:
+            os.chdir(cwd)
+            subprocess.run = real_run
+        return None
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
