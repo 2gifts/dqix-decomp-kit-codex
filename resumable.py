@@ -23,6 +23,7 @@ import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
 import glob, os, re, sys, collections
+import spans
 
 SP = _kp.SP
 KIT = _kp.KIT
@@ -59,12 +60,13 @@ for dl in [f"{REPO}/config/usa/arm9/delinks.txt"] + sorted(
     mod = "main" if dl.endswith("arm9/delinks.txt") else re.search(r'ov(\d+)', dl).group(1)
     for a, b in re.findall(r'(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$', open(dl).read()):
         _rng.append((int(a, 16), int(b, 16), mod))
+_DONE = spans.Spans((s, e) for s, e, _m in _rng)
+_BY_MOD = {m: spans.Spans((s, e) for s, e, mm in _rng if mm == m) for m in dict.fromkeys(m for _s, _e, m in _rng)}
 
 
 def matched(addr):
     """True once the address falls inside a delinked .text range -- i.e. it is already committed."""
-    x = int(addr, 16)
-    return any(s <= x < e for s, e, _m in _rng)
+    return int(addr, 16) in _DONE
 
 
 # Module by ADDRESS RANGE, never by symbol name: a matched function is renamed and its func_ symbol
@@ -77,7 +79,7 @@ def module_of(addr):
     x = int(addr, 16)
     if x < _MAIN_END:
         return "main"
-    hits = {m for s, e, m in _rng if s <= x < e and m != "main"}
+    hits = {m for m, done in _BY_MOD.items() if m != "main" and x in done}
     return hits.pop() if len(hits) == 1 else ""
 
 
