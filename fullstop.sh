@@ -182,8 +182,10 @@ count_watchers() {
 # is one `kill -9` over the listed pids, the counterpart of the single Stop-Process pass.
 if [ "$POSIX" -eq 1 ]; then
   _psx() {   # $1 = ERE to match, $2 = ERE to exclude; $3 = watch selects the watcher walk instead of $1
-    local me=$BASHPID t      # this subshell is in the snapshot; the awk below is not
-    t=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
+    # snapshot()'s shared table and its subshell, else one taken now with this subshell in it; the awk
+    # below is in neither.
+    local me=${PSELF:-$BASHPID} t=$PSNAP
+    [ -n "$PSELF" ] || t=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
     printf '%s\n' "$t" | IN="$1" OUT="$2" HOW="$3" SELF="$me" WATCHERS="$WATCHERS" KIDS="$WATCHKIDS" awk '
       { pp[$1] = $2; age[$1] = $3; c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ ?/, "", c); cmd[$1] = c; id[++k] = $1 }
       END {
@@ -216,10 +218,11 @@ if [ "$POSIX" -eq 1 ]; then
   list_watchers() { _psx "" "$EXCLW" watch; }
   kill_watchers() { _pkill "$(list_watchers)"; }
   count_watchers() { list_watchers | grep -c .; }
-  # The Win32 snapshot's tagged rows: T1 spenders, T2 CPU jobs, T3 watchers, N1/N3 their counts.
-  # ponytail: three `ps` passes where Windows takes one; a single pass needs _psx to emit the tags.
+  # The Win32 snapshot's tagged rows: T1 spenders, T2 CPU jobs, T3 watchers, N1/N3 their counts, all
+  # selected from one `ps` pass as Windows selects them from one query.
   snapshot() {
-    local t1 t2 t3
+    local PSELF=$BASHPID PSNAP t1 t2 t3
+    PSNAP=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
     t1=$(ps_list "($WORKER_RE)|$SPENDERS"); t2=$(ps_list "$CPUJOBS" "$NOTCPU"); t3=$(list_watchers)
     [ -n "$t1" ] && printf '%s\n' "$t1" | sed 's/^/T1@@@/'
     [ -n "$t2" ] && printf '%s\n' "$t2" | sed 's/^/T2@@@/'

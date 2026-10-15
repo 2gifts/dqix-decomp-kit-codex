@@ -5119,6 +5119,11 @@ def _suites_record_results():
     return None
 
 
+# What the process tools read the process table with: Win32_Process through powershell.exe on
+# Windows, `ps` everywhere else.
+PROCESS_READER = "powershell.exe" if os.name == "nt" else "ps"
+
+
 @check("fullstop --dry reads the process table once",
        "six PowerShell process queries and a basename per kit script made every dry run take 20-40 s")
 def _fullstop_one_snapshot():
@@ -5127,9 +5132,10 @@ def _fullstop_one_snapshot():
     d = tempfile.mkdtemp(prefix="fs_")
     try:
         log = os.path.join(d, "calls.log").replace("\\", "/")
-        for name in ("powershell.exe", "basename"):
+        for name in (PROCESS_READER, "basename"):
             with open(os.path.join(d, name), "w", newline="\n") as fh:
                 fh.write("#!/bin/sh\necho %s >> '%s'\n" % (name, log))
+            os.chmod(fh.name, 0o755)           # off Windows a script on PATH runs only when executable
         sh, env = _kp.bash()
         env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_NO_FRESHNESS="1")
         r = subprocess.run([sh, f"{KIT}/fullstop.sh", "--dry"], capture_output=True, text=True, env=env,
@@ -5137,9 +5143,9 @@ def _fullstop_one_snapshot():
         calls = open(log).read().split() if os.path.exists(log) else []
         if "TIER 3" not in r.stdout:
             return "fullstop --dry did not finish: %s" % (r.stdout + r.stderr)[-300:]
-        if calls.count("powershell.exe") != 1 or "basename" in calls:
-            return "fullstop --dry ran powershell %d time(s) and basename %d time(s)" % (
-                calls.count("powershell.exe"), calls.count("basename"))
+        if calls.count(PROCESS_READER) != 1 or "basename" in calls:
+            return "fullstop --dry ran %s %d time(s) and basename %d time(s)" % (
+                PROCESS_READER, calls.count(PROCESS_READER), calls.count("basename"))
         return None
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -5189,10 +5195,12 @@ def _health_one_snapshot():
         for i in range(6):
             open(os.path.join(sp, "wlog", "pull_main_s%d.log" % i), "w").write("10:00 s%d MATCH 02000000\n" % i)
         log = os.path.join(d, "calls.log").replace("\\", "/")
-        with open(os.path.join(d, "powershell.exe"), "w", newline="\n") as fh:
-            fh.write("#!/bin/sh\necho powershell >> '%s'\n" % log)
+        with open(os.path.join(d, PROCESS_READER), "w", newline="\n") as fh:
+            fh.write("#!/bin/sh\necho %s >> '%s'\n" % (PROCESS_READER, log))
+        os.chmod(fh.name, 0o755)               # off Windows a script on PATH runs only when executable
         with open(os.path.join(d, "stat"), "w", newline="\n") as fh:
             fh.write("#!/bin/sh\necho stat >> '%s'\nexec /usr/bin/stat \"$@\"\n" % log)
+        os.chmod(fh.name, 0o755)
         sh, env = _kp.bash()
         env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
         r = subprocess.run([sh, f"{KIT}/health.sh", "--once"], capture_output=True, text=True, env=env, timeout=300)
@@ -5204,9 +5212,9 @@ def _health_one_snapshot():
         shutil.rmtree(d, ignore_errors=True)
     if "ALERT driver" not in r.stdout:
         return "health.sh --once did not report the missing dispatcher: %r" % (r.stdout + r.stderr)[-300:]
-    if calls.count("powershell") != 1 or calls.count("stat") != 1:
-        return "one health cycle ran powershell %d time(s) and stat %d time(s)" % (
-            calls.count("powershell"), calls.count("stat"))
+    if calls.count(PROCESS_READER) != 1 or calls.count("stat") != 1:
+        return "one health cycle ran %s %d time(s) and stat %d time(s)" % (
+            PROCESS_READER, calls.count(PROCESS_READER), calls.count("stat"))
     return None
 
 
