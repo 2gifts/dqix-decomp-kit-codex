@@ -2472,8 +2472,6 @@ _FAKE_TOOL = "\n".join([
        "region re-download mwccarm.exe and dsd.exe at once (PermissionError)")
 def _regionsync_parallel_regions():
     import shutil
-    if not shutil.which("ninja"):
-        return "ninja is not on PATH"
     rs = load("regionsync")
     os.makedirs(f"{SP}/handwork", exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="regionsync_par_", dir=f"{SP}/handwork",
