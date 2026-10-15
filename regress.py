@@ -3612,6 +3612,126 @@ def _addrname():
     return None
 
 
+@check("retype reads function, signature and member requests the way cleanup workers write them",
+       "105 BLOCKED RETYPE rows each waited on a hand edit across files the worker was told not to touch")
+def _retype_parse():
+    R = load("retype")
+    funcs = {"AllocateEntryArrayFromVariant0207f12c", "SetVecYFromValue02033874", "GetField0x17dBits4To5IfFlag8_020795cc",
+             "IssueSlotCommand3_17_02239e48", "ApplyEventTag_021cf024", "DispatchWithHalfwords_021ca2d8",
+             "CopyObjectFields02048588", "RegisterCombatantSlot_0200fd38"}
+    known = set(R.mechclean.BUILTIN_WORDS) | {"Script", "Parameter", "GameObject", "Obj02033874", "Struct02012ff0",
+                                              "Animation3D", "GameResources", "GameState", "Object3D"}
+    read = lambda text: [got for _g, got in R.parse_request(text, funcs, known)]
+    one = read("AllocateEntryArrayFromVariant0207f12c(p) Script::Parameter*")
+    if one != [[{"kind": "fn", "name": "AllocateEntryArrayFromVariant0207f12c", "names": ["p"], "olds": [], "index": [],
+                 "sig": None, "ret": None, "type": "Script::Parameter*", "all": False}]]:
+        return "a named parameter request read as %r" % one
+    two = read("SetVecYFromValue02033874(Obj02033874*)+GetField0x17dBits4To5IfFlag8_020795cc(unsigned char*) GameObject*")
+    if [(c["name"], c["olds"], c["type"]) for c in two[0]] != [
+            ("SetVecYFromValue02033874", ["Obj02033874*"], "GameObject*"),
+            ("GetField0x17dBits4To5IfFlag8_020795cc", ["unsigned char*"], "GameObject*")]:
+        return "two functions selected by their old parameter types read as %r" % two
+    sig = read("IssueSlotCommand3_17_02239e48 int (void (*)(void*), unsigned short)")[0][0]
+    if sig["ret"] != "int" or [t for t, _ in sig["sig"]] != ["void (*)(void*)", "unsigned short"]:
+        return "a whole signature with a function pointer read as %r" % sig
+    pos = read("ApplyEventTag_021cf024(param 4 base) GameResources* — bytes match")[0][0]
+    named = read("DispatchWithHalfwords_021ca2d8 parameter ov should be GameResources* (bytes stay exact)")[0][0]
+    third = read("RegisterCombatantSlot_0200fd38 Object3D* (its third parameter; also more)")[0][0]
+    if (pos["index"], pos["names"], named["names"], third["index"]) != ([3], ["base"], ["ov"], [2]):
+        return "positional, named and ordinal parameters read as %r, %r, %r" % (pos, named, third)
+    members = read("Struct02012ff0::field8/fieldc Animation3D *")[0]
+    if [(m["cls"], m["member"], m["type"]) for m in members] != [("Struct02012ff0", "field8", "Animation3D *"),
+                                                                   ("Struct02012ff0", "fieldc", "Animation3D *")]:
+        return "two members of one class read as %r" % members
+    placed = read("GameObject::(member at 0x150, 0x144 on jpn) GameObject*")[0][0]
+    if (placed["member"], placed["offset"]) != (None, 0x150):
+        return "an unnamed member placed by its USA offset read as %r" % placed
+    for prose in ("GameState::unk_397d/unk_6fc0 GameState needs real members", "GameObject::source a pointer to it",
+                  "CopyObjectFields02048588"):
+        if not all(isinstance(got, str) for got in read(prose)):
+            return "prose with no type was read as a request: %r" % read(prose)
+    return None
+
+
+@check("retype drops the casts a retyped parameter, return or member forced, and retargets only a C-style cast",
+       "a retype that left `reinterpret_cast<Old*>(x)` at every call kept the cast it was made to remove; one that "
+       "retargeted a reinterpret_cast added a line prready refuses")
+def _retype_rewrites():
+    R = load("retype")
+    A = load("addrname")
+    info = ("_Z1FP3New", None, "F", ["Old*"], ["New*"])
+    text = ("void F(New*);\nvoid g(New* x, Other* y) {\n    F(reinterpret_cast<Old*>(x));\n    F((Old*)y);\n"
+            "    F(reinterpret_cast<Old*>(y));\n    F((Old*)(y + 1));\n}\n")
+    got = A.uncast(text, info, {(2, 0), (3, 0)})
+    want = ("void F(New*);\nvoid g(New* x, Other* y) {\n    F(x);\n    F((New*)y);\n    F(y);\n    F(y + 1);\n}\n")
+    if got != want:
+        return "call casts rewritten to %r" % got
+    reads = ("void f(S* a, T* t) {\n    if (a->f8) reinterpret_cast<Anim *>(a->f8)->Go();\n"
+             "    t->f8 = reinterpret_cast<int>(alloc());\n    ((Anim*)(t->f8))->Go();\n}\n")
+    plain = R.member_uncast(reads, "f8", "Anim*", "int")
+    kept = R.member_uncast(reads, "f8", "Anim*", "int", {0})
+    if "if (a->f8) a->f8->Go();" not in plain or "t->f8 = alloc();" not in plain or "    t->f8->Go();" not in plain:
+        return "member reads and stores rewritten to %r" % plain
+    if "t->f8 = static_cast<Anim*>(alloc());" not in kept:
+        return "a store the new type cannot take bare was not retargeted with static_cast: %r" % kept
+    value = R.member_uncast("void f(S* s) {\n    g(&(*reinterpret_cast<Foo*>(s->m)));\n    Foo* p = (Foo*)s->m;\n}\n",
+                            "m", "Foo", "char[0x88]")
+    if "g(&s->m);" not in value or "Foo* p = &s->m;" not in value:
+        return "a padding array retyped to a class was not taken by address: %r" % value
+    body = "    ((Manager*)(obj))->Reset();\n"
+    at = body.index("obj")
+    done = R.drop_cast_around(body, at, at + 3, {A.unconst("Manager*")})
+    if not done or done[0] != "    obj->Reset();\n":
+        return "a cast of a retyped parameter left %r" % (done and done[0])
+    pad = {"type": "char", "name": "unk_6fc0", "dims": "[0x7ff4 - 0x6fc0]"}
+    split = R.split_pad(pad, 0x6fc0, 0x7ff4, 0x7f58, 2, "short unk_7f58", "    ")
+    if split != "char unk_6fc0[0x7f58 - 0x6fc0];\n    short unk_7f58;\n    char unk_7f5a[0x7ff4 - 0x7f5a]":
+        return "a member added inside padding split it as %r" % split
+    return None
+
+
+@check("addrname.settle drops only the change whose unit compiles differently and names that unit",
+       "retype and --remangle each grew their own verify-and-drop loop")
+def _addrname_settle():
+    A = load("addrname")
+    real = A.mechclean.verify
+
+    def verify(original, new, mapping, jobs, work, first=False):
+        bad = [rel for rel, text in sorted(new.items()) if "bad" in text]
+        return (bad[:1] if first else bad), {rel: [] for rel in bad}
+    texts = lambda targets: ({"src/%s.cpp" % k: v for k, v in targets.items()}, {})
+    dropped = {}
+    A.mechclean.verify = verify
+    try:
+        got = A.settle({}, {"a": "bad", "b": "ok", "c": "ok"}, texts, lambda bad, seen, t: set(t), 1, "", dropped)
+    finally:
+        A.mechclean.verify = real
+    if got is None or sorted(got[0]) != ["b", "c"] or dropped != {"a": "src/a.cpp"}:
+        return "settle kept %r and dropped %r" % (got and sorted(got[0]), dropped)
+    return None
+
+
+@check("retype mangles a nested or typedef'd class the way mwcc does",
+       "MessageGlyphSlot is a typedef of State0204166c and Script::Parameter a nested struct; a probe that declared "
+       "them as plain structs computed a name no object exports")
+def _retype_mangle():
+    A = load("addrname")
+    R = load("retype")
+    nested = A.probe_name(None, "Foo", ["Script::Parameter*", "int"], False)
+    if nested != "_Z3FooPN6Script9ParameterEi":
+        return "a nested class parameter mangled as %r" % nested
+    plan = object.__new__(R.Plan)
+    plan.aliases = {"MessageGlyphSlot": "State0204166c", "Vector3fix": "Vector3i", "fix32_t": "int32_t",
+                    "int32_t": "signed int"}
+    canon = [plan.canon(t) for t in ("MessageGlyphSlot*", "Vector3fix*", "fix32_t")]
+    if canon != ["State0204166c*", "Vector3i*", "signed int"]:
+        return "typedefs resolved to %r" % canon
+    got = A.probe_name(None, "Foo", canon[:2], False)
+    if got != "_Z3FooP13State0204166cP8Vector3i":
+        return "typedef'd parameters mangled as %r" % got
+    return None
+
+
 @check("mechclean renames an extern \"C\" mangled free function only when the object stays identical",
        "the 5978 redeclarations whose parameters spell the mangling are a rename; the 410 whose widths "
        "contradict it change the call and need a worker")

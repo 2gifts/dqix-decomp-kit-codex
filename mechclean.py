@@ -732,17 +732,21 @@ def verify(original, new, mapping, jobs, work, first=False, regions=text_regions
     return bad, {rel: [headers[h] for h in edges[rel] & closure] for rel in bad}
 
 
-def queue(new, blobs, why):
-    queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
-    clash = sorted(set(new) & queued)
+def queued(manifest=MANIFEST):
+    return {ln.split("\t")[0] for ln in open(manifest, encoding="utf-8")} if os.path.exists(manifest) else set()
+
+
+def queue(new, blobs, why, root=f"{SP}/clean"):
+    manifest = f"{root}/manifest.tsv"
+    clash = sorted(set(new) & queued(manifest))
     if clash:
         print(f"REFUSED: {len(clash)} file(s) already queued in the manifest, e.g. {clash[0]}; land them first")
         return False
     for rel, text in sorted(new.items()):
-        os.makedirs(os.path.dirname(f"{SP}/clean/{rel}"), exist_ok=True)
-        with open(f"{SP}/clean/{rel}", "w", encoding="utf-8", newline="\n") as fh:
+        os.makedirs(os.path.dirname(f"{root}/{rel}"), exist_ok=True)
+        with open(f"{root}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-    with open(MANIFEST, "a", encoding="utf-8", newline="\n") as fh:
+    with open(manifest, "a", encoding="utf-8", newline="\n") as fh:
         fh.writelines(f"{rel}\t{blobs[rel]}\t{why}\n" for rel in sorted(new))
     return True
 
@@ -926,10 +930,10 @@ def tree_rows():
     def git(*args):
         return subprocess.run(["git", "-C", REPO, *args], capture_output=True, text=True, encoding="utf-8",
                               errors="replace").stdout
-    queued = {ln.split("\t")[0] for ln in open(MANIFEST, encoding="utf-8")} if os.path.exists(MANIFEST) else set()
+    waiting = queued()
     for rel in git("grep", "-l", "-E", r'extern "C" .*_Z[0-9N]', "origin/decomp-matching", "--", "src").split():
         rel = rel.split(":", 1)[1]
-        if rel.endswith(".cpp") and rel not in queued:
+        if rel.endswith(".cpp") and rel not in waiting:
             yield ["tree", rel.replace("/", "_"), rel, "", "EXTERN-C-MANGLED"]
 
 

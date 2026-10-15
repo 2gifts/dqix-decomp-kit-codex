@@ -117,11 +117,21 @@ remap = mechclean.remap
 VIEW = re.compile(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()=]*?\b(_Z\w+)\s*\(([^;{}]*)\)\s*[;{]')
 
 
+def nested_structs(words):
+    tree = {}
+    for w in words:
+        node = tree
+        for part in w.split("::"):
+            node = node.setdefault(part, {})
+    emit = lambda node: "".join("struct %s {%s};\n" % (k, emit(v)) for k, v in sorted(node.items()))
+    return emit(tree)
+
+
 def probe_name(qual, ident, params, const):
     words = {w for t in params for w in re.findall(r"[A-Za-z_]\w*(?:::\w+)*", t)} - mechclean.BUILTIN_WORDS
-    if any("::" in w for w in words) or (qual and "::" in qual):
+    if qual and "::" in qual:
         return None
-    head = "".join("struct %s;\n" % w for w in sorted(words - {qual}))
+    head = nested_structs(words - {qual})
     sig, c = ", ".join(params), " const" if const else ""
     body = ("struct %s { void %s(%s)%s; };\nvoid %s::%s(%s)%s {}\n" % (qual, ident, sig, c, qual, ident, sig, c)
             if qual else "void %s(%s) {}\n" % (ident, sig))
@@ -203,23 +213,45 @@ def retype(text, name, info):
     return pattern.sub(fix, text)
 
 
-CAST = re.compile(r"\(\s*((?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)?\s*\**)\s*\)\s*(.+)",
-                  re.S)
+CAST = re.compile(r"\(\s*((?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*(?:::\w+)*(?:\s+[A-Za-z_]\w*)?\s*\**)\s*\)"
+                  r"\s*(.+)", re.S)
+CPP_CAST = re.compile(r"(?:reinterpret|static)_cast\s*<\s*([^<>]+?)\s*>\s*(\(.*\))", re.S)
 
 
-def uncast(text, info):
+def cast_parts(arg):
+    m = CPP_CAST.fullmatch(arg.strip())
+    if m and mechclean.wrapped(m.group(2)):
+        return m.group(1), m.group(2)
+    m = CAST.fullmatch(arg.strip())
+    return (m.group(1), m.group(2)) if m and (mechclean.plain_expr(m.group(2)) or mechclean.wrapped(m.group(2))) \
+        else None
+
+
+def bare(inner, whole=False):
+    inner = inner.strip()
+    if mechclean.wrapped(inner) and (mechclean.plain_expr(inner[1:-1].strip()) or
+                                     (whole and len(mechclean.split_args(inner[1:-1])) == 1)):
+        return inner[1:-1].strip()
+    return inner
+
+
+def unconst(t):
+    return mechclean.norm_type(t).replace("const", "")
+
+
+def uncast(text, info, retarget=()):
     new, qual, base, real, params = info
-    at = {i: {mechclean.norm_type(params[i])} | ({mechclean.norm_type(real[i])} if i < len(real) else set())
+    at = {i: {unconst(params[i])} | ({unconst(real[i])} if i < len(real) else set())
           for i in range(len(params)) if i >= len(real) or mechclean.norm_type(params[i]) != mechclean.norm_type(real[i])}
-    for start, end, args in reversed(mechclean.call_sites(text, base)):
+    sites = mechclean.call_sites(text, base)
+    for k, (start, end, args) in reversed(list(enumerate(sites))):
         kept = list(args)
         for i, arg in enumerate(args):
-            m = CAST.fullmatch(arg)
-            if i in at and m and mechclean.norm_type(m.group(1)) in at[i] and \
-                    (mechclean.plain_expr(m.group(2)) or mechclean.wrapped(m.group(2))):
-                inner = m.group(2).strip()
-                kept[i] = inner[1:-1].strip() if mechclean.wrapped(inner) and mechclean.plain_expr(inner[1:-1].strip()) \
-                    else inner
+            m = cast_parts(arg)
+            if i in at and m and unconst(m[0]) in at[i]:
+                c_style = not CPP_CAST.fullmatch(arg.strip())
+                kept[i] = "(%s)%s" % (params[i], m[1]) if (k, i) in retarget and c_style and \
+                    unconst(m[0]) != unconst(params[i]) else bare(m[1], True)
         if kept != args:
             open_at = text.index("(", start)
             text = text[:open_at + 1] + ", ".join(kept) + text[end - 1:]
@@ -400,6 +432,31 @@ def remangle_texts(original, targets):
     return new, mapping
 
 
+def settle(original, targets, texts, suspects, jobs, work, dropped=None):
+    new, mapping = {}, {}
+    while targets:
+        new, mapping = texts(targets)
+        bad, seen = mechclean.verify(original, new, mapping, jobs, work)
+        if not bad:
+            break
+        found = suspects(bad, seen, targets)
+        drop = {}
+        for key in found:
+            alone = [bad[0]] if len(found) == 1 else \
+                mechclean.verify(original, *texts({key: targets[key]}), jobs, work, True)[0]
+            if alone:
+                drop[key] = alone[0]
+        drop = drop or {key: bad[0] for key in found}
+        print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} of {len(found)} symbol(s) there",
+              flush=True)
+        if not drop:
+            return None
+        if dropped is not None:
+            dropped.update(drop)
+        targets = {key: info for key, info in targets.items() if key not in drop}
+    return targets, new, mapping
+
+
 def remangle(jobs, keep, revs=(), casts=False, refine=()):
     blobs, original = mechclean.tree_texts()
     every = symbol_idents()
@@ -413,22 +470,17 @@ def remangle(jobs, keep, revs=(), casts=False, refine=()):
     targets.update({name: info for name, info in landed.items() if name not in targets and
                     any(info[2] in text and uncast(text, info) != text for text in calls)})
     print(f"symbols whose callers agree on another signature: {len(targets)}", flush=True)
-    while targets:
-        new, mapping = remangle_texts(original, targets)
-        bad, seen = mechclean.verify(original, new, mapping, jobs, WORK)
-        if not bad:
-            break
-        suspects = set()
+
+    def suspects(bad, seen, targets):
+        out = set()
         for rel in bad:
             text = original[rel] + "".join(original[h] for h in seen[rel])
-            suspects |= {name for name, info in targets.items() if name in text or re.search(r"\b%s\b" % info[2], text)}
-        drop = {name for name in suspects if len(suspects) == 1 or
-                mechclean.verify(original, *remangle_texts(original, {name: targets[name]}), jobs, WORK, True)[0]} or suspects
-        print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} of {len(suspects)} symbol(s) there",
-              flush=True)
-        if not drop:
-            return 1
-        targets = {name: info for name, info in targets.items() if name not in drop}
+            out |= {name for name, info in targets.items() if name in text or re.search(r"\b%s\b" % info[2], text)}
+        return out
+    kept = settle(original, targets, lambda t: remangle_texts(original, t), suspects, jobs, WORK)
+    if kept is None:
+        return 1
+    targets, new = kept[0], kept[1]
     if targets and not mechclean.queue(new, blobs, "remangle"):
         return 1
     with open(f"{WORK}/remangled.tsv", "w", encoding="utf-8", newline="\n") as fh:
