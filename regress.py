@@ -4622,6 +4622,40 @@ def _verdictwatch_reports():
     return None
 
 
+@check("a health.sh cycle reads the process table once and stats its logs in one call",
+       "each cycle ran four PowerShell process queries and a subshell plus stat per slot log: 8-10 s of "
+       "every 120 s")
+def _health_one_snapshot():
+    import shutil
+    import subprocess
+    sp = tempfile.mkdtemp(prefix="hl_")
+    d = tempfile.mkdtemp(prefix="hlbin_")
+    try:
+        os.makedirs(os.path.join(sp, "wlog"))
+        for i in range(6):
+            open(os.path.join(sp, "wlog", "pull_main_s%d.log" % i), "w").write("10:00 s%d MATCH 02000000\n" % i)
+        log = os.path.join(d, "calls.log").replace("\\", "/")
+        with open(os.path.join(d, "powershell.exe"), "w", newline="\n") as fh:
+            fh.write("#!/bin/sh\necho powershell >> '%s'\n" % log)
+        with open(os.path.join(d, "stat"), "w", newline="\n") as fh:
+            fh.write("#!/bin/sh\necho stat >> '%s'\nexec /usr/bin/stat \"$@\"\n" % log)
+        sh, env = _kp.bash()
+        env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
+        r = subprocess.run([sh, f"{KIT}/health.sh", "--once"], capture_output=True, text=True, env=env, timeout=300)
+        calls = open(log).read().split() if os.path.exists(log) else []
+    except subprocess.TimeoutExpired:
+        return "health.sh --once did not return"
+    finally:
+        shutil.rmtree(sp, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
+    if "ALERT driver" not in r.stdout:
+        return "health.sh --once did not report the missing dispatcher: %r" % (r.stdout + r.stderr)[-300:]
+    if calls.count("powershell") != 1 or calls.count("stat") != 1:
+        return "one health cycle ran powershell %d time(s) and stat %d time(s)" % (
+            calls.count("powershell"), calls.count("stat"))
+    return None
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
