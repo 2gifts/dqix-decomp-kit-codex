@@ -3848,6 +3848,134 @@ def _buildcfg_as_flags():
     return None
 
 
+def _member_layout(fields, size=0x40):
+    sub = {"size": 8, "fields": [_member_field("x", "short", 0, 2), _member_field("y", "short", 2, 2),
+                                 _member_field("z", "int", 4, 4)]}
+    return {"types": {"Obj": {"size": size, "fields": fields}, "Sub": sub}, "typedefs": {"u16": "unsigned short"},
+            "enums": []}
+
+
+def _member_field(name, base, off, size, ptr=0, elem=()):
+    return {"name": name, "base": base, "ptr": ptr, "dims": len(elem), "off": off, "size": size, "elem": list(elem)}
+
+
+@check("offsetmembers names the member the compiler places at a byte offset, in every region, never a pad",
+       "functions reach their object as `*(int*)((char*)p + 0x78)`; a rewrite from a hand count, into a pad, or "
+       "with one region's layout in a file another region builds names a field the code never touched")
+def _offsetmembers():
+    O = load("offsetmembers")
+    f = _member_field
+    common = [f("vals", "int", 0xc, 0x10, elem=[4]), f("sub", "Sub", 0x1c, 8), f("raw", "void", 0x24, 4, ptr=1),
+              f("name", "char", 0x28, 0x10, elem=[1])]
+    usa = _member_layout([f("pad0", "unsigned char", 0, 4, elem=[1]), f("count", "unsigned int", 4, 4),
+                          f("buffer", "unsigned short", 8, 4, ptr=1)] + common)
+    jpn = _member_layout([f("pad0", "unsigned char", 0, 4, elem=[1]), f("other", "int", 4, 4),
+                          f("count", "unsigned int", 8, 4)] + common)
+    for (off, mode, want), expect in (((4, "load", "int"), "{v}->count"), ((0x14, "load", "int"), "{v}->vals[2]"),
+                                      ((0x1e, "load", "short"), "{v}->sub.y"), ((0xc, "address", "int"), "{v}->vals"),
+                                      ((0x1c, "address", "short"), "&{v}->sub.x"), ((0x1c, "address", "Sub"), "&{v}->sub"),
+                                      ((0x1c, "arrow", "Sub"), "{v}->sub."),
+                                      ((0x2a, "address", "signed char"), "&{v}->name[2]"),
+                                      ((0x24, "load", "unsigned short*"), "((unsigned short*){v}->raw)")):
+        got = O.resolve(usa, "Obj", off, mode, want)[0]
+        if got != expect:
+            return "resolve(%#x, %s, %s) gave %r, want %r" % (off, mode, want, got, expect)
+    for (off, mode, want), why in (((0, "load", "int"), "pad"), ((4, "load", "short"), "type")):
+        if O.resolve(usa, "Obj", off, mode, want) != (None, why):
+            return "resolve(%#x, %s, %s) named a member, want none (%s)" % (off, mode, want, why)
+    if O.resolve(usa, "Obj", 4, "load", "int", exact=True) != (None, "signedness"):
+        return "an exact rewrite read an unsigned member as int"
+    pick = "#if defined(jpn)\n#define AT(j, u) j\n#else\n#define AT(j, u) u\n#endif\n"
+    text = (pick + "void f(Obj* p, int i) {\n    *(int*)((char*)p + 4) = i;\n    g((short*)((char*)p + 0x1c));\n"
+            "    h(*(int*)((char*)p + 0));\n    ((int*)((char*)p + 0xc))[i] = 1;\n    ((Sub*)((char*)p + 0x1c))->z = 2;\n"
+            "    unsigned char* b = (unsigned char*)p;\n    b[0x28] = 3;\n#if defined(jpn)\n"
+            "    *(int*)((char*)p + 8) = 0;\n#else\n    *(int*)((char*)p + 4) = 0;\n#endif\n"
+            "    *(int*)((char*)p + AT(8, 4)) = 5;\n}\n")
+    want = (pick + "void f(Obj* p, int i) {\n    *(int*)((char*)p + 4) = i;\n    g(&p->sub.x);\n"
+            "    h(*(int*)((char*)p + 0));\n    p->vals[i] = 1;\n    p->sub.z = 2;\n"
+            "    p->name[0] = 3;\n#if defined(jpn)\n    p->count = 0;\n#else\n    p->count = 0;\n#endif\n"
+            "    p->count = 5;\n}\n")
+    code, lo, hi = O.flat(text), text.index("{"), text.rindex("}")
+    live, lays = O.line_regions(text, O.REGIONS), {"usa": usa, "jpn": jpn, "eur": usa}
+    edits, misses = O.rewrite(text, code, lo, hi, "p", False, "Obj", lays, live, list(O.REGIONS))
+    more, missed = O.alias_edits(text, code, lo, hi, "p", "Obj", lays, live, list(O.REGIONS))
+    got = O.apply_edits(text, edits + more)
+    if got != want:
+        return "rewrite gave %r" % got
+    if sorted(m["why"] for m in misses + missed) != ["pad", "regions differ"]:
+        return "the accesses left were reported as %r" % [m["why"] for m in misses + missed]
+    prelude = ("#if defined(jpn)\nstruct Probe { int a; short b[3]; };\n#else\n"
+               "struct Probe { short b[3]; int a; unsigned char pad[4]; };\n#endif\n")
+    for region, size, where in (("usa", 16, {"b": (0, 6, [2]), "a": (8, 4, []), "pad": (12, 4, [1])}),
+                                ("jpn", 12, {"a": (0, 4, []), "b": (4, 6, [2])})):
+        lay = O.layouts(prelude, region, "Probe")
+        probe = lay and lay["types"].get("Probe")
+        if not probe or probe["size"] != size or \
+                {x["name"]: (x["off"], x["size"], x["elem"]) for x in probe["fields"]} != where:
+            return "the %s layout read from the compiler was %r" % (region, probe)
+    return None
+
+
+@check("memberize turns a free function taking its object into a member and every call into a member call",
+       "self-taking functions were written as free functions over `char* self`; a conversion that guessed the "
+       "class, kept a byte offset, or left a caller or a symbols.txt on the old name lands code no developer wrote")
+def _memberize():
+    Z = load("memberize")
+    O = Z.om
+    f = _member_field
+    header = "#pragma once\nstruct Foo {\n    unsigned char pad0[4];\n    int count;\n};\n"
+    defs = ('#include <globaldefs.h>\n\n// USA: func_02000010  (semantic: SetCount)\n'
+            'extern "C" ARM void func_02000010(char* self, int v) {\n    *(int*)(self + 4) = v;\n}\n\n'
+            '// USA: func_02000020\nextern "C" ARM void func_02000020(char* self) {\n    *(int*)(self + 0) = 1;\n}\n')
+    calls = ('struct Foo;\nextern "C" void func_02000010(void* obj, int v);\nextern "C" void func_02000020(void* obj);\n'
+             '\nvoid g(Foo* f) {\n    func_02000010(f, 3);\n    func_02000020(f);\n}\n')
+    mixed = ('struct Bar;\nextern "C" void func_02000030(char* self) {\n    *(int*)(self + 4) = 0;\n}\n'
+             'void h(Foo* f, Bar* r) {\n    func_02000030(f);\n    func_02000030(r);\n}\n'
+             'extern "C" void func_02000040(void* p) {\n}\nvoid k(Foo* f) {\n    func_02000040(f);\n}\n'
+             'extern "C" void func_02000050(char* self) {\n    func_02000040(self);\n}\n'
+             '#define func_02000060 func_02000070\nextern "C" void func_02000060(char* self) {\n}\n')
+    names = ["func_020000%d0" % n for n in (1, 2, 3, 4, 5, 6)]
+    symbols = "".join("%s kind:function(arm,size=0x10) addr:0x%s\n" % (name, name[5:]) for name in names)
+    current = {"include/Foo.h": header, "src/a.cpp": defs, "src/b.cpp": calls, "src/c.cpp": mixed,
+               "config/usa/arm9/symbols.txt": symbols, "config/eur/arm9/symbols.txt": symbols}
+    lay = _member_layout([f("pad0", "unsigned char", 0, 4, elem=[1]), f("count", "int", 4, 4)], 8)
+    lay["types"]["Foo"] = lay["types"].pop("Obj")
+    old = O.class_layouts
+    O.class_layouts = lambda original, cls, regions: {r: lay for r in regions} if cls == "Foo" else None
+    try:
+        model = Z.Model(current, {"Foo", "Bar"}, 1)
+        model.prove()
+        if model.proven.get(("src/a.cpp", "func_02000010")) != ("Foo", "caller"):
+            return "the class every caller passes was not proven: %r" % model.proven
+        if ("src/c.cpp", "func_02000030") in model.proven:
+            return "callers passing a Foo* and a Bar* still proved a class"
+        if ("src/c.cpp", "func_02000050") in model.proven:
+            return "a helper proven only by its callers proved every other caller's object too"
+        if not model.other.get(("src/c.cpp", "func_02000060")):
+            return "a function a #define renames was treated as called by its name"
+        S0 = {k: Z.static_checks(model, k, set(), False)[0] for k in model.defs if k[0] == "src/a.cpp"}
+        S, new, reasons = Z.settle_static(model, S0)
+    finally:
+        O.class_layouts = old
+    if sorted(S) != [("src/a.cpp", "func_02000010")] or S[("src/a.cpp", "func_02000010")]["name"] != "SetCount_02000010":
+        return "converted %r" % S
+    if Z.described(reasons.get(("src/a.cpp", "func_02000020"), [])) != "needs members: 0x0 int pad":
+        return "an offset into a pad was not reported as a missing member: %r" % reasons
+    if "ARM void Foo::SetCount_02000010(int v) {\n    count = v;\n}" not in new.get("src/a.cpp", "") or \
+            '#include "Foo.h"' not in new["src/a.cpp"]:
+        return "definition became %r" % new.get("src/a.cpp")
+    if new.get("src/b.cpp") != ('#include "Foo.h"\nextern "C" void func_02000020(void* obj);\n\nvoid g(Foo* f) {\n'
+                                "    f->SetCount_02000010(3);\n    func_02000020(f);\n}\n"):
+        return "caller became %r" % new.get("src/b.cpp")
+    if new.get("include/Foo.h") != header.replace("};", "    void SetCount_02000010(int v);\n};"):
+        return "header became %r" % new.get("include/Foo.h")
+    renamed = Z.rename_symbols(model, {}, {"func_02000010": "_ZN3Foo17SetCount_02000010Ei"})
+    if sorted(renamed) != ["config/eur/arm9/symbols.txt", "config/usa/arm9/symbols.txt"] or \
+            "_ZN3Foo17SetCount_02000010Ei kind:function" not in renamed["config/eur/arm9/symbols.txt"]:
+        return "symbols.txt renamed as %r" % renamed
+    return None
+
+
 @check("mechclean verify checks every unit that reaches a changed header through a relative include",
        "include/World/Zone3D.h includes \"ZoneFeatures.h\"; renaming ZoneFeatures::Reset passed verify "
        "and src/World/Zone3D.cpp then failed to compile in landclean")

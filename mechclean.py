@@ -685,7 +685,11 @@ def include_listing(root):
                         for d, _dirs, files in os.walk(root) for f in files))
 
 
-def verify(original, new, mapping, jobs, work, first=False):
+def text_regions(rel, text):
+    return ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, text)]
+
+
+def verify(original, new, mapping, jobs, work, first=False, regions=text_regions):
     headers, closure, tus = affected(original, new)
     state = include_state(f"{REPO}/include")
     print(f"files {len(new)}; translation units to check {len(tus)}", flush=True)
@@ -701,7 +705,7 @@ def verify(original, new, mapping, jobs, work, first=False):
     def check(rel):
         path = f"{work}/tu/{rel.replace('/', '_')}"
         text = new.get(rel, original[rel])
-        for region in ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, original[rel] + text)]:
+        for region in regions(rel, original[rel] + text):
             if stop:
                 return rel, True
             before = original_signature(original[rel], path, region, state)
