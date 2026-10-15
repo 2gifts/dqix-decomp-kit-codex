@@ -41,8 +41,12 @@ SPENDERS='supervise\.sh|run_all\.sh|run_module\.sh|run_overlay\.sh|run_main\.sh|
 # `python -u repairsweep.py` drivers survived a --hard stop on 2026-09-05, immediately respawned
 # their colorsweep children, and the kill line reported success. So match the script BASENAMES too,
 # read off disk for the same reason the path match exists -- a list read at run time cannot go stale.
-_cpunames=$(ls "$KIT"/*.py "$KIT"/*.sh 2>/dev/null | xargs -n1 basename 2>/dev/null \
-            | sed 's/\./\\./g' | paste -sd'|' -)
+_cpunames=""
+for _f in "$KIT"/*.py "$KIT"/*.sh; do
+  [ -e "$_f" ] || continue
+  _b=${_f##*/}
+  _cpunames="${_cpunames:+$_cpunames|}${_b//./\\.}"
+done
 CPUJOBS="dqix.sp|handwork.evo|permuter\.py${_cpunames:+|$_cpunames}"
 # Monitors and their children. These spend nothing, but a stop that leaves them running is not a
 # stop the user can see: on 2026-08-25 this script printed "none running" for both tiers while two
@@ -127,6 +131,32 @@ WATCH_FILTER="\$all = Get-CimInstance Win32_Process
       }
       \$ok })"
 
+SPEND1="(claude\.exe.*\s-p\s.*DQIX)|$SPENDERS"
+
+snapshot() {
+  powershell.exe -NoProfile -Command "$WATCH_FILTER
+    function row(\$tag, \$x) {
+      \$m = [int]((Get-Date) - \$x.CreationDate).TotalMinutes
+      \$c = \$x.CommandLine -replace '[\r\n]+', ' '; if (\$c.Length -gt 110) { \$c = \$c.Substring(0,110) }
+      '{0}@@@{1}@@@{2}@@@{3}' -f \$tag, \$x.ProcessId, \$m, \$c }
+    foreach (\$x in \$all) {
+      if (\$x.CommandLine -match '$SPEND1' -and \$x.CommandLine -notmatch '$EXCL') { row T1 \$x }
+      if (\$x.CommandLine -match '$CPUJOBS' -and \$x.CommandLine -notmatch '$NOTCPU' -and
+          \$x.CommandLine -notmatch '$EXCL') { row T2 \$x } }
+    foreach (\$x in \$w) { row T3 \$x }
+    'N1@@@' + @(\$all | Where-Object { \$_.CommandLine -notmatch '$EXCL' -and (
+      (\$_.Name -eq 'claude.exe' -and \$_.CommandLine -match '\s-p\s.*DQIX') -or
+      (\$_.CommandLine -match '$SPENDERS')) }).Count
+    'N3@@@' + \$w.Count" 2>/dev/null | tr -d '\r' | sed '/^$/d'
+}
+
+pick() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in "$1@@@"*) printf '%s\n' "${line#"$1@@@"}" ;; esac
+  done <<< "$SNAP"
+}
+
 kill_watchers() {   # monitors, and the tail/grep children a Monitor leaves behind
   powershell.exe -NoProfile -Command "$WATCH_FILTER
     foreach (\$x in \$w) { try { Stop-Process -Id \$x.ProcessId -Force -ErrorAction Stop } catch {} }
@@ -136,14 +166,6 @@ kill_watchers() {   # monitors, and the tail/grep children a Monitor leaves behi
 count_watchers() {
   powershell.exe -NoProfile -Command "$WATCH_FILTER
     \$w.Count" 2>/dev/null | tr -d '\r\n '
-}
-
-list_watchers() {
-  powershell.exe -NoProfile -Command "$WATCH_FILTER
-    \$w | ForEach-Object {
-      \$m = [int]((Get-Date) - \$_.CreationDate).TotalMinutes
-      \$c = \$_.CommandLine; if (\$c.Length -gt 110) { \$c = \$c.Substring(0,110) }
-      '{0}@@@{1}@@@{2}' -f \$_.ProcessId, \$m, \$c }" 2>/dev/null | tr -d '\r' | sed '/^$/d'
 }
 
 # TaskStop ends a Monitor task and leaves its bash/tail/grep running, so restarting a watch a few
@@ -172,7 +194,8 @@ fi
 
 echo
 echo "TIER 1 -- token spenders (immediate)"
-_found=$(ps_list "(claude\.exe.*\s-p\s.*DQIX)|$SPENDERS")
+SNAP=$(snapshot)
+_found=$(pick T1)
 if [ -z "$_found" ]; then
   echo "  none running"
 else
@@ -187,15 +210,16 @@ else
       echo "  $left reappeared -- killing again"
       kill_spenders > /dev/null
     done
+    SNAP=$(snapshot)
   fi
 fi
-left=$(count_workers)
+left=$(pick N1)
 echo "  spenders remaining: ${left:-0}"
 [ "${left:-0}" -gt 0 ] && echo "  !! run: bash \"$SP/killfleet.sh\" --all"
 
 echo
 echo "TIER 2 -- CPU-only jobs"
-_cpu=$(ps_list "$CPUJOBS" "$NOTCPU")
+_cpu=$(pick T2)
 if [ -z "$_cpu" ]; then
   echo "  none running"
 elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
@@ -214,6 +238,7 @@ elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
     [ -z "$_again" ] && break
     echo "  $(echo "$_again" | wc -l) reappeared -- killing again: $(kill_cpu)"
   done
+  SNAP=$(snapshot)
   echo "  CHECK THE REPO: a finish_wave killed mid-flight empties src/."
   echo "    git -C $REPO status --short | head"
   echo "    git -C $REPO checkout -- src/      # if it shows mass deletions"
@@ -229,11 +254,11 @@ fi
 
 echo
 echo "TIER 3 -- monitors and watcher children"
-_w=$(count_watchers)
+_w=$(pick N3)
 if [ "${_w:-0}" -eq 0 ]; then
   echo "  none running"
 elif [ "$DRY" -eq 1 ]; then
-  list_watchers | awk -F'@@@' '{printf "  pid %-7s %3s min  %s\n", $1, $2, $3}'
+  pick T3 | awk -F'@@@' '{printf "  pid %-7s %3s min  %s\n", $1, $2, $3}'
   echo "  ${_w} watcher process(es) would be killed"
 else
   echo "  killed: $(kill_watchers)"
@@ -255,6 +280,10 @@ elif [ -n "$_cpu" ]; then
 fi
 
 echo
-_wleft=$(count_watchers)
+if [ "$DRY" -eq 0 ] && [ "${_w:-0}" -gt 0 ]; then
+  _wleft=$(count_watchers)
+else
+  _wleft=$(pick N3)
+fi
 echo "STOPPED. token spend: $([ "${left:-0}" -eq 0 ] && echo "halted" || echo "STILL RUNNING (${left})")\
 $([ "${_wleft:-0}" -eq 0 ] && echo "" || echo ", ${_wleft} watcher(s) STILL RUNNING")"

@@ -4565,6 +4565,32 @@ def _suites_record_results():
     return None
 
 
+@check("fullstop --dry reads the process table once",
+       "six PowerShell process queries and a basename per kit script made every dry run take 20-40 s")
+def _fullstop_one_snapshot():
+    import shutil
+    import subprocess
+    d = tempfile.mkdtemp(prefix="fs_")
+    try:
+        log = os.path.join(d, "calls.log").replace("\\", "/")
+        for name in ("powershell.exe", "basename"):
+            with open(os.path.join(d, name), "w", newline="\n") as fh:
+                fh.write("#!/bin/sh\necho %s >> '%s'\n" % (name, log))
+        sh, env = _kp.bash()
+        env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_NO_FRESHNESS="1")
+        r = subprocess.run([sh, f"{KIT}/fullstop.sh", "--dry"], capture_output=True, text=True, env=env,
+                           timeout=300)
+        calls = open(log).read().split() if os.path.exists(log) else []
+        if "TIER 3" not in r.stdout:
+            return "fullstop --dry did not finish: %s" % (r.stdout + r.stderr)[-300:]
+        if calls.count("powershell.exe") != 1 or "basename" in calls:
+            return "fullstop --dry ran powershell %d time(s) and basename %d time(s)" % (
+                calls.count("powershell.exe"), calls.count("basename"))
+        return None
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
