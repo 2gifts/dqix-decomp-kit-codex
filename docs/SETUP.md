@@ -182,7 +182,7 @@ Kit, at the start of every session (`AGENTS.md` makes agents do this themselves)
     python selfcheck.py
 
 `kit_update.py` fetches the published kit and fast-forwards to it, then re-runs `kit_init.py` (with
-`--slow` when the gate or its tests changed). It pulls nothing while `pull_all.pid`, `wave.lock` or
+`--slow` when the gate or its fixtures changed, or the crack tests are not proven for the new code). It pulls nothing while `pull_all.pid`, `wave.lock` or
 `claims/INTEGRATING` exists, or while tracked files have local changes or local commits diverge;
 it says which and exits non-zero. A fork of the kit still updates from `ZevyaDev/dqix-decomp-kit`;
 `DQIX_KIT_URL` and `DQIX_KIT_BRANCH` point it elsewhere.

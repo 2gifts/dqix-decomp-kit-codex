@@ -4678,6 +4678,29 @@ def _behind_cache_keyed_to_head():
     return None
 
 
+@check("a kit update runs the end-to-end crack tests only when what they prove changed",
+       "every update whose commits touched regress.py ran regress.py --slow inside kit_init while the "
+       "dispatcher held every slot: 10:56-11:08 on 2026-10-14 for a prready.py fix; 103 of 200 kit "
+       "commits touch regress.py, 8 touch the sweep, the gate or the fixtures")
+def _kit_update_slow_when_unproven():
+    ku = load("kit_update")
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "wlog"))
+        ku.SP = d
+        with open(os.path.join(d, "wlog", "functional_stamp.txt"), "w", encoding="utf-8") as fh:
+            fh.write(sweep_fingerprint())
+        if ku.slow(["regress.py", "prready.py"]):
+            return "a regress.py change with the crack tests proven for this code ran regress.py --slow"
+        missed = [f for f in ("colorsweep.py", "wdiff.py", "wgate.py", "regress_fixtures/x.cpp") if not ku.slow([f])]
+        if missed:
+            return f"an update touching {missed} skipped the crack tests"
+        with open(os.path.join(d, "wlog", "functional_stamp.txt"), "w", encoding="utf-8") as fh:
+            fh.write("stale")
+        if not ku.slow(["regress.py"]):
+            return "a regress.py change with a stale functional stamp skipped the crack tests"
+    return None
+
+
 @check("cov.py reads the newer of the checkout's and the integration tree's build report",
        "waves build in the integration tree, so cov.py and health read a two-day-old report from the "
        "decomp checkout: 90.04% while CI on the same commit said 92.40%")
