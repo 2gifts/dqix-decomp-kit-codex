@@ -4591,6 +4591,37 @@ def _fullstop_one_snapshot():
         shutil.rmtree(d, ignore_errors=True)
 
 
+@check("verdictwatch reports a verdict appended to a slot log it has already seen, once",
+       "it never recorded the offset of a log it saw for the first time, so it reported nothing, and each "
+       "pass spawned four processes per slot log: 18 s of every 60 s cycle")
+def _verdictwatch_reports():
+    import shutil
+    import subprocess
+    sp = tempfile.mkdtemp(prefix="vw_")
+    try:
+        os.makedirs(os.path.join(sp, "wlog"))
+        log = os.path.join(sp, "wlog", "pull_main_s1.log")
+        with open(log, "w", newline="\n") as fh:
+            fh.write("10:00 s1 MATCH 02000000 old\n")
+        sh, env = _kp.bash()
+        env = dict(env, DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
+
+        def once():
+            return subprocess.run([sh, f"{KIT}/verdictwatch.sh", "--once"], capture_output=True, text=True,
+                                  env=env, timeout=120).stdout.splitlines()
+        first = once()
+        with open(log, "a", newline="\n") as fh:
+            fh.write("10:01 s1 miss 02000004 bytediff 4\nnoise\n")
+        second, third = once(), once()
+    except subprocess.TimeoutExpired:
+        return "verdictwatch --once did not return"
+    finally:
+        shutil.rmtree(sp, ignore_errors=True)
+    if first or third or second != ["pull_main_s1 10:01 s1 miss 02000004 bytediff 4"]:
+        return "verdictwatch passes printed %r, %r, %r" % (first, second, third)
+    return None
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
