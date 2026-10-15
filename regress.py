@@ -29,23 +29,58 @@ sys.path.insert(0, KIT)
 
 FAILED = []
 PASSED = [0]
+CHECKS = []
+SHARDS = 8
 
 
 def check(name, fault):
     def deco(fn):
-        try:
-            bad = fn()
-        except Exception as e:                       # a test that explodes is a failure
-            bad = "raised %s: %s" % (type(e).__name__, e)
-        if bad:
-            FAILED.append((name, fault, bad))
-            print("FAIL  %s: %s" % (name, bad))
-            print("      the fault it detects: %s" % fault)
-        else:
-            PASSED[0] += 1
-            print("ok    %s" % name)
+        CHECKS.append((name, fault, fn))
         return fn
     return deco
+
+
+def run_check(name, fault, fn):
+    try:
+        bad = fn()
+    except Exception as e:                       # a test that explodes is a failure
+        bad = "raised %s: %s" % (type(e).__name__, e)
+    if bad:
+        FAILED.append((name, fault, bad))
+        print("FAIL  %s: %s" % (name, bad))
+        print("      the fault it detects: %s" % fault)
+    else:
+        PASSED[0] += 1
+        print("ok    %s" % name)
+    sys.stdout.flush()
+
+
+def run_shard(k, n):
+    for name, fault, fn in CHECKS[k::n]:
+        run_check(name, fault, fn)
+    print("RESULT " + json.dumps({"passed": PASSED[0], "failed": FAILED}))
+
+
+def run_checks(shards=SHARDS):
+    import subprocess
+    procs = [subprocess.Popen([sys.executable, os.path.abspath(__file__), "--shard", "%d/%d" % (k, shards)],
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                              errors="replace") for k in range(shards)]
+    for k, p in enumerate(procs):
+        out = p.communicate()[0]
+        result = None
+        for line in out.splitlines():
+            if line.startswith("RESULT "):
+                result = json.loads(line[7:])
+            else:
+                print(line)
+        if result is None:
+            FAILED.append(("shard %d/%d" % (k, shards), "a regress shard must report its result",
+                           "exit %s without a RESULT line: %s" % (p.returncode, out.strip()[-300:])))
+            continue
+        PASSED[0] += result["passed"]
+        FAILED.extend(tuple(f) for f in result["failed"])
+    return FAILED
 
 
 def load(mod):
@@ -1695,6 +1730,48 @@ def _prready_region_only():
     return None
 
 
+@check("prready.py decomp reads a pull request in a fixed number of git calls, not several per file",
+       "one git show and two git diffs per changed file took prready.py decomp 17 minutes on a large pull request")
+def _prready_batched():
+    import subprocess
+    P = load("prready")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+        def git(*args):
+            return subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.autocrlf=false",
+                                   *args], capture_output=True, text=True, check=True).stdout.strip()
+
+        def commit(files):
+            for path, text in files.items():
+                os.makedirs(os.path.dirname(os.path.join(d, path)), exist_ok=True)
+                with open(os.path.join(d, path), "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+            git("add", "-A")
+            git("commit", "-qm", "x")
+
+        git("init", "-q", "-b", "main")
+        wired = "".join("src/F%d.cpp:\n    complete\n    .text start:0x%08x end:0x%08x\n" % (i, 0x02000000 + 16 * i,
+                                                                                         0x02000010 + 16 * i)
+                        for i in range(40))
+        commit({"config/usa/arm9/delinks.txt": wired, "config/usa/arm9/symbols.txt": "",
+                **{"src/F%d.cpp" % i: "// USA: F%d\nvoid F%d() {}\n" % (i, i) for i in range(40)}})
+        tip = git("rev-parse", "HEAD")
+        commit({"src/F%d.cpp" % i: "// USA: F%d\nvoid F%d() { }\n" % (i, i) for i in range(40)})
+        P.REPO, calls, real = d, [0], subprocess.run
+
+        def counted(*args, **kwargs):
+            calls[0] += 1
+            return real(*args, **kwargs)
+        subprocess.run = counted
+        try:
+            problems = P.decomp(tip)
+        finally:
+            subprocess.run = real
+    if problems:
+        return "prready.py decomp refused a clean 40-file change: %r" % problems[:3]
+    if calls[0] > 12:
+        return "prready.py decomp ran %d git commands for 40 changed files" % calls[0]
+
+
 @check("prready.py refuses a pull request built on a stale kit or decomp, and passes a current one",
        "pull requests built on stale checkouts reverted the CI workflow, re-added a file for an address "
        "another file owned, renamed a symbol in one region only, recorded dead ends for matched "
@@ -1737,7 +1814,8 @@ def _prready():
             "src/A.cpp": "void Foo() {}\n",
             "src/B.cpp": "void Baz() {}\n"})
         commit(pub_kit, {n: open(f"{KIT}/{n}", encoding="utf-8").read()
-                         for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py", "plausible.py", "mangle.py")}
+                         for n in ("prready.py", "delinked.py", "kitpaths.py", "pragmas.py", "plausible.py", "mangle.py",
+                                   "gitread.py")}
                | {"worker_src/deadends.md": "# dead ends\n", "worker_src/core.md": "# core\n"})
         git(d, "clone", "-q", pub_decomp, decomp)
         git(d, "clone", "-q", pub_kit, kit)
@@ -4266,6 +4344,11 @@ def _repairsweep_respects_asmpark():
 
 
 if __name__ == "__main__":
+    if "--shard" in sys.argv:
+        k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
+        run_shard(k, n)
+        sys.exit(0)
+    run_checks()
     slow = "--slow" in sys.argv
     nbad = run_functional() if slow else 0
     if slow and not nbad and not FAILED:

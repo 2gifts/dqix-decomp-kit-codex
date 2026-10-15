@@ -221,6 +221,15 @@ def split_args(params):
     return out + [cur]
 
 
+def demangle_all(names):
+    todo = sorted({n for n in names if n not in DEMANGLED and "\n" not in n})
+    tool = shutil.which("c++filt")
+    if todo and tool:
+        out = subprocess.run([tool], input="\n".join(todo) + "\n", capture_output=True, text=True).stdout.splitlines()
+        if len(out) == len(todo):
+            DEMANGLED.update((n, d.strip()) for n, d in zip(todo, out))
+
+
 def demangle(name):
     if name not in DEMANGLED:
         tool = shutil.which("c++filt")

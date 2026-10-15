@@ -10,6 +10,7 @@ import sys
 from collections import Counter
 
 import addrname
+import gitread
 import mechclean
 
 REPO = _kp.REPO
@@ -33,13 +34,14 @@ def git(*args):
 
 def functions(rev):
     out = {}
-    for path in git("ls-tree", "-r", "--name-only", rev, "config/usa/arm9").split():
-        if path.endswith("symbols.txt"):
-            m = re.search(r"/ov(\d+)/", path)
-            for line in git("show", "%s:%s" % (rev, path)).splitlines():
-                s = SYM.match(line)
-                if s and s.group(2) == "function":
-                    out[(m.group(1) if m else "main", int(s.group(3), 16))] = s.group(1)
+    paths = [p for p in git("ls-tree", "-r", "--name-only", rev, "config/usa/arm9").split() if p.endswith("symbols.txt")]
+    texts = gitread.blobs(REPO, ["%s:%s" % (rev, p) for p in paths])
+    for path in paths:
+        m = re.search(r"/ov(\d+)/", path)
+        for line in texts.get("%s:%s" % (rev, path), "").splitlines():
+            s = SYM.match(line)
+            if s and s.group(2) == "function":
+                out[(m.group(1) if m else "main", int(s.group(3), 16))] = s.group(1)
     return out
 
 
@@ -76,9 +78,9 @@ def declares_member(text, cls, name):
 
 
 def headers(rev):
-    return {p: git("show", "%s:%s" % (rev, p))
-            for p in git("ls-tree", "-r", "--name-only", rev, "include").split()
-            if p.endswith((".h", ".hpp"))}
+    paths = [p for p in git("ls-tree", "-r", "--name-only", rev, "include").split() if p.endswith((".h", ".hpp"))]
+    texts = gitread.blobs(REPO, ["%s:%s" % (rev, p) for p in paths])
+    return {p: texts.get("%s:%s" % (rev, p), "") for p in paths}
 
 
 def type_names(texts):
@@ -126,6 +128,7 @@ def build(rev):
     shared = Counter([ident(s) for s in old.values()] + [ident(new[k]) for k in new if k not in old])
     current = set(new.values())
     retypes = {}
+    mechclean.demangle_all(list(ren) + list(ren.values()))
     for o, n in ren.items():
         p = ident(o)
         if p == o or shared[p] != 1 or p in current:

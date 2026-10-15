@@ -13,9 +13,11 @@ import os
 import re
 import subprocess
 import sys
+from concurrent.futures import ProcessPoolExecutor
 
 os.environ["DQIX_NO_FRESHNESS"] = "1"
 import delinked
+import gitread
 import kitpaths
 import plausible
 from pragmas import CODEGEN_PRAGMA
@@ -65,28 +67,53 @@ def behind(repo, tip):
     return int(git(repo, "rev-list", "--count", f"HEAD..{tip}").stdout.strip() or 0)
 
 
-def show(repo, rev, path):
-    return git(repo, "show", f"{rev}:{path}").stdout
+def gained(pair):
+    return plausible.gained(*pair)
 
 
-def delinks(repo, rev, root):
-    names = git(repo, "ls-tree", "-r", "--name-only", rev, root).stdout.split()
-    return [show(repo, rev, n) for n in names if n.endswith("delinks.txt")]
+def plausible_gained(pairs):
+    if len(pairs) < 200:
+        return [gained(p) for p in pairs]
+    with ProcessPoolExecutor(min(8, os.cpu_count() or 1)) as pool:
+        return list(pool.map(gained, pairs, chunksize=32))
+
+
+class Tree:
+    def __init__(self, repo):
+        self.repo, self.cache = repo, {}
+
+    def prefetch(self, rev, paths):
+        specs = [f"{rev}:{p}" for p in paths if f"{rev}:{p}" not in self.cache]
+        self.cache.update(gitread.blobs(self.repo, specs))
+
+    def show(self, rev, path):
+        self.prefetch(rev, [path])
+        return self.cache.get(f"{rev}:{path}", "")
+
+
+def files(repo, rev, root):
+    return git(repo, "ls-tree", "-r", "--name-only", rev, root).stdout.split()
+
+
+def delinks(tree, rev, root):
+    names = [n for n in files(tree.repo, rev, root) if n.endswith("delinks.txt")]
+    tree.prefetch(rev, names)
+    return [tree.show(rev, n) for n in names]
 
 
 def landed_functions(repo, rev, root):
-    found = set()
-    for n in git(repo, "ls-tree", "-r", "--name-only", rev, root).stdout.split():
-        if n.endswith("delinks.txt"):
-            texts = [show(repo, rev, n)]
-            funcs = FUNCTION.findall(show(repo, rev, n[:-len("delinks.txt")] + "symbols.txt"))
-            found |= {int(a, 16) for a in funcs if delinked.covers(int(a, 16), texts)}
+    tree, found = Tree(repo), set()
+    names = [n for n in files(repo, rev, root) if n.endswith("delinks.txt")]
+    tree.prefetch(rev, names + [n[:-len("delinks.txt")] + "symbols.txt" for n in names])
+    for n in names:
+        texts = [tree.show(rev, n)]
+        funcs = FUNCTION.findall(tree.show(rev, n[:-len("delinks.txt")] + "symbols.txt"))
+        found |= {int(a, 16) for a in funcs if delinked.covers(int(a, 16), texts)}
     return found
 
 
 def diff_lines(repo, tip, path, sign):
-    out = git(repo, "diff", "-U0", f"{tip}...HEAD", "--", path).stdout.splitlines()
-    return [l[1:] for l in out if l.startswith(sign) and not l.startswith(sign * 3)]
+    return gitread.diff_lines(repo, [f"{tip}...HEAD"], [path]).get(path, ([], []))[sign == "-"]
 
 
 def names(text):
@@ -131,6 +158,16 @@ def kit(kit_tip, decomp_tip):
 def decomp(decomp_tip):
     problems = []
     changed = git(REPO, "diff", "--name-only", f"{decomp_tip}...HEAD").stdout.split()
+    lines = gitread.diff_lines(REPO, [f"{decomp_tip}...HEAD"], ["src", "config"])
+    plus = lambda path: lines.get(path, ([], []))[0]
+    minus = lambda path: lines.get(path, ([], []))[1]
+    regions = [p.rstrip("/").split("/")[-1] for p in git(REPO, "ls-tree", "-d", "--name-only", "HEAD", "config/").stdout.split()]
+    tree = Tree(REPO)
+    symbols = [m for m in map(SYMBOLS.match, changed) if m]
+    tree.prefetch("HEAD", [p for p in changed if p.startswith(MATCH_PATHS)]
+                  + [f"config/{r}/{m.group(2)}" for m in symbols for r in regions])
+    tree.prefetch(decomp_tip, [p for p in changed if p.startswith(("src/", "config/usa/"))])
+    show = lambda repo, rev, path: tree.show(rev, path)
     reviewed = set(filter(None, os.environ.get("PRREADY_REVIEWED", "").split(os.pathsep)))
     for path in changed:
         if not path.startswith(MATCH_PATHS):
@@ -139,40 +176,38 @@ def decomp(decomp_tip):
                                 f"git checkout {decomp_tip[:10]} -- {path}, or send it as its own pull request")
         elif MARKER.search(show(REPO, "HEAD", path)):
             problems.append(f"CONFLICT MARKERS in {path}")
-    wired = "\n".join(delinks(REPO, "HEAD", "config"))
+    wired = "\n".join(delinks(tree, "HEAD", "config"))
     added = git(REPO, "diff", "--name-only", "--diff-filter=A", f"{decomp_tip}...HEAD", "--", "src").stdout.split()
     for path in added:
         if path.endswith(SOURCE) and f"{path}:" not in wired:
             problems.append(f"DEAD FILE {path}: no delinks.txt entry names it; delete it")
         elif path.endswith((".c", ".cpp")) and not region_tagged(show(REPO, "HEAD", path)):
             problems.append(f"NO USA TAG {path}: put `// USA: <USA symbol>` on the line above the definition")
-    for path in changed:
-        if path.startswith("src/") and path.endswith((".c", ".cpp")):
-            new = plausible.gained(show(REPO, decomp_tip, path), show(REPO, "HEAD", path))
-            if new:
-                problems.append(f"IMPLAUSIBLE {path}: adds {', '.join(new)}; write what a developer wrote "
-                                f"(worker_src/core.md, NATURAL FORMS THAT MATCH WHERE A TRICK DID)")
+    sources = [p for p in changed if p.startswith("src/") and p.endswith((".c", ".cpp"))]
+    for path, new in zip(sources, plausible_gained([(show(REPO, decomp_tip, p), show(REPO, "HEAD", p)) for p in sources])):
+        if new:
+            problems.append(f"IMPLAUSIBLE {path}: adds {', '.join(new)}; write what a developer wrote "
+                            f"(worker_src/core.md, NATURAL FORMS THAT MATCH WHERE A TRICK DID)")
     for path in changed:
         if path.startswith("src/"):
-            gained = (len(CODEGEN_PRAGMA.findall("\n".join(diff_lines(REPO, decomp_tip, path, "+"))))
-                      - len(CODEGEN_PRAGMA.findall("\n".join(diff_lines(REPO, decomp_tip, path, "-")))))
+            gained = (len(CODEGEN_PRAGMA.findall("\n".join(plus(path))))
+                      - len(CODEGEN_PRAGMA.findall("\n".join(minus(path)))))
             if gained > 0:
                 problems.append(f"CODEGEN PRAGMA {path}: adds {gained}; a match never lands behind one "
                                 f"(AGENTS.md rule 8): remove it and find what the source lacks")
     for path in changed:
         if path.startswith("config/usa/") and path.endswith("symbols.txt"):
             before = names(show(REPO, decomp_tip, path))
-            for line in diff_lines(REPO, decomp_tip, path, "+"):
+            for line in plus(path):
                 m = re.match(r"(_Z\S+) kind:function\S*\s+addr:0x([0-9a-fA-F]+)", line)
                 if m and m.group(1) not in before and m.group(2).lower()[-8:] not in m.group(1).lower():
                     problems.append(f"NAME WITHOUT ADDRESS {m.group(1)} in {path}: end the C++ name with its USA "
                                     "address, <name>_<addr> in main or <name>_ovNNN_<addr> in an overlay")
-    regions = [p.rstrip("/").split("/")[-1] for p in git(REPO, "ls-tree", "-d", "--name-only", "HEAD", "config/").stdout.split()]
     for path in changed:
         m = SYMBOLS.match(path)
         if not m:
             continue
-        removed = "\n".join(diff_lines(REPO, decomp_tip, path, "-"))
+        removed = "\n".join(minus(path))
         gone = names(removed) - names(show(REPO, "HEAD", path))
         was_at = addrs(removed)
         now_named = {a: n for n, a in addrs(show(REPO, "HEAD", path)).items()}

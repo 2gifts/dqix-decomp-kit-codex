@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 
+import gitread
 import kitpaths
 import mechclean
 
@@ -74,11 +75,9 @@ def renamed(name, suffix):
 
 
 def kept_names(ref):
-    out = set()
-    for rel in git("ls-tree", "-r", "--name-only", ref, "--", "config").split() if ref else []:
-        if rel.endswith("symbols.txt"):
-            out |= {n for n, _ in FUNC.findall(git("show", f"{ref}:{rel}"))}
-    return out
+    rels = [r for r in git("ls-tree", "-r", "--name-only", ref, "--", "config").split() if r.endswith("symbols.txt")] \
+        if ref else []
+    return {n for text in gitread.blobs(REPO, [f"{ref}:{r}" for r in rels]).values() for n, _ in FUNC.findall(text)}
 
 
 def targets(keep):
@@ -223,16 +222,18 @@ def history(revs):
     out = {}
     for rev in revs:
         old = {}
-        for cfg in git("ls-tree", "-r", "--name-only", f"{rev}^", "--", "config/usa/arm9").split():
-            if cfg.endswith("symbols.txt"):
-                for name, addr in FUNC.findall(git("show", f"{rev}^:{cfg}")):
-                    if current.get((cfg, addr.lower()), name) != name:
-                        old[name] = current[(cfg, addr.lower())]
+        cfgs = [c for c in git("ls-tree", "-r", "--name-only", f"{rev}^", "--", "config/usa/arm9").split()
+                if c.endswith("symbols.txt")]
+        for spec, text in gitread.blobs(REPO, [f"{rev}^:{c}" for c in cfgs]).items():
+            cfg = spec.split(":", 1)[1]
+            for name, addr in FUNC.findall(text):
+                if current.get((cfg, addr.lower()), name) != name:
+                    old[name] = current[(cfg, addr.lower())]
         names = alternation(old)
-        for rel in git("diff-tree", "--no-commit-id", "-r", "--name-only", rev, "--", "src").split():
-            if rel.endswith((".c", ".cpp")):
-                text = git("show", f"{rev}^:{rel}")
-                out[f"{rev}:{rel}"] = names.sub(lambda m: old[m.group(0)], text) if names else text
+        rels = [r for r in git("diff-tree", "--no-commit-id", "-r", "--name-only", rev, "--", "src").split()
+                if r.endswith((".c", ".cpp"))]
+        for spec, text in gitread.blobs(REPO, [f"{rev}^:{r}" for r in rels]).items():
+            out[f"{rev}:{spec.split(':', 1)[1]}"] = names.sub(lambda m: old[m.group(0)], text) if names else text
     return out
 
 

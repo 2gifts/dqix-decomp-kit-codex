@@ -28,13 +28,17 @@ def read(p):
 CHECKS = []
 
 
+REGRESS = []
+
+
 def _regress():
-    """regress.py, run in-process so it cannot be forgotten."""
-    import importlib.util as il
-    spec = il.spec_from_file_location("_regress", f"{KIT}/regress.py")
-    m = il.module_from_spec(spec)
-    spec.loader.exec_module(m)          # the checks run at import
-    return m
+    if not REGRESS:
+        import importlib.util as il
+        spec = il.spec_from_file_location("_regress", f"{KIT}/regress.py")
+        m = il.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        REGRESS.append(m)
+    return REGRESS[0]
 
 
 def check(name, why):
@@ -181,6 +185,7 @@ def _sweep():
        "run is a suite that gets skipped")
 def _behaviour():
     m = _regress()
+    m.run_checks()
     if m.FAILED:
         return "%d behaviour test(s) failing: %s" % (len(m.FAILED),
                                                      ", ".join(n for n, _w, _b in m.FAILED))
