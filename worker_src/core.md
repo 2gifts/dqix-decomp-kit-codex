@@ -895,6 +895,13 @@ Ask "does the target keep this in a register or on the stack?" and add or remove
 
 ## NATURAL FORMS THAT MATCH WHERE A TRICK DID
 Each was a byte-exact replacement for an invented construct; write these first.
+- A cast never fixes a type; pointer casts emit no code. `reinterpret_cast` is refused outright, and
+  one value cast to the same type twice (`static_cast<MapEntryList*>(self->unknown_ptr_41c4)`, `021a5cbc`)
+  means the member or return type is wrong: type the header member or the callee's return value once
+  and every cast goes. A `void*` getter its callers read as different types gets a C++03 inline template
+  in the header, `template <class T> T* GetEntry(int i) { return static_cast<T*>(GetEntryRaw(i)); }`,
+  the one cast written once. An object passed as `self` is `this`: write `Class::Method`, not
+  `F(char* self)` with byte offsets (`020678bc`).
 - A flag local copied from a compare (`cc = r0 - 0; if (cc == 0) goto L;`) is a structured `if`/`else`
   on the value itself (`02158038`, `02186dc8`, `021dcc8c`, `02184324`).
 - An 8-byte `{fn, locator}` pair copied whole and dispatched by testing `locator & 1` is a C++
