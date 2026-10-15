@@ -160,6 +160,9 @@ def main():
             print(f"REFUSED: integ_tree.py publish: {out.strip()[-300:]}")
             return 1
         write_rows(LANDED, good, "a")
+        if any(why in COUPLED for _, _, why in good):
+            pooled = run(KIT, sys.executable, f"{KIT}/pad/repool.py", "--apply", "--rev", tip)[1].strip()
+            print("pools: " + (pooled.splitlines() or [""])[-1])
     write_rows(REJECTED, stale + red, "a")
     done = set(entries)
     write_rows(MANIFEST, [e for e in rows() if e not in done], "w")

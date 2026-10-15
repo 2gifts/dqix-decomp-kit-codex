@@ -257,6 +257,8 @@ def _hand_work_recorded():
 def _repooled():
     if "repool.py" not in read(f"{KIT}/merge_human.sh"):
         return "merge_human.sh no longer runs pad/repool.py after a merge"
+    if "repool.py" not in read(f"{KIT}/landclean.py"):
+        return "landclean.py no longer runs pad/repool.py after a rename lands"
     import importlib.util as il
     spec = il.spec_from_file_location("_repool", f"{KIT}/pad/repool.py")
     R = il.module_from_spec(spec)
