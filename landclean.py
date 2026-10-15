@@ -1,8 +1,8 @@
 import os
-import shutil
 import subprocess
 import sys
 
+import gitread
 import kitpaths
 import regionsync
 
@@ -22,8 +22,10 @@ With reviewed.txt (one repo path per line), only those rows land; the rest stay 
 Lands rewritten sources of functions already on decomp-matching. $SP/clean/manifest.tsv lists
 `<repo path>\\t<blob it replaces>\\t<why>`; $SP/clean/<repo path> is the rewrite. Under the wave lock,
 from the published tip of the integration tree: drops a row whose file changed since its blob,
-applies the rest, requires ninja check and sha1 in usa/jpn/eur, halves the batch until every part is
-green, commits what stays green, publishes, and moves every row to landed.tsv or rejected.tsv.
+applies the rest, requires ninja check and sha1 in usa/jpn/eur (built at once), sets aside the rows a
+red build's log names (or half the batch when it names none) until what stays builds green as one
+set, commits that set, publishes, and moves every row to landed.tsv or rejected.tsv. A batch that is
+red with nothing named builds the tip alone; when the tip is red too, every row stays queued.
 Exit 0: landed or nothing to land. 1: refused."""
 
 
@@ -54,11 +56,11 @@ def rows():
 
 
 def split_stale(tree, entries):
+    current = gitread.blob_ids(tree, [f"HEAD:{rel}" for rel, _, _ in entries])
     fresh, stale = [], []
     for rel, base, why in entries:
-        current = git(tree, "rev-parse", f"HEAD:{rel}")[1].strip()
         missing = not os.path.isfile(f"{CLEAN}/{rel}")
-        (stale if current != base or missing else fresh).append((rel, base, why))
+        (stale if current.get(f"HEAD:{rel}") != base or missing else fresh).append((rel, base, why))
     return fresh, stale
 
 
@@ -76,37 +78,95 @@ def units(entries):
 
 
 def settle(entries, check):
-    def halve(parts):
-        if not parts or check([e for p in parts for e in p]):
-            return list(parts)
+    seen = {}
+
+    def test(batch):
+        key = frozenset(batch)
+        if key not in seen:
+            seen[key] = check(batch)
+        return seen[key]
+
+    def grow(base, parts):
+        batch = base + [e for p in parts for e in p]
+        if not parts:
+            return base
+        ok, blamed = test(batch)
+        if ok:
+            return batch
         if len(parts) == 1:
-            return []
-        half = len(parts) // 2
-        return halve(parts[:half]) + halve(parts[half:])
-    return [e for part in halve(units(entries)) for e in part]
+            return base
+        named = [i for i, p in enumerate(parts) if blamed & set(p)]
+        if not named or len(named) == len(parts):
+            named = range(len(parts) // 2, len(parts))
+        first = [p for i, p in enumerate(parts) if i not in named]
+        return grow(grow(base, first), [parts[i] for i in named])
+
+    parts = units(entries)
+    if parts:
+        ok, blamed = test([e for p in parts for e in p])
+        if not ok and not blamed and not test([])[0]:
+            return None
+    return grow([], parts)
 
 
-def green():
-    for region in REGIONS:
-        regionsync.configure(region)
-        ok, _ = regionsync.green()
-        if not ok:
-            regionsync.configure("usa")
-            return False
-    regionsync.configure("usa")
-    return True
+def blame(tree, part, red):
+    import culprits
+    tags = {}
+    for rel, _, _ in part:
+        try:
+            with open(f"{CLEAN}/{rel}", encoding="utf-8", errors="ignore") as fh:
+                tags[rel] = culprits.tag_of(fh.read()) or ("", "")
+        except OSError:
+            tags[rel] = ("", "")
+    named = set()
+    for region, log in red.items():
+        named |= {path for _, _, path, _ in culprits.name(log, tags)}
+        for folder in regionsync.failed_folders(log, region):
+            try:
+                with open(f"{tree}/{folder}/delinks.txt", encoding="utf-8", errors="ignore") as fh:
+                    named |= {src for src, _ in regionsync.BLOCK.findall(fh.read())}
+            except OSError:
+                pass
+    return {entry for entry in part if entry[0] in named}
 
 
-def apply(tree, tip, entries):
-    git(tree, "checkout", "-q", "-f", "--detach", tip)
-    for rel, _, _ in entries:
-        if rel.endswith((".c", ".cpp")):
-            with open(f"{CLEAN}/{rel}", encoding="utf-8") as fh:
-                text = strip(fh.read())
-            with open(f"{tree}/{rel}", "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(text)
-        else:
-            shutil.copyfile(f"{CLEAN}/{rel}", f"{tree}/{rel}")
+def verdict(tree, tip, part, fresh):
+    import culprits
+    apply(tree, tip, part, fresh)
+    results = regionsync.green(REGIONS)
+    if any(not ok and culprits.transient(log) for ok, log in results.values()):
+        results = regionsync.green(REGIONS)
+    red = {region: log for region, (ok, log) in results.items() if not ok}
+    return not red, blame(tree, part, red)
+
+
+def wanted(rel):
+    if rel.endswith((".c", ".cpp")):
+        with open(f"{CLEAN}/{rel}", encoding="utf-8") as fh:
+            return strip(fh.read()).encode("utf-8")
+    with open(f"{CLEAN}/{rel}", "rb") as fh:
+        return fh.read()
+
+
+def apply(tree, tip, entries, fresh=()):
+    part = {rel for rel, _, _ in entries}
+    back = [rel for rel, _, _ in fresh if rel not in part]
+    if back:
+        dirty = set(git(tree, "diff", "--name-only", "-z")[1].split("\0"))
+        back = [rel for rel in back if rel in dirty]
+    if back:
+        run(tree, "git", "checkout", "-q", "--pathspec-from-file=-", "--pathspec-file-nul", tip,
+            stdin="".join(f"{rel}\0" for rel in back))
+    for rel in part:
+        data = wanted(rel)
+        try:
+            with open(f"{tree}/{rel}", "rb") as fh:
+                if fh.read() == data:
+                    continue
+        except OSError:
+            pass
+        with open(f"{tree}/{rel}", "wb") as fh:
+            fh.write(data)
 
 
 def write_rows(path, entries, mode):
@@ -140,15 +200,15 @@ def main():
     for rel, _, _ in stale:
         print(f"STALE {rel}: changed on decomp-matching since it was rewritten; rewrite it again")
 
-    def check(part):
-        apply(tree, tip, part)
-        return green()
-
-    good = settle(fresh, check)
-    red = [e for e in fresh if e not in good]
+    good = settle(fresh, lambda part: verdict(tree, tip, part, fresh))
+    queued = fresh if good is None else []
+    if good is None:
+        print(f"REFUSED: decomp-matching does not build green at {tip[:8]}; {len(fresh)} row(s) stay queued")
+        good = []
+    red = [e for e in fresh if e not in good and e not in queued]
     for rel, _, _ in red:
         print(f"RED {rel}: a region does not build with it")
-    apply(tree, tip, good)
+    apply(tree, tip, good, fresh)
     if good:
         stage(tree, [rel for rel, _, _ in good])
         if git(tree, "commit", "-q", "-m", f"Clean {len(good)} matched source(s)")[0]:
@@ -164,10 +224,10 @@ def main():
             pooled = run(KIT, sys.executable, f"{KIT}/pad/repool.py", "--apply", "--rev", tip)[1].strip()
             print("pools: " + (pooled.splitlines() or [""])[-1])
     write_rows(REJECTED, stale + red, "a")
-    done = set(entries)
+    done = set(entries) - set(queued)
     write_rows(MANIFEST, [e for e in rows() if e not in done], "w")
     print(f"LANDED {len(good)} of {len(entries)} at {git(tree, 'rev-parse', '--short', 'HEAD')[1].strip()}")
-    return 0
+    return 1 if queued else 0
 
 
 if __name__ == "__main__":

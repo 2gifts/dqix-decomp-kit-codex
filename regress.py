@@ -2270,6 +2270,25 @@ def _culprits_from_red_logs():
         return "a crashed tool was not told apart from a real compile or link failure"
 
 
+@check("culprits ignores ninja's progress lines",
+       "ninja prints `[n/N] <command>` for every object it compiles, so a red log blamed every candidate "
+       "the build compiled and a cull set the good ones aside with the bad")
+def _culprits_skip_progress():
+    c = load("culprits")
+    cands = {"src/Combat/Main/Innocent_02000c9c.cpp": ("main", "02000c9c"),
+             "src/Combat/Main/Bad_02000d00.cpp": ("main", "02000d00")}
+    mwcc = '"C:\\Python\\python.exe" tools/mwcc.py build\\usa\\src\\Combat\\Main\\%s.o ".\\mwccarm.exe" -c %s -o x\n'
+    log = ("[1/3] " + mwcc % ("Innocent_02000c9c", "src\\Combat\\Main\\Innocent_02000c9c.cpp")
+           + "[2/3] " + mwcc % ("Bad_02000d00", "src\\Combat\\Main\\Bad_02000d00.cpp")
+           + "FAILED: [code=1] build/usa/src/Combat/Main/Bad_02000d00.o\n"
+           + mwcc % ("Bad_02000d00", "src\\Combat\\Main\\Bad_02000d00.cpp")
+           + "src\\Combat\\Main\\Bad_02000d00.cpp:3: undefined identifier 'x'\n")
+    got = [a for _m, a, _p, _w in c.name(log, cands)]
+    if got != ["02000d00"]:
+        return f"named {got}"
+    return None
+
+
 @check("a symbol rename leaves another region's address defines pointing at that region",
        "the upstream merge renamed func_020c6ff8 (a JPN address) to the USA symbol at 0x020c6ff8 and "
        "turned redundant JPN defines into redirects to undeclared names: the JPN build stopped compiling")
@@ -2325,11 +2344,12 @@ def _regionsync_restores_only_red_modules():
             return not red, "[INFO ] Check ARM9 main: OK\n[INFO ] Check overlay 25: checksum failed\n" if red else ""
         real = rs.run
         rs.run = lambda *args: (0, "") if args[0] == "ninja" else real(*args)
-        rs.green, rs.configure, rs.kitpaths = green, lambda region: (0, ""), SimpleNamespace(SP=root)
+        rs.green = lambda regions: {region: green() for region in regions}
+        rs.configure, rs.kitpaths = lambda region: (0, ""), SimpleNamespace(SP=root)
         cwd = os.getcwd()
         os.chdir(root)
         try:
-            code, line = rs.sync("jpn", "tools/port.py")
+            [(code, line)] = rs.sync([("jpn", "tools/port.py")])
         finally:
             os.chdir(cwd)
         if "src/a.cpp" not in git("show", "HEAD:config/jpn/arm9/delinks.txt"):
@@ -2383,12 +2403,13 @@ def _regionsync_into_usa():
             subprocess.run(["git", "-C", root, "-c", "core.autocrlf=false", *args], capture_output=True)
         real = rs.run
         rs.run = lambda *args: (0, "") if args[0] == "ninja" else real(*args)
-        rs.green, rs.configure, rs.kitpaths = (lambda: (True, "")), (lambda region: (0, "")), SimpleNamespace(SP=root)
+        rs.green = lambda regions: {region: (True, "") for region in regions}
+        rs.configure, rs.kitpaths = (lambda region: (0, "")), SimpleNamespace(SP=root)
         rs.usa_gate = lambda module, start, src: "MATCH" if src.endswith("Grown.cpp") else "RESIDUE SIZE 4"
         cwd = os.getcwd()
         os.chdir(root)
         try:
-            runs = [rs.sync("usa", None), rs.sync("usa", None)]
+            runs = [rs.sync([("usa", None)])[0], rs.sync([("usa", None)])[0]]
         finally:
             os.chdir(cwd)
         with open(f"{root}/config/usa/arm9/delinks.txt", encoding="utf-8", newline="") as f:
@@ -2408,6 +2429,138 @@ def _regionsync_into_usa():
                 return f"exit {code}, unreported {missing}: {line}"
         if "Port 3 matched files to USA" not in runs[0][1]:
             return f"the port was not committed: {runs[0][1]}"
+    return None
+
+
+_FAKE_CONFIGURE = "\n".join([
+    "import os, sys",
+    "region = sys.argv[1]",
+    "obj, arm9 = os.path.join('build', region, 'src', 'a.o'), os.path.join('build', region, 'arm9.o')",
+    "lines = ['python = \"%s\"' % sys.executable,",
+    "         'rule download_tool', '  command = $python tools/fake.py download $out',",
+    "         'rule mwcc', '  command = $python tools/fake.py cc $out',",
+    "         'rule mwld', '  command = $python tools/fake.py link $out',",
+    "         'rule sha1', '  command = $python tools/fake.py sha1 $out',",
+    "         'build tool.exe: download_tool',",
+    "         'build %s: mwcc src/a.cpp | tool.exe' % obj,",
+    "         'build %s: mwld %s' % (arm9, obj),",
+    "         'build check: phony %s' % arm9,",
+    "         'build sha1: sha1 %s' % arm9]",
+    "open('build.ninja', 'w').write('\\n'.join(lines) + '\\n')",
+    ""])
+_FAKE_TOOL = "\n".join([
+    "import os, sys, time",
+    "what, out = sys.argv[1], sys.argv[2]",
+    "os.makedirs('events', exist_ok=True)",
+    "def note(edge):",
+    "    name = '%s %s %s %d' % (what, out.replace('\\\\', '_').replace('/', '_'), edge, os.getpid())",
+    "    open(os.path.join('events', name), 'w').write(repr(time.time()))",
+    "note('start')",
+    "if what == 'link':",
+    "    time.sleep(2)",
+    "if what == 'sha1':",
+    "    sys.stderr.write('dqix.nds: OK\\n')",
+    "else:",
+    "    open(out, 'w').write(what)",
+    "note('end')",
+    ""])
+
+
+@check("regionsync builds the regions at once from their own ninja files and compiles JPN objects without a link",
+       "every three-region ninja check + sha1 ran one region after another (3.3-4 min a landing), the JPN "
+       "port linked JPN only to read its objects, and a region file that kept download_tool made each "
+       "region re-download mwccarm.exe and dsd.exe at once (PermissionError)")
+def _regionsync_parallel_regions():
+    import shutil
+    if not shutil.which("ninja"):
+        return "ninja is not on PATH"
+    rs = load("regionsync")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="regionsync_par_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        for path, text in (("tools/configure.py", _FAKE_CONFIGURE), ("tools/fake.py", _FAKE_TOOL), ("src/a.cpp", "a\n")):
+            os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
+            with open(f"{root}/{path}", "w", encoding="utf-8") as fh:
+                fh.write(text)
+
+        def events():
+            out = {name: open(os.path.join("events", name)).read() for name in os.listdir("events")}
+            shutil.rmtree("events")
+            return out
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            results = rs.green(["usa", "jpn", "eur"])
+            built = events()
+            files = {r: open(f"build/{r}/build.ninja", encoding="utf-8").read() for r in ("jpn", "eur")}
+            logs = [r for r in ("jpn", "eur") if os.path.isfile(f"build/{r}/.ninja_log")]
+            home = open("build.ninja", encoding="utf-8").read()
+            os.utime(os.path.join("build", "jpn", "src", "a.o"), (1, 1))
+            rs.compile_objects("jpn")
+            compiled = events() if os.path.isdir("events") else {}
+        finally:
+            os.chdir(cwd)
+    if sorted(results) != ["eur", "jpn", "usa"] or not all(ok for ok, _ in results.values()):
+        return f"green() returned {results}"
+    if sum(1 for name in built if name.startswith("download ") and " start " in name) > 1:
+        return "more than one build downloaded the tools"
+    links = {}
+    for name, stamp in built.items():
+        what, out, edge, _ = name.split(" ")
+        if what == "link":
+            links.setdefault(out, {})[edge] = float(stamp)
+    if len(links) != 3 or max(t["start"] for t in links.values()) >= min(t["end"] for t in links.values()):
+        return f"the regions did not link at the same time: {links}"
+    for region, text in files.items():
+        if not text.startswith(f"builddir = build/{region}\n") or "build tool.exe" in text:
+            return f"build/{region}/build.ninja has no builddir of its own or still downloads tools"
+    if logs != ["jpn", "eur"] or os.path.join("build", "usa", "arm9.o") not in home:
+        return f"region logs {logs}; build.ninja left configured for another region"
+    if not any(name.startswith("cc ") and "jpn" in name for name in compiled) or any(
+            name.startswith("link ") for name in compiled):
+        return f"compile_objects did not compile JPN's object without linking: {sorted(compiled)}"
+    return None
+
+
+@check("regionsync's JPN port compiles the objects it reads instead of linking JPN first",
+       "regionsync ran a full `ninja -k 0 check` for JPN before every port only so port_jpn_config.py "
+       "could read build/jpn/*.o; the link is 75-85% of a check")
+def _regionsync_port_compiles_only():
+    rs = load("regionsync")
+    calls = []
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(f"{root}/extract/jpn")
+        os.makedirs(f"{root}/tools")
+        with open(f"{root}/tools/port.py", "w", encoding="utf-8") as fh:
+            fh.write("")
+        rs.run = lambda *args: calls.append(args) or (0, "--sync" if "--help" in args else "")
+        rs.compile_objects = lambda region: calls.append(("compile_objects", region))
+        rs.configure = lambda region: calls.append(("configure", region)) or (0, "")
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            done, _ = rs.port("jpn", "tools/port.py")
+        finally:
+            os.chdir(cwd)
+    if done or ("compile_objects", "jpn") not in calls or any(c[:1] == ("ninja",) for c in calls):
+        return f"the JPN port ran {calls}"
+    return None
+
+
+@check("integrate_all ports to the other regions once, after every module",
+       "finish_wave ran regionsync (4-5 minutes) after each module it landed, so integrate_all paid it "
+       "once per module")
+def _regionsync_once_per_integrate_all():
+    fw = open(f"{KIT}/finish_wave.sh", encoding="utf-8").read()
+    ia = open(f"{KIT}/integrate_all.sh", encoding="utf-8").read()
+    if '[ "${DQIX_REGIONSYNC:-}" = defer ] || python "$KIT/regionsync.py"' not in fw:
+        return "finish_wave runs regionsync.py even when its caller defers it"
+    loop, _, after = ia.partition("\ndone\n")
+    if 'DQIX_REGIONSYNC=defer bash "$KIT/finish_wave.sh"' not in loop or 'bash "$KIT/regionsync.sh"' not in after:
+        return "integrate_all does not defer regionsync to one regionsync.sh after its loop"
+    rs = open(f"{KIT}/regionsync.sh", encoding="utf-8").read()
+    if "wave_lock_acquire" not in rs or "integ_tree.py\" publish" not in rs:
+        return "regionsync.sh does not hold the wave lock and publish its ports"
     return None
 
 
@@ -2465,14 +2618,14 @@ def _landclean_settle():
     lc = load("landclean")
     entries = [(f"src/{n}.cpp", "b", "") for n in "abcdef"]
     bad = {"src/c.cpp", "src/f.cpp"}
-    got = lc.settle(entries, lambda part: not bad & {rel for rel, _, _ in part})
+    got = lc.settle(entries, lambda part: (not bad & {rel for rel, _, _ in part}, set()))
     if [rel for rel, _, _ in got] != ["src/a.cpp", "src/b.cpp", "src/d.cpp", "src/e.cpp"]:
         return "settle() kept %s" % [rel for rel, _, _ in got]
     coupled = [(f"src/r{n}.cpp", "b", "remangle") for n in range(200)] + [("config/usa/s.txt", "b", "remangle")]
     calls = []
     got = lc.settle(coupled + [("src/x.cpp", "b", "")],
-                    lambda part: calls.append(len(part)) or not any(rel == "src/r7.cpp" for rel, _, _ in part))
-    if [rel for rel, _, _ in got] != ["src/x.cpp"] or len(calls) > 3:
+                    lambda part: calls.append(len(part)) or (not any(rel == "src/r7.cpp" for rel, _, _ in part), set()))
+    if [rel for rel, _, _ in got] != ["src/x.cpp"] or len(calls) > 4:
         return ("settle() split a rename batch whose symbols.txt and sources only build together "
                 "(%d checks, kept %d rows); 241 such rows once bisected for an hour" % (len(calls), len(got)))
     os.makedirs(f"{SP}/handwork", exist_ok=True)
@@ -2523,6 +2676,169 @@ def _landclean_settle():
         landed = open(f"{root}/tree/src/a.cpp", encoding="utf-8").read()
         if "0x70" in landed or "// USA: func_a" not in landed:
             return "landclean landed a rewrite with its worker comments, or lost the region tag: %r" % landed
+    return None
+
+
+@check("landclean sets aside the rows a red build names instead of halving the batch",
+       "landclean.sh took 28 minutes for 61 rows with one bad row: settle() halved blind and rebuilt every "
+       "region for each half, though the failure log named the file")
+def _landclean_culls_named():
+    lc = load("landclean")
+    entries = [(f"src/f{n:02d}.cpp", "b", "") for n in range(61)]
+    bad = entries[37]
+    calls = []
+
+    def check(part):
+        calls.append(len(part))
+        return bad not in part, {bad} if bad in part else set()
+    got = lc.settle(entries, check)
+    if set(got) != set(entries) - {bad} or len(calls) > 2:
+        return "settle() kept %d of 60 good rows (bad row kept: %s) in %d builds" % (
+            len(set(got) - {bad}), bad in got, len(calls))
+    return None
+
+
+@check("landclean builds the tip once instead of bisecting a batch the tip already reds",
+       "an all-red batch cost 10-20 minutes of halving, and every row was rejected though the red was "
+       "decomp-matching's own")
+def _landclean_red_tip():
+    lc = load("landclean")
+    entries = [(f"src/f{n:02d}.cpp", "b", "") for n in range(20)]
+    calls = []
+    got = lc.settle(entries, lambda part: calls.append(len(part)) or (False, set()))
+    if got is not None or len(calls) > 2:
+        return "settle() returned %r after %d builds of a batch the tip reds" % (got, len(calls))
+    calls.clear()
+    got = lc.settle(entries[:4], lambda part: calls.append(len(part)) or (len(part) < 2, set()))
+    if got is None or len(got) != 1:
+        return "settle() treated a green tip as red, or kept %r" % got
+    return None
+
+
+@check("landclean lands only a set it built green as one",
+       "settle() returned the union of halves it had built apart, so two rewrites green alone and red "
+       "together would land without ever being built together")
+def _landclean_lands_what_it_built():
+    lc = load("landclean")
+    a, b, c = [(f"src/{n}.cpp", "b", "") for n in "abc"]
+    built = []
+
+    def check(part):
+        ok = not (a in part and b in part)
+        built.append((frozenset(part), ok))
+        return ok, set()
+    got = frozenset(lc.settle([a, b, c], check))
+    if not got or (got, True) not in built:
+        return "settle() kept %s, a set it never built green" % sorted(r for r, _, _ in got)
+    return None
+
+
+@check("landclean rebuilds once when a tool crashed instead of blaming the batch",
+       "three regions build at once now; an out-of-memory or crashed tool in one of them would have "
+       "set rows aside that build, and settle() trusts a red result it has seen once")
+def _landclean_retries_crash():
+    from types import SimpleNamespace
+    lc = load("landclean")
+    logs = ["FAILED: [code=3221225794] build/jpn/src/a.o\n", ""]
+    calls = []
+
+    def green(regions):
+        log = logs[len(calls)]
+        calls.append(log)
+        return {region: (not log or region != "jpn", log) for region in regions}
+    lc.regionsync = SimpleNamespace(green=green, failed_folders=lambda log, region: set(), BLOCK=re.compile("x"))
+    lc.apply = lambda *args: None
+    ok, blamed = lc.verdict("tree", "tip", [("src/a.cpp", "b", "")], [])
+    if not ok or len(calls) != 2:
+        return "a crashed build counted as red (%d builds, ok=%s)" % (len(calls), ok)
+    return None
+
+
+@check("landclean rewrites only the files whose content changes between builds",
+       "apply() checked the tree out again and rewrote every row each round, so every row and every "
+       "includer of a rewritten header recompiled in each region on every bisection step")
+def _landclean_apply_keeps_mtimes():
+    import subprocess
+    lc = load("landclean")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landclean_apply_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        tree, clean = f"{root}/tree", f"{root}/clean"
+
+        def git(*args):
+            return subprocess.run(["git", "-C", tree, "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                  capture_output=True, text=True).stdout.strip()
+        for n in "ab":
+            for folder, text in ((tree, f"int {n};\n"), (clean, f"int {n}2;\n")):
+                os.makedirs(f"{folder}/src", exist_ok=True)
+                with open(f"{folder}/src/{n}.cpp", "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+        git("init", "-q", "-b", "main")
+        git("config", "core.autocrlf", "false")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        tip = git("rev-parse", "HEAD")
+        rows = [("src/a.cpp", "x", ""), ("src/b.cpp", "x", "")]
+        a, b = f"{tree}/src/a.cpp", f"{tree}/src/b.cpp"
+        lc.CLEAN = clean
+        lc.apply(tree, tip, rows[:1], rows)
+        os.utime(a, ns=(10 ** 9, 10 ** 9))
+        lc.apply(tree, tip, rows, rows)
+        if os.stat(a).st_mtime_ns != 10 ** 9:
+            return "apply() rewrote src/a.cpp though its rewrite was already in place"
+        os.utime(a, ns=(10 ** 9, 10 ** 9))
+        lc.apply(tree, tip, rows[:1], rows)
+        if open(b, encoding="utf-8").read() != "int b;\n" or os.stat(a).st_mtime_ns != 10 ** 9:
+            return "apply() did not restore only the row that left the batch"
+        os.utime(b, ns=(10 ** 9, 10 ** 9))
+        lc.apply(tree, tip, rows[:1], rows)
+        if os.stat(b).st_mtime_ns != 10 ** 9:
+            return "apply() checked out a row already at the tip"
+    return None
+
+
+@check("landclean reads every row's blob at HEAD in one git process",
+       "split_stale() ran one git rev-parse per row, one process start per cleaned file")
+def _landclean_split_stale_batched():
+    import subprocess
+    lc = load("landclean")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="landclean_stale_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        for n in "xyz":
+            with open(f"{root}/{n}.cpp", "w", encoding="utf-8") as fh:
+                fh.write(n)
+        for args in (("init", "-q"), ("add", "-A"), ("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b")):
+            subprocess.run(["git", "-C", root, *args], capture_output=True)
+        blob = {n: subprocess.run(["git", "-C", root, "rev-parse", f"HEAD:{n}.cpp"], capture_output=True,
+                                  text=True).stdout.strip() for n in "xyz"}
+        calls = []
+        lc.git = lambda *args: calls.append(args) or (0, "")
+        lc.CLEAN = root
+        fresh, stale = lc.split_stale(root, [("x.cpp", blob["x"], ""), ("y.cpp", blob["x"], ""),
+                                             ("z.cpp", blob["z"], ""), ("gone.cpp", blob["z"], "")])
+        if calls:
+            return "split_stale() ran git once per row (%d calls)" % len(calls)
+        if [r for r, _, _ in fresh] != ["x.cpp", "z.cpp"] or [r for r, _, _ in stale] != ["y.cpp", "gone.cpp"]:
+            return "split_stale() kept %s and dropped %s" % (fresh, stale)
+    return None
+
+
+@check("landpr builds the three regions in one parallel build",
+       "landpr.sh took 9.6 minutes for 2 functions, 6.5 of them region links run one after another")
+def _landpr_builds_regions_at_once():
+    from types import SimpleNamespace
+    lp = load("landpr")
+    calls = []
+    with tempfile.TemporaryDirectory() as root:
+        for region in lp.REGIONS:
+            os.makedirs(f"{root}/extract/{region}")
+        lp.regionsync = SimpleNamespace(
+            green=lambda regions: calls.append(tuple(regions)) or {r: (True, "") for r in regions},
+            configure=lambda region: calls.append(("configure", region)))
+        lp.build_every_region(root)
+    if calls != [tuple(lp.REGIONS)]:
+        return "landpr built %s" % calls
     return None
 
 

@@ -113,12 +113,11 @@ def build_every_region(tree):
     for region in REGIONS:
         if not os.path.isdir(f"{tree}/extract/{region}"):
             refuse(f"no extracted {region} ROM in {tree}; every region must build before a landing")
-        regionsync.configure(region)
-        ok, log = regionsync.green()
+    results = regionsync.green(REGIONS)
+    for region in REGIONS:
+        ok, log = results[region]
         if not ok:
-            regionsync.configure("usa")
             refuse(f"{region} is red:\n" + "\n".join(log.strip().splitlines()[-8:]))
-    regionsync.configure("usa")
 
 
 def drop_files(tree, paths, numbers):

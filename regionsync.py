@@ -6,16 +6,20 @@ First into usa: a file delinked in another region but not in config/usa, owning 
 no data, whose `// USA:` tag names a usa function, gets a usa block at that function when the function
 has the same size or wgate.py matches the file against it.
 Then from usa to each region with a port tool that has --sync and an extracted ROM: run the sync
-(after building the region first when its tool reads that region's objects). Each port is committed
-when the receiving region's `ninja check` and `ninja sha1` pass. When they do not, restore the config
-of each module whose check failed and build again; restore the whole port when that is still red or
-no module is named. The tree is reconfigured for usa afterwards. Each file another region delinks that
-stays out of usa prints a `NOT IN USA <file>: <why>` line. Exit 0: every region in sync, ported or
-skipped. 1: a port was red and was restored, in part or in full, or a file is NOT IN USA.
+(after compiling the region's objects first when its tool reads them). The ported regions build
+together, and each port is committed when the receiving region's `ninja check` and `ninja sha1` pass.
+When they do not, restore the config of each module whose check failed and build again; restore the
+whole port when that is still red or no module is named. Every region but usa builds from its own
+build/<region>/build.ninja, so regions build at the same time; build.ninja is left configured for usa.
+Each file another region delinks that stays out of usa prints a `NOT IN USA <file>: <why>` line.
+Exit 0: every region in sync, ported or skipped. 1: a port was red and was restored, in part or in
+full, or a file is NOT IN USA.
 """
+import concurrent.futures
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +28,7 @@ import kitpaths
 
 PORTS = {"eur": "tools/port_eur_config.py", "jpn": "tools/port_jpn_config.py"}
 READS_OBJECTS = {"jpn"}
+HOME = "usa"
 FAILED_CHECK = re.compile(r"Check (ARM9 main|ITCM|DTCM|overlay (\d+)): (?!OK)")
 PORTED_FILE = re.compile(r"^\+[^+\s].*:\r?$", re.M)
 BLOCK = re.compile(r"(?m)^(src/\S+):[ \t]*\r?\n((?:[ \t]+\S.*(?:\r?\n|$))*)")
@@ -46,23 +51,112 @@ def configure(region):
                *(["--compiler", compiler] if compiler else []), *(["-w", wine] if wine else []))
 
 
-def green():
-    code, out = run("ninja", "check")
+def ninja_file(region):
+    return "build.ninja" if region == HOME else f"build/{region}/build.ninja"
+
+
+def continued(line):
+    body = line.rstrip(b"\r\n")
+    return (len(body) - len(body.rstrip(b"$"))) % 2 == 1
+
+
+def drop_rule(data, rule):
+    kept, stmt = [], []
+    for line in data.splitlines(keepends=True) + [b""]:
+        if stmt and (not line or not continued(stmt[-1]) and line[:1] not in (b" ", b"\t")):
+            head = []
+            for part in stmt:
+                head.append(part.rstrip(b"\r\n").rstrip(b"$").strip())
+                if not continued(part):
+                    break
+            edge = re.match(rb"build (?:[^$:]|\$.)*:\s*(\S+)", b" ".join(head))
+            if not edge or edge.group(1) != rule.encode():
+                kept += stmt
+            stmt = []
+        stmt.append(line)
+    return b"".join(kept)
+
+
+def listed(path, *tool):
+    r = subprocess.run(["ninja", "-f", path, "-t", *tool], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    return [t.replace("\\", "/") for t in r.stdout.splitlines() if t.strip()]
+
+
+def tools():
+    needed = set(listed("build.ninja", "inputs", "check", "sha1"))
+    targets = [t for t in listed("build.ninja", "targets", "rule", "download_tool") if t in needed]
+    return run("ninja", *targets) if targets else (0, "")
+
+
+def keep(region):
+    code, out = configure(region)
+    data = open("build.ninja", "rb").read() if os.path.isfile("build.ninja") else b""
+    if code or os.path.join("build", region, "arm9.o").encode() not in data:
+        return f"configure.py {region} failed: {out.strip()[-300:]}"
+    if region == HOME:
+        return None
+    path = ninja_file(region)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = f"builddir = build/{region}\n".encode() + drop_rule(data, "download_tool")
+    if not os.path.isfile(path) or open(path, "rb").read() != data:
+        with open(path, "wb") as fh:
+            fh.write(data)
+    if not os.path.exists(f"build/{region}/.ninja_log") and os.path.isfile(".ninja_log"):
+        shutil.copyfile(".ninja_log", f"build/{region}/.ninja_log")
+    return None
+
+
+def build(region):
+    code, out = run("ninja", "-f", ninja_file(region), "check")
     if code:
         return False, out
-    code, sha = run("ninja", "sha1")
+    code, sha = run("ninja", "-f", ninja_file(region), "sha1")
     return code == 0 and "OK" in sha, out + sha
+
+
+def green(regions):
+    regions = sorted(set(regions), key=lambda region: region == HOME)
+    results = {}
+    for region in regions:
+        bad = keep(region)
+        if bad:
+            results[region] = (False, bad)
+    if HOME not in regions:
+        configure(HOME)
+    todo = [region for region in regions if region not in results]
+    if todo:
+        tools()
+        with concurrent.futures.ThreadPoolExecutor(len(todo)) as pool:
+            results.update(zip(todo, pool.map(build, todo)))
+    return results
+
+
+def compile_objects(region):
+    if keep(region):
+        return
+    tools()
+    targets = [t for rule in ("mwcc", "mwasm") for t in listed(ninja_file(region), "targets", "rule", rule)]
+    escaped = " ".join(t.replace("$", "$$").replace(":", "$:").replace(" ", "$ ") for t in targets)
+    path = f"build/{region}/objects.ninja"
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"include {ninja_file(region)}\nbuild objects: phony {escaped}\n")
+    run("ninja", "-f", path, "-k", "0", "objects")
 
 
 def ported(region):
     return len(PORTED_FILE.findall(run("git", "diff", "-U0", "--", f"config/{region}")[1]))
 
 
-def failed_modules(log, region):
+def failed_folders(log, region):
     root = f"config/{region}/arm9"
-    folders = {root if m[1] == "ARM9 main" else f"{root}/overlays/ov{int(m[2]):03d}" if m[2] else f"{root}/{m[1].lower()}"
-               for m in FAILED_CHECK.finditer(log)}
-    changed = run("git", "diff", "--name-only", "--", root)[1].split()
+    return {root if m[1] == "ARM9 main" else f"{root}/overlays/ov{int(m[2]):03d}" if m[2] else f"{root}/{m[1].lower()}"
+            for m in FAILED_CHECK.finditer(log)}
+
+
+def failed_modules(log, region):
+    folders = failed_folders(log, region)
+    changed = run("git", "diff", "--name-only", "--", f"config/{region}/arm9")[1].split()
     return [path for path in changed if os.path.dirname(path) in folders]
 
 
@@ -138,24 +232,36 @@ def into_usa():
     return skipped
 
 
-def settle(region, out):
-    if not run("git", "status", "--porcelain", "--", f"config/{region}")[1].strip():
-        return 0, f"{region}: in sync"
-    files = ported(region)
-    configure(region)
-    ok, log = green()
-    dropped = [] if ok else failed_modules(log, region)
-    if dropped:
-        run("git", "checkout", "--", *dropped)
-        configure(region)
-        ok, retry = green()
-        ok = ok and bool(run("git", "status", "--porcelain", "--", f"config/{region}")[1].strip())
-        log += retry
+def changed(region):
+    return bool(run("git", "status", "--porcelain", "--", f"config/{region}")[1].strip())
+
+
+def settle(outs):
+    done = {region: (0, f"{region}: in sync") for region in outs if not changed(region)}
+    todo = [region for region in outs if region not in done]
+    files = {region: ported(region) for region in todo}
+    first = green(todo) if todo else {}
+    dropped = {region: failed_modules(first[region][1], region) for region in todo if not first[region][0]}
+    for paths in dropped.values():
+        if paths:
+            run("git", "checkout", "--", *paths)
+    retry = [region for region, paths in dropped.items() if paths]
+    again = green(retry) if retry else {}
+    for region in todo:
+        ok, log = first[region]
+        if region in again:
+            ok = again[region][0] and changed(region)
+            log += again[region][1]
+        done[region] = finish(region, ok, dropped.get(region, []), files[region], outs[region] + log)
+    return done
+
+
+def finish(region, ok, dropped, files, log):
     if dropped or not ok:
         path = f"{kitpaths.SP}/wlog/regionsync_{region}_{time.strftime('%m%d_%H%M')}.log"
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            f.write(out + log)
+            f.write(log)
     if not ok:
         run("git", "checkout", "--", f"config/{region}")
         return 1, f"{region}: RED after porting {files} files, restored; log {path}"
@@ -172,26 +278,39 @@ def settle(region, out):
     return 0, f"{region}: {message}"
 
 
-def sync(region, tool):
-    if region == "usa":
-        skipped = into_usa()
-        code, line = settle(region, "")
-        if skipped:
-            line = (line.replace("usa: in sync", "usa: nothing ported") + f"; {len(skipped)} file(s) NOT IN USA:\n"
-                    + "\n".join(f"  NOT IN USA {src}: {why}" for src, why in sorted(skipped.items())))
-        return code | bool(skipped), line
+def port(region, tool):
     if not os.path.isfile(tool) or "--sync" not in run(sys.executable, tool, "--help")[1]:
-        return 0, f"{region}: {tool} has no --sync, not ported"
+        return (0, f"{region}: {tool} has no --sync, not ported"), ""
     if not os.path.isdir(f"extract/{region}"):
-        return 0, f"{region}: no extracted {region} ROM, not ported"
+        return (0, f"{region}: no extracted {region} ROM, not ported"), ""
     if region in READS_OBJECTS:
-        configure(region)
-        run("ninja", "-k", "0", "check")
+        compile_objects(region)
     code, out = run(sys.executable, tool, "--sync")
     if code:
         run("git", "checkout", "--", f"config/{region}")
-        return 1, f"{region}: {tool} --sync failed: {out.strip().splitlines()[-1:]}"
-    return settle(region, out)
+        return (1, f"{region}: {tool} --sync failed: {out.strip().splitlines()[-1:]}"), ""
+    return None, out
+
+
+def sync(pairs):
+    lines, outs, skipped = {}, {}, {}
+    for region, tool in pairs:
+        if region == "usa":
+            skipped, outs[region] = into_usa(), ""
+            continue
+        done, out = port(region, tool)
+        if done:
+            lines[region] = done
+        else:
+            outs[region] = out
+    lines.update(settle(outs))
+    if "usa" in lines:
+        code, line = lines["usa"]
+        if skipped:
+            line = (line.replace("usa: in sync", "usa: nothing ported") + f"; {len(skipped)} file(s) NOT IN USA:\n"
+                    + "\n".join(f"  NOT IN USA {src}: {why}" for src, why in sorted(skipped.items())))
+        lines["usa"] = (code | bool(skipped), line)
+    return [lines[region] for region, _ in pairs]
 
 
 def main():
@@ -201,12 +320,12 @@ def main():
         os.chdir(sys.argv[1])
     status = 0
     try:
-        for region, tool in [("usa", None), *PORTS.items()]:
-            code, line = sync(region, tool)
-            status |= code
-            print(line)
+        for pairs in ([("usa", None)], list(PORTS.items())):
+            for code, line in sync(pairs):
+                status |= code
+                print(line)
     finally:
-        configure("usa")
+        configure(HOME)
     sys.exit(status)
 
 

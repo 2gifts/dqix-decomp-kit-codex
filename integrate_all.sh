@@ -14,6 +14,8 @@ REPO="$(python "$(cd "$(dirname "${BASH_SOURCE[0]}")" && { pwd -W 2>/dev/null ||
 LOG="$SP/wlog/integrate_all.log"
 
 echo "=== integrate_all $(date '+%m-%d %H:%M') ===" >> "$LOG"
+BRANCH="${DQIX_BRANCH:-decomp-matching}"
+H0=$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)
 
 # Biggest backlog first: each wave costs the same rebuild whether it lands 1 function or 37.
 for d in $(ls -d "$SP"/staging/*/ 2>/dev/null \
@@ -23,10 +25,13 @@ for d in $(ls -d "$SP"/staging/*/ 2>/dev/null \
   mod=${tag#ov}                        # finish_wave takes main | NNN
   n=$(ls "$d"*.cpp 2>/dev/null | wc -l)
   echo "$(date '+%H:%M') --- $tag: $n staged ---" >> "$LOG"
-  bash "$KIT/finish_wave.sh" "$mod" >> "$SP/wlog/int_${tag}.log" 2>&1
+  DQIX_REGIONSYNC=defer bash "$KIT/finish_wave.sh" "$mod" >> "$SP/wlog/int_${tag}.log" 2>&1
   tail -1 "$SP/wlog/int_${tag}.log" >> "$LOG"
 done
 
+if [ "$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)" != "$H0" ]; then
+  bash "$KIT/regionsync.sh" >> "$LOG" 2>&1
+fi
 echo "$(date '+%H:%M') === done ===" >> "$LOG"
 python "$KIT/cov.py" >> "$LOG" 2>&1
 tail -3 "$LOG"
