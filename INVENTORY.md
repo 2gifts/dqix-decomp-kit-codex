@@ -15,6 +15,7 @@ file that does not exist, nothing keys symbol lookups on the `func_` name, nothi
 | file | job |
 |---|---|
 | `kitpaths.py [kit\|state\|repo]` | `KIT` (this checkout: code only), `SP` (the state directory outside it: `$DQIX_STATE`, else `state.path`, else `../dqix-kit-state`), `REPO` (`$DQIX_REPO`, default `../dqix-decomp`), `CLAUDE_PROJECTS`; every script reads its paths here, shell scripts through the CLI |
+| `spans.py` | `Spans(ranges)`: merged half-open address ranges answering `addr in spans` by bisection; a script that asks whether an address is delinked uses it instead of scanning every range |
 | `gitread.py` | read many git blobs in one `git cat-file --batch` and a whole diff's added/removed lines per file in one `git diff`; a script that reads files at a revision or per-file diffs uses it instead of one git process per file |
 | `export_priors.py <source-sp> [-j N] [--dry-run]` | gate every saved attempt at an unmatched function in a pipeline directory's pools and keep the closest per address in `priors/<main\|ovNNN>/<addr>.cpp` + `priors/INDEX.tsv`; `resumable.py` reads `priors/` as a pool, so a fresh kit starts from the work already paid for |
 | `regress_fixtures/` | the prior sources `regress.py --slow` cracks end to end |

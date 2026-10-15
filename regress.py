@@ -4409,6 +4409,82 @@ def _buildcfg_spawns_nothing():
     return "importing buildcfg spawned %s" % seen if seen else None
 
 
+@check("spans.Spans answers exactly what a linear scan of the ranges answers",
+       "claim, resumable, progress and selfcheck scanned every delink range for every function, 16M "
+       "comparisons per claim")
+def _spans_match_linear():
+    import random
+    S = load("spans")
+    rnd = random.Random(7)
+    for _ in range(200):
+        ranges = [(lo, lo + rnd.randint(-3, 12)) for lo in (rnd.randint(0, 80) for _ in range(rnd.randint(0, 9)))]
+        s = S.Spans(ranges)
+        for x in range(-2, 100):
+            if (x in s) != any(lo <= x < hi for lo, hi in ranges):
+                return "Spans(%r) says %d is %s" % (ranges, x, "inside" if x in s else "outside")
+    return None
+
+
+@check("claim.pools() reads each module's open functions once",
+       "pools() rebuilt the unmatched list 51 times per call, 1.4 s each, so every --best and every claim "
+       "took seconds")
+def _pools_once_per_module():
+    C = load("claim")
+    calls = []
+    real = C.skiplist
+
+    def counted():
+        calls.append(1)
+        return real()
+    with tempfile.TemporaryDirectory() as d:
+        sp, C.SP, C.skiplist = C.SP, d, counted
+        try:
+            C.pools()
+            mods = len(C.all_modules())
+        finally:
+            C.SP, C.skiplist = sp, real
+    if len(calls) > mods:
+        return "pools() rebuilt the open list %d times for %d modules" % (len(calls), mods)
+    return None
+
+
+@check("claim.py runs its gates in-process, quietly, and a gate that fails holds",
+       "each claim spawned two Python children for levercheck and blockercheck")
+def _claim_gates_in_process():
+    import contextlib
+    import io
+    import subprocess
+    C = load("claim")
+    d = tempfile.mkdtemp(prefix="rg_")
+    try:
+        for name, body in (("rgpass", "def main():\n    print('noise')\n    return 0\n"),
+                           ("rghold", "def main():\n    print('noise')\n    return 1\n"),
+                           ("rgboom", "def main():\n    raise ValueError('x')\n")):
+            open(os.path.join(d, name + ".py"), "w").write(body)
+        sys.path.insert(0, d)
+        real = subprocess.Popen
+
+        def refuse(*a, **kw):
+            raise AssertionError("spawned a process")
+        subprocess.Popen = refuse
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                got = (C.gates_hold(("rgpass.py",)), C.gates_hold(("rgpass.py", "rghold.py")),
+                       C.gates_hold(("rgboom.py",)))
+        finally:
+            subprocess.Popen = real
+            sys.path.remove(d)
+        if got != (False, True, True):
+            return "gates_hold gave %s for pass, pass+hold, raising; want (False, True, True)" % (got,)
+        if out.getvalue():
+            return "a gate's output reached claim.py's stdout: %r" % out.getvalue()
+        return None
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))

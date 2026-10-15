@@ -28,12 +28,12 @@ import glob
 import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 
 import buildcfg
 import reserved
+import spans
 
 SP = _kp.SP
 KIT = _kp.KIT
@@ -219,24 +219,17 @@ def variety_every():
     return int(v) if v.isdigit() and int(v) >= 2 else 0
 
 
-def unmatched(mod, cursor=None):
-    """Addresses with no delink range yet, SIZE-STRATIFIED rather than smallest-first.
+_OPEN = {}
 
-    Smallest-first looked like "cheap wins before expensive ones" and was wrong twice over. It made
-    the first 30 functions a run of 4-24 byte stubs, so the measured $0.56/function said nothing
-    about the pool the fleet actually has to clear -- the cost curve stayed unknown exactly when it
-    was most useful. Worse, the smallest functions in main are the secure-area stubs, whose link
-    drift is CUMULATIVE (see the secure-area note), so draining them first piles the one class that
-    integrates badly into a single pass.
 
-    Interleaving by size band samples the real distribution from the first hour: every band makes
-    progress, the cost curve is visible immediately, and no single awkward class dominates a wave.
-    """
+def open_rows(mod):
+    if mod in _OPEN:
+        return _OPEN[mod]
     cfg = cfg_for(mod)
     sym = open(f"{cfg}/symbols.txt", encoding="utf-8", errors="ignore").read()
     dl = open(f"{cfg}/delinks.txt", encoding="utf-8", errors="ignore").read()
-    done = [(int(a, 16), int(b, 16)) for a, b in re.findall(
-        r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$", dl)]
+    done = spans.Spans((int(a, 16), int(b, 16)) for a, b in re.findall(
+        r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$", dl))
     skip = skiplist()
     _max_size = max_size()
     out = []
@@ -247,7 +240,7 @@ def unmatched(mod, cursor=None):
             continue
         if _max_size and size > _max_size:
             continue
-        if any(s <= int(addr, 16) < e for s, e in done):
+        if int(addr, 16) in done:
             continue
         out.append((size, addr))
 
@@ -264,7 +257,24 @@ def unmatched(mod, cursor=None):
     # attempts are counted from the worker logs (including archived windows), so nothing new has to
     # be written and no state can go stale.
     tried = attempt_counts()
-    rows = sorted((tried.get(a, 0), s, a) for s, a in out)
+    _OPEN[mod] = sorted((tried.get(a, 0), s, a) for s, a in out)
+    return _OPEN[mod]
+
+
+def unmatched(mod, cursor=None):
+    """Addresses with no delink range yet, SIZE-STRATIFIED rather than smallest-first.
+
+    Smallest-first looked like "cheap wins before expensive ones" and was wrong twice over. It made
+    the first 30 functions a run of 4-24 byte stubs, so the measured $0.56/function said nothing
+    about the pool the fleet actually has to clear -- the cost curve stayed unknown exactly when it
+    was most useful. Worse, the smallest functions in main are the secure-area stubs, whose link
+    drift is CUMULATIVE (see the secure-area note), so draining them first piles the one class that
+    integrates badly into a single pass.
+
+    Interleaving by size band samples the real distribution from the first hour: every band makes
+    progress, the cost curve is visible immediately, and no single awkward class dominates a wave.
+    """
+    rows = open_rows(mod)
     bands = {"s": [], "m": [], "l": []}
     for n, size, addr in rows:
         bands["s" if size <= 64 else "m" if size <= 256 else "l"].append((n, size, addr))
@@ -457,6 +467,24 @@ def function_sizes(mod):
         r"(?m)^\S+\s+kind:function\((?:arm|thumb),size=0x([0-9a-fA-F]+)\)\s+addr:0x([0-9a-fA-F]+)", sym)]
 
 
+def gates_hold(gates=("levercheck.py", "blockercheck.py")):
+    import contextlib
+    import importlib
+    import io
+    for gate in gates:
+        argv, sys.argv = sys.argv, [os.path.join(KIT, gate)]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                held = importlib.import_module(gate[:-3]).main() != 0
+        except (Exception, SystemExit):
+            held = True
+        finally:
+            sys.argv = argv
+        if held:
+            return True
+    return False
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: claim.py <main|NNN> [--release <addr> | --status] | --best | --pools")
@@ -512,10 +540,8 @@ def main():
     # half of the pipeline sat idle. Serving nothing ends the slot's session, which is the point.
     # Only the per-module claim is gated: `--best` must keep answering or pull_all reads an empty
     # reply as "every pool drained" and stops itself for good.
-    for gate in ("levercheck.py", "blockercheck.py"):
-        if subprocess.run([sys.executable, os.path.join(KIT, gate)],
-                          capture_output=True).returncode != 0:
-            return 0
+    if gates_hold():
+        return 0
     if os.path.exists(os.path.join(SP, "claims", "UPDATE_WAITING")) and "pull_all.pid" in _kp.busy():
         return 0
     stale = _kp.behind()
