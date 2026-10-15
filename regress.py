@@ -1364,6 +1364,31 @@ def _linkage_repairs():
     return "no mangled callee whose bare name the config leaves undeclared, so the repair cannot fire"
 
 
+@check("autorepair leaves a C++ callee whose declaration already mangles to the ROM symbol",
+       "main 0205b234 declared `int GetWordFromTable02042648(int);`, which mangles to the ROM's "
+       "_Z24GetWordFromTable02042648i; autorepair renamed it to that spelling under extern \"C\", "
+       "the commit linked the same, and prready refused it as EXTERN-C-MANGLED")
+def _autorepair_keeps_cxx_callee():
+    import autorepair
+    probe = re.compile(r"^_Z(\d+)(\w*[0-9a-f]{8}\w*)v$")
+    for addr, name in autorepair._symbols("main").items():
+        m = probe.match(name)
+        if m and len(m.group(2)) == int(m.group(1)):
+            bare = m.group(2)
+            break
+    else:
+        return "main has no mangled no-argument callee with an address in its name to probe"
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "probe.cpp")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(f"void {bare}();\nvoid Probe() {{ {bare}(); }}\n")
+    autorepair.repair(path, "main", "02000000")
+    out = open(path, encoding="utf-8").read()
+    if f"{bare}();" not in out or "_Z" in out or 'extern "C"' in out:
+        return "the C++ callee was rewritten: %r" % out
+    return None
+
+
 # ---------------------------------------------------------------- finish_wave.sh
 
 @check("finish_wave refuses a malformed module instead of reporting green",
