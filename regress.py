@@ -469,6 +469,139 @@ def _failscore():
     return None
 
 
+def _serial_sweep(C, base, module, addr, depth, budget):
+    import hashlib
+    out, spent = [], 0
+    best_bytes, head = C.score(base, module, addr, "base")
+    spent += 1
+    out.append("base: %s" % head)
+    if best_bytes == 0 or best_bytes >= C.FAILSCORE:
+        return out, base
+    beam = [(best_bytes, base, "")]
+    best = (best_bytes, base, "")
+    tried = {hashlib.md5(base.encode()).hexdigest()}
+    for level in range(depth):
+        scored = []
+        for _, text, trail in beam:
+            for label, cand in C.neighbours(text):
+                h = hashlib.md5(cand.encode()).hexdigest()
+                if h in tried:
+                    continue
+                tried.add(h)
+                if spent >= budget:
+                    break
+                nbytes, _hd = C.score(cand, module, addr, "s%d" % spent)
+                spent += 1
+                if nbytes >= C.FAILSCORE:
+                    continue
+                path = (trail + " > " + label).strip(" >")
+                scored.append((nbytes, cand, path))
+                if nbytes < best[0]:
+                    best = (nbytes, cand, path)
+                    out.append("  %s  <- %s" % (C._fmt_score(nbytes), path))
+                if nbytes == 0:
+                    break
+            if best[0] == 0 or spent >= budget:
+                break
+        if best[0] == 0 or spent >= budget or not scored:
+            break
+        scored.sort(key=lambda t: t[0])
+        beam = scored[:3]
+    out.append("RESULT %s after %d compiles: %s"
+               % ("MATCH" if best[0] == 0 else C._fmt_score(best[0]), spent, best[2] or "(no change)"))
+    return out, (best[1] if best[0] < best_bytes else base)
+
+
+@check("colorsweep's parallel scoring explores and ranks exactly what the serial loop did",
+       "every candidate was one `python wdiff.py` process run one at a time, 0.77 s against a 0.11 s "
+       "compile, so a 400-compile sweep took 5 minutes. Scoring several at once is only safe if the "
+       "candidate order, the budget cut, the match stop and the winner stay those of the serial loop: "
+       "a sweep that explores a different set loses matches silently")
+def _colorsweep_parallel_is_serial():
+    import concurrent.futures
+    import contextlib
+    import hashlib
+    import io
+    import shutil
+    C = load("colorsweep")
+    if not hasattr(C, "sweep") or not hasattr(C, "level_scores"):
+        return "colorsweep has no sweep()/level_scores(); candidates are still scored one process at a time"
+    if "sys.executable" in open(f"{KIT}/colorsweep.py", encoding="utf-8").read():
+        return "colorsweep still launches a Python process per candidate"
+
+    def neighbours(text):
+        out = [("n%d" % j, "%s.%d" % (text, j)) for j in range(6)]
+        return out + [("shared", "shared-%d" % (len(text) % 3))]
+
+    def fake_score(goal):
+        def score(text, module, addr, tag):
+            h = int(hashlib.md5(text.encode()).hexdigest(), 16)
+            time.sleep((h % 4) / 1000.0)
+            if text == "base":
+                return 40, "BYTEDIFF base"
+            if text.endswith(goal):
+                return 0, "MATCH"
+            if h % 9 == 0:
+                return C.FAILSCORE, "COMPILE-FAIL"
+            return 5 + h % 60, "BYTEDIFF"
+        return score
+
+    d = tempfile.mkdtemp(prefix="cs_par_")
+    try:
+        C.neighbours = neighbours
+        for goal, depth, budget in ((".none", 3, 500), (".none", 3, 23), (".5.2", 3, 500),
+                                    (".1.4.0", 4, 900), (".none", 2, 7)):
+            C.score = fake_score(goal)
+            want, want_text = _serial_sweep(C, "base", "main", "02000000", depth, budget)
+            src = os.path.join(d, "c.cpp")
+            open(src, "w", encoding="utf-8", newline="\n").write("base")
+            buf = io.StringIO()
+            with concurrent.futures.ThreadPoolExecutor(4) as pool, contextlib.redirect_stdout(buf):
+                C.sweep(pool, 8, "main", "02000000", src, depth, budget, True)
+            got = [l for l in buf.getvalue().splitlines() if not l.startswith("applied to ")]
+            if got != want:
+                return "goal %s depth %d budget %d: parallel printed %r, serial %r" % (
+                    goal, depth, budget, got[-2:], want[-2:])
+            if open(src, encoding="utf-8").read() != want_text:
+                return "goal %s budget %d: parallel applied a different winner" % (goal, budget)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return None
+
+
+@check("colorsweep scores in-process and leaves no candidate or object file behind",
+       "score() wrote $SP/_cs_<pid>_<tag>.cpp per candidate and never deleted it: the state root "
+       "held ~960k of them and every glob of $SP cost ~1 s")
+def _colorsweep_no_leak():
+    import shutil
+    C = load("colorsweep")
+    d = tempfile.mkdtemp(prefix="cs_leak_")
+    W = C._wdiff()
+    scr = W.SCR
+    try:
+        C.RUNROOT = os.path.join(d, "tmp")
+        W.SCR = os.path.join(d, "compile")
+        os.makedirs(W.SCR)
+        text = open(f"{KIT}/regress_fixtures/GatherEnabledRecords_0209ed0c.cpp", encoding="utf-8").read()
+        n, head = C.score(text, "main", "0209ed0c", "t")
+        if not 0 < n < C.FAILSCORE:
+            return "the 0209ed0c prior did not score as a near miss: %d %s" % (n, head)
+        run = C._rundir()
+        same = lambda p: os.path.normcase(os.path.abspath(p))
+        if same(os.path.dirname(run)) != same(C.RUNROOT) or os.listdir(run):
+            return "score() left %r in its run directory" % os.listdir(run)
+        if os.listdir(W.SCR):
+            return "wdiff left %r in its compile scratch" % os.listdir(W.SCR)
+        C._drop_rundir()
+        if os.listdir(C.RUNROOT):
+            return "the run directory survived the sweep: %r" % os.listdir(C.RUNROOT)
+    finally:
+        W.SCR = scr
+        C._drop_rundir()
+        shutil.rmtree(d, ignore_errors=True)
+    return None
+
+
 @check("r24 puts the bigger arm first, and only when that is what it is asked to do",
        "six verdicts report `the ROM branches over the arm, mwcc predicates it`, and on "
        "ov031:0221474c writing the 3-instruction arm as the `if` instead of the `else` produced the "

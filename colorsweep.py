@@ -21,17 +21,23 @@ Usage: colorsweep.py <OV|main> <addr> <file.cpp> [--depth N] [--budget N] [--app
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import collections
+import concurrent.futures
 import hashlib
 import itertools
 import os
 import re
-import subprocess
+import shutil
 import sys
+import tempfile
+import time
 
 SP = _kp.SP
 KIT = _kp.KIT
 REPO = _kp.REPO
-WDIFF = os.path.join(KIT, "wdiff.py")
+RUNROOT = os.path.join(SP, "tmp")
+STALE_RUN = 6 * 3600
+DEFAULT_JOBS = 8
 
 IDENT = r"[A-Za-z_]\w*"
 # Real code rarely combines two bare identifiers: the operands are `p->field`, `a[i]`, or
@@ -51,11 +57,43 @@ FAILSCORE = 10 ** 9
 _W = {"mnem": 10000, "over": 10 ** 8}
 
 
+_RUN = []
+
+
+def _rundir():
+    if not _RUN:
+        os.makedirs(RUNROOT, exist_ok=True)
+        _RUN.append(tempfile.mkdtemp(prefix="cs_%d_" % os.getpid(), dir=RUNROOT))
+    return _RUN[0]
+
+
+def _drop_rundir():
+    while _RUN:
+        shutil.rmtree(_RUN.pop(), ignore_errors=True)
+
+
+def _drop_stale_rundirs():
+    try:
+        names = os.listdir(RUNROOT)
+    except OSError:
+        return
+    for name in names:
+        path = os.path.join(RUNROOT, name)
+        try:
+            if name.startswith("cs_") and time.time() - os.path.getmtime(path) > STALE_RUN:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _wdiff():
+    import wdiff
+    return wdiff
+
+
 def score(text, module, addr, tag):
     """Compile `text` against the ROM slot; return (bytes_differing, headline)."""
-    # Per-process name: repairsweep may run a sweep while another sweep is in flight, and two
-    # processes sharing one temp path would gate each other's source.
-    path = os.path.join(SP, "_cs_%d_%s.cpp" % (os.getpid(), tag))
+    path = os.path.join(_rundir(), "%s.cpp" % tag)
     # NEVER leave a taggable candidate in the pool. ov_recover.gather() picks up any .cpp
     # under the scratchpad carrying a `// USA:` tag, so an intermediate variant -- most of
     # which are WRONG by construction -- would enter the wave as a real candidate. Defusing
@@ -63,6 +101,17 @@ def score(text, module, addr, tag):
     # same code (wdiff takes the address from argv, not from the comment).
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text.replace("// USA: func_", "// SCRATCH-USA: func_"))
+    try:
+        return _score_file(path, module, addr)
+    finally:
+        for leftover in (path, path[:-4] + "_cd.o"):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+
+
+def _score_file(path, module, addr):
     # CS_SCORER=case scores with pad/casescore.py instead of wdiff: per-case aligned, with
     # relocation and pool rows excluded. wdiff aligns the WHOLE function, so in a big dense-dispatch
     # function one wrong-length case body makes every later instruction read as a diff and the score
@@ -72,11 +121,14 @@ def score(text, module, addr, tag):
         import casescore
         n, detail = casescore.score(path)
         return n, detail
-    proc = subprocess.run([sys.executable, WDIFF, module, addr, path],
-                          capture_output=True, text=True, cwd=REPO)
-    out = ((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()
+    out, crash = [], None
+    try:
+        _wdiff().diff(module, addr, path, out=out, diagnose=False)
+    except Exception as e:
+        crash = "%s: %s" % (type(e).__name__, e)
+    out = chr(10).join(out).strip().splitlines()
     if not out:
-        return FAILSCORE, "(no output)"
+        return FAILSCORE, crash or "(no output)"
     head = out[0]
     # WEIGHTS MUST SCALE WITH THE FUNCTION. They were flat -- mnemonics x10000, oversize +1000 --
     # while `bytes` grows with the slot, so both orderings inverted on big functions: an OVERSIZE
@@ -2035,12 +2087,65 @@ def neighbours(text):
     return out
 
 
+def jobs():
+    if os.environ.get("CS_SCORER") == "case":
+        return 1
+    try:
+        n = int(os.environ.get("CS_JOBS", "0"))
+    except ValueError:
+        n = 0
+    return n if n > 0 else min(DEFAULT_JOBS, os.cpu_count() or 1)
+
+
+def level_scores(pool, width, beam, tried, room, module, addr, seq):
+    def pending():
+        n = 0
+        for _, text, trail in beam:
+            for label, cand in neighbours(text):
+                h = hashlib.md5(cand.encode()).hexdigest()
+                if h in tried:
+                    continue
+                tried.add(h)
+                if n >= room:
+                    return
+                n += 1
+                yield cand, (trail + " > " + label).strip(" >")
+
+    todo = pending()
+    window = collections.deque()
+    try:
+        while True:
+            while len(window) < width:
+                nxt = next(todo, None)
+                if nxt is None:
+                    break
+                seq[0] += 1
+                window.append((nxt, pool.submit(score, nxt[0], module, addr, "s%d" % seq[0])))
+            if not window:
+                return
+            (cand, path), fut = window.popleft()
+            nbytes, _hd = fut.result()
+            yield nbytes, cand, path
+    finally:
+        for _, fut in window:
+            fut.cancel()
+
+
 def main():
     module, addr, src = sys.argv[1], sys.argv[2], sys.argv[3]
     depth = int(sys.argv[sys.argv.index("--depth") + 1]) if "--depth" in sys.argv else 3
     budget = int(sys.argv[sys.argv.index("--budget") + 1]) if "--budget" in sys.argv else 80
     apply_best = "--apply" in sys.argv
+    _drop_stale_rundirs()
+    try:
+        n = jobs()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+            return sweep(pool, 2 * n if n > 1 else 1, module, addr, src, depth, budget, apply_best)
+    finally:
+        _drop_rundir()
 
+
+def sweep(pool, width, module, addr, src, depth, budget, apply_best):
     base = open(src, encoding="utf-8").read()
     spent = 0
     best_bytes, head = score(base, module, addr, "base")
@@ -2055,30 +2160,24 @@ def main():
     beam = [(best_bytes, base, "")]
     best = (best_bytes, base, "")
     tried = {hashlib.md5(base.encode()).hexdigest()}
+    seq = [0]
 
     for level in range(depth):
         scored = []
-        for _, text, trail in beam:
-            for label, cand in neighbours(text):
-                h = hashlib.md5(cand.encode()).hexdigest()
-                if h in tried:
-                    continue
-                tried.add(h)
-                if spent >= budget:
-                    break
-                nbytes, _hd = score(cand, module, addr, "s%d" % spent)
+        results = level_scores(pool, width, beam, tried, budget - spent, module, addr, seq)
+        try:
+            for nbytes, cand, path in results:
                 spent += 1
                 if nbytes >= FAILSCORE:
                     continue
-                path = (trail + " > " + label).strip(" >")
                 scored.append((nbytes, cand, path))
                 if nbytes < best[0]:
                     best = (nbytes, cand, path)
                     print("  %s  <- %s" % (_fmt_score(nbytes), path))
                 if nbytes == 0:
                     break
-            if best[0] == 0 or spent >= budget:
-                break
+        finally:
+            results.close()
         if best[0] == 0 or spent >= budget or not scored:
             break
         scored.sort(key=lambda t: t[0])
