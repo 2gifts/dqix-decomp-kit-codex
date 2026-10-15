@@ -4656,6 +4656,101 @@ def _health_one_snapshot():
     return None
 
 
+@check("mechclean verify compiles each unchanged original once per process and builds the include graph once",
+       "addrname and the header pass call verify in a loop, and every call recompiled every original and "
+       "re-read every include")
+def _mechclean_verify_cached():
+    import shutil
+    M = load("mechclean")
+    compiled, scanned = [], []
+    real_resolved = M.resolved
+
+    def fake_signature(text, path, region, include=None):
+        compiled.append((include, region))
+        return [(), (".text", text.strip().encode())]
+
+    def counted(rel, text, headers):
+        scanned.append(rel)
+        return real_resolved(rel, text, headers)
+    M.signature, M.resolved = fake_signature, counted
+    original = {"include/a.h": "struct A { int x; };\n", "src/a.cpp": '#include "a.h"\nint a;\n',
+                "src/b.cpp": "int b;\n"}
+    new = {"include/a.h": "struct A { int x; };\n\n"}
+    work = tempfile.mkdtemp(prefix="mcv_")
+    try:
+        runs = []
+        for _ in range(2):
+            compiled.clear()
+            scanned.clear()
+            bad, _seen = M.verify(original, new, {}, 2, work)
+            runs.append((bad, sum(1 for inc, _r in compiled if inc == f"{M.REPO}/include"), len(scanned)))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if runs[0][0] or runs[1][0]:
+        return "verify reported %s for an unchanged unit" % (runs[0][0] or runs[1][0])
+    if runs[0][1] != 1 or runs[1][1] != 0:
+        return "the original src/a.cpp was compiled %d then %d time(s)" % (runs[0][1], runs[1][1])
+    if runs[1][2]:
+        return "the second verify re-read %d include list(s)" % runs[1][2]
+    return None
+
+
+@check("mechclean reads committed texts and landed rows from git in batches, and an edited file from disk",
+       "tree_texts opened 13.5k working-tree files (4.1 s) and each queue row cost two git processes")
+def _mechclean_batched_reads():
+    import builtins
+    import shutil
+    import subprocess
+    M = load("mechclean")
+    repo = tempfile.mkdtemp(prefix="mcr_")
+    try:
+        def git(*a):
+            return subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                  capture_output=True, text=True).stdout.strip()
+        git("init", "-q", "-b", "trunk")
+        os.makedirs(os.path.join(repo, "src"))
+        for name in ("a", "b", "c"):
+            with open(os.path.join(repo, "src", name + ".cpp"), "w", newline="\n") as fh:
+                fh.write("int %s;\n" % name)
+        git("add", "-A")
+        git("commit", "-q", "-m", "x")
+        git("update-ref", "refs/remotes/origin/decomp-matching", "HEAD")
+        with open(os.path.join(repo, "src", "c.cpp"), "w", newline="\n") as fh:
+            fh.write("int edited;\n")
+        M.REPO = repo.replace("\\", "/")
+        opened, runs = [], []
+        real_run = subprocess.run
+
+        def guarded(path, *a, **kw):
+            opened.append(os.path.basename(str(path)))
+            return builtins.open(path, *a, **kw)
+
+        def counted(*a, **kw):
+            runs.append(a[0] if a else kw.get("args"))
+            return real_run(*a, **kw)
+        M.open = guarded
+        subprocess.run = counted
+        try:
+            _blobs, texts = M.tree_texts(roots=("src",))
+            runs.clear()
+            M.fetch_landed(["src/a.cpp", "src/b.cpp", "src/c.cpp"])
+            fetched, got = len(runs), {r: M.landed_blob(r) for r in ("src/a.cpp", "src/c.cpp")}
+        finally:
+            subprocess.run = real_run
+        if texts != {"src/a.cpp": "int a;\n", "src/b.cpp": "int b;\n", "src/c.cpp": "int edited;\n"}:
+            return "tree_texts read %r" % texts
+        if opened != ["c.cpp"]:
+            return "tree_texts opened %s from the working tree; only the edited c.cpp should be" % opened
+        if fetched > 2:
+            return "fetch_landed ran %d git processes for three rows" % fetched
+        if got["src/a.cpp"] != (git("rev-parse", "origin/decomp-matching:src/a.cpp"), "int a;\n") or \
+                got["src/c.cpp"][1] != "int c;\n":
+            return "landed rows read %r" % got
+        return None
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))

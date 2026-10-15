@@ -14,6 +14,7 @@ from elftools.elf.relocation import RelocationSection
 
 import buildcfg
 import cleancheck
+import gitread
 import kitpaths
 import mangle
 import plausible
@@ -558,7 +559,11 @@ def tree_texts(roots=("src", "include", "config"), suffixes=(".c", ".cpp", ".h",
         meta, rel = ln.split("\t", 1)
         if rel.endswith(suffixes):
             blobs[rel] = meta.split()[2]
-    return blobs, {rel: open(f"{REPO}/{rel}", encoding="utf-8", errors="replace").read() for rel in blobs}
+    edited = set(subprocess.run(["git", "-C", REPO, "diff", "--name-only", "-z", "HEAD", "--", *roots],
+                                capture_output=True, text=True, encoding="utf-8").stdout.split("\0"))
+    committed = gitread.blobs(REPO, [blobs[rel] for rel in blobs if rel not in edited])
+    return blobs, {rel: open(f"{REPO}/{rel}", encoding="utf-8", errors="replace").read() if rel in edited
+                   else committed[blobs[rel]] for rel in blobs}
 
 
 def includes(text):
@@ -582,21 +587,56 @@ def resolved(rel, text, headers):
     return out
 
 
+GRAPH = []
+
+
+def include_graph(original):
+    if not GRAPH or GRAPH[0][0] is not original:
+        headers = {rel[len("include/"):]: rel for rel in original if rel.startswith("include/")}
+        edges = {rel: resolved(rel, text, headers) for rel, text in original.items()
+                 if rel.startswith("include/") or rel.endswith((".c", ".cpp"))}
+        GRAPH[:] = [(original, headers, edges)]
+    return GRAPH[0][1], GRAPH[0][2]
+
+
 def affected(original, new):
-    headers = {rel[len("include/"):]: rel for rel in original if rel.startswith("include/")}
+    headers, edges = include_graph(original)
     closure = {h for h, rel in headers.items() if rel in new}
     while True:
-        more = {h for h, rel in headers.items() if h not in closure and resolved(rel, original[rel], headers) & closure}
+        more = {h for h, rel in headers.items() if h not in closure and edges[rel] & closure}
         if not more:
             break
         closure |= more
     tus = sorted(rel for rel in original if rel.endswith((".c", ".cpp"))
-                 and (rel in new or resolved(rel, original[rel], headers) & closure))
+                 and (rel in new or edges[rel] & closure))
     return headers, closure, tus
+
+
+BEFORE = {}
+
+
+def include_state(root):
+    out, todo = [], [root]
+    while todo:
+        for entry in os.scandir(todo.pop()):
+            if entry.is_dir():
+                todo.append(entry.path)
+            else:
+                st = entry.stat()
+                out.append((entry.path, st.st_size, st.st_mtime_ns))
+    return tuple(sorted(out))
+
+
+def original_signature(text, path, region, state):
+    key = (text, path, region, state)
+    if key not in BEFORE:
+        BEFORE[key] = signature(text, path, region, f"{REPO}/include")
+    return BEFORE[key]
 
 
 def verify(original, new, mapping, jobs, work):
     headers, closure, tus = affected(original, new)
+    state = include_state(f"{REPO}/include")
     print(f"files {len(new)}; translation units to check {len(tus)}", flush=True)
     os.makedirs(f"{work}/tu", exist_ok=True)
     shutil.rmtree(f"{work}/include", ignore_errors=True)
@@ -610,7 +650,7 @@ def verify(original, new, mapping, jobs, work):
         path = f"{work}/tu/{rel.replace('/', '_')}"
         text = new.get(rel, original[rel])
         for region in ["usa"] + [r for r in ("jpn", "eur") if re.search(r"\b%s\b" % r, original[rel] + text)]:
-            before = signature(original[rel], path, region, f"{REPO}/include")
+            before = original_signature(original[rel], path, region, state)
             if before is None:
                 if rel in new:
                     return rel, False
@@ -622,7 +662,8 @@ def verify(original, new, mapping, jobs, work):
 
     with ThreadPoolExecutor(jobs) as pool:
         bad = [rel for rel, ok in pool.map(check, tus) if not ok]
-    return bad, {rel: [headers[h] for h in resolved(rel, original[rel], headers) & closure] for rel in bad}
+    edges = include_graph(original)[1]
+    return bad, {rel: [headers[h] for h in edges[rel] & closure] for rel in bad}
 
 
 def queue(new, blobs, why):
@@ -642,17 +683,17 @@ def queue(new, blobs, why):
 
 def method_decls(original):
     groups = collections.defaultdict(collections.Counter)
-    for rel, text in original.items():
-        if not rel.startswith("src/") or not rel.endswith((".c", ".cpp")):
+    decls = [m for rel, text in original.items() if rel.startswith("src/") and rel.endswith((".c", ".cpp"))
+             for m in re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+([^;{}()=]*?)\b(_ZN\w+)\s*\(([^;{}]*)\)\s*[;{]', text)]
+    demangle_all(m.group(2) for m in decls)
+    for m in decls:
+        parsed, parts = demangle(m.group(2)), member_parts(m.group(2))
+        if not parsed or not parts or parts[2] is None:
             continue
-        for m in re.finditer(r'(?m)^[ \t]*extern\s+"C"\s+([^;{}()=]*?)\b(_ZN\w+)\s*\(([^;{}]*)\)\s*[;{]', text):
-            parsed, parts = demangle(m.group(2)), member_parts(m.group(2))
-            if not parsed or not parts or parts[2] is None:
-                continue
-            declared = len(split_args(m.group(3))) if m.group(3).strip() not in ("", "void") else 0
-            if declared in (parts[2], parts[2] + 1):
-                groups[(parts[0], parts[1], tuple(parsed[1]), parsed[2], declared == parts[2] + 1)][
-                    re.sub(r"\bARM\b|\bTHUMB\b", "", m.group(1)).strip()] += 1
+        declared = len(split_args(m.group(3))) if m.group(3).strip() not in ("", "void") else 0
+        if declared in (parts[2], parts[2] + 1):
+            groups[(parts[0], parts[1], tuple(parsed[1]), parsed[2], declared == parts[2] + 1)][
+                re.sub(r"\bARM\b|\bTHUMB\b", "", m.group(1)).strip()] += 1
     new = {}
     for (qual, method, real, const, member), rets in sorted(groups.items()):
         header = class_header(qual)
@@ -736,6 +777,23 @@ def accepted(mod, addr, path, text, new, staged):
             and not (staged and plausible.blocking(new)))
 
 
+LANDED = {}
+
+
+def fetch_landed(rels):
+    specs = [f"origin/decomp-matching:{rel}" for rel in rels if rel not in LANDED]
+    ids = gitread.blob_ids(REPO, specs)
+    texts = gitread.blobs(REPO, [i for i in ids.values() if i])
+    for spec, sha in ids.items():
+        LANDED[spec.split(":", 1)[1]] = (sha, texts.get(sha, "") if sha else "")
+
+
+def landed_blob(rel):
+    if rel not in LANDED:
+        fetch_landed([rel])
+    return LANDED[rel]
+
+
 def job(row, force=False):
     mod, addr, rel = row[:3]
     staged = row[5:6] == ["staging"]
@@ -750,10 +808,7 @@ def job(row, force=False):
             base = ""
             text = open(rel, encoding="utf-8", errors="replace").read()
         else:
-            base = subprocess.run(["git", "-C", REPO, "rev-parse", f"origin/decomp-matching:{rel}"],
-                                  capture_output=True, text=True).stdout.strip()
-            text = subprocess.run(["git", "-C", REPO, "cat-file", "blob", base], capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace").stdout
+            base, text = landed_blob(rel)
         found = sorted({k for _, k, _ in plausible.findings(text)} & (TREE_FIXABLE if mod == "tree" else FIXABLE))
         if not found:
             return None
@@ -819,6 +874,8 @@ def main():
         rows, run = list(tree_rows()), lambda row: job(row, True)
     else:
         rows, run = [ln.rstrip("\n").split("\t") for ln in open(QUEUE, encoding="utf-8") if ln.count("\t") >= 2], job
+    fetch_landed(row[2] for row in rows if row[5:6] != ["staging"])
+    demangle_all(n for sha, text in LANDED.values() for n in re.findall(r"\b_Z\w+", text))
     with ThreadPoolExecutor(int(args[1]) if args else 3) as pool:
         for result in pool.map(run, rows):
             if result:

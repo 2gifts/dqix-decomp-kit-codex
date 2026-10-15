@@ -138,6 +138,7 @@ def remangle_targets(original, every, keep=()):
                 seen[m.group(1)].append([p.strip() for p in mechclean.split_args(m.group(2))]
                                         if m.group(2).strip() not in ("", "void") else [])
     out = {}
+    mechclean.demangle_all(seen)
     for name, lists in seen.items():
         parsed = mechclean.demangle(name)
         if not parsed or not own_name(name) or len(every[ident(name)]) > 1 or name in keep:
@@ -386,6 +387,7 @@ def main():
     if "--shared" in sys.argv:
         blobs, original = mechclean.tree_texts()
         new, done = {}, []
+        mechclean.demangle_all(shared)
         for name in sorted(shared):
             merged, bad = shared_rename(original, new, name, mapping[name], {d: mapping[d] for d in done})
             print(f"{name}: " + (f"left, {bad} differs" if merged is None else f"renamed to {mapping[name]}"),
