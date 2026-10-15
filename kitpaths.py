@@ -92,25 +92,68 @@ def busy():
     return found
 
 
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read().strip()
+
+
+def _resolve(gitdir, common, ref):
+    for _ in range(8):
+        if not ref.startswith("ref: "):
+            return ref if len(ref) in (40, 64) and all(c in "0123456789abcdef" for c in ref) else None
+        name = ref[5:].strip()
+        for root in (gitdir, common):
+            if os.path.isfile(os.path.join(root, name)):
+                ref = _read(os.path.join(root, name))
+                break
+        else:
+            try:
+                with open(os.path.join(common, "packed-refs"), encoding="utf-8") as fh:
+                    found = [l.split()[0] for l in fh if l.rstrip().endswith(" " + name)]
+            except OSError:
+                found = []
+            return found[0] if found else None
+    return None
+
+
+def head(repo=None):
+    import subprocess
+    repo = repo or KIT
+    try:
+        gitdir = os.path.join(repo, ".git")
+        if os.path.isfile(gitdir):
+            gitdir = os.path.join(repo, _read(gitdir).split("gitdir:", 1)[1].strip())
+        common = os.path.join(gitdir, _read(os.path.join(gitdir, "commondir"))) \
+            if os.path.isfile(os.path.join(gitdir, "commondir")) else gitdir
+        if not os.path.isdir(os.path.join(common, "reftable")):
+            sha = _resolve(gitdir, common, _read(os.path.join(gitdir, "HEAD")))
+            if sha:
+                return sha
+    except (OSError, IndexError):
+        pass
+    return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True,
+                          timeout=30).stdout.strip()
+
+
 def behind():
     """Commits the published kit is ahead of this checkout, fetched at most every FRESH_EVERY seconds."""
     import subprocess
     import time
     stamp = os.path.join(SP, "wlog", ".kit_fresh")
     run = lambda *a: subprocess.run(["git", "-C", KIT, *a], capture_output=True, text=True, timeout=30)
-    head = run("rev-parse", "HEAD").stdout.strip()
+    head_sha = head()
     try:
         count, seen = (open(stamp, encoding="utf-8").read().split() + [""])[:2]
         count, age = int(count), time.time() - os.path.getmtime(stamp)
     except (OSError, ValueError):
         count, seen, age = 0, "", FRESH_EVERY
-    if age >= FRESH_EVERY or seen != head:
+    if age >= FRESH_EVERY or seen != head_sha:
         os.makedirs(os.path.dirname(stamp), exist_ok=True)
-        open(stamp, "w", encoding="utf-8").write(f"{count if seen == head else 0} {head}")
+        open(stamp, "w", encoding="utf-8").write(f"{count if seen == head_sha else 0} {head_sha}")
         if run("fetch", "-q", KIT_URL, KIT_BRANCH).returncode == 0:
             count = int(run("rev-list", "--count", "HEAD..FETCH_HEAD").stdout.strip() or 0)
-            open(stamp, "w", encoding="utf-8").write(f"{count} {head}")
-        elif seen != head:
+            open(stamp, "w", encoding="utf-8").write(f"{count} {head_sha}")
+        elif seen != head_sha:
             count = 0
     return count
 

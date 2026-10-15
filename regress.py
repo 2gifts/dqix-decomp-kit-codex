@@ -4343,6 +4343,72 @@ def _repairsweep_respects_asmpark():
         shutil.rmtree(sp, ignore_errors=True)
 
 
+@check("kitpaths reads HEAD from .git without spawning git, in a worktree and from packed refs",
+       "every kit script imports kitpaths, and its freshness check spawned `git rev-parse HEAD` on each import")
+def _head_without_git():
+    import shutil
+    import subprocess
+    base = tempfile.mkdtemp(prefix="rh_")
+    try:
+        repo, wt = os.path.join(base, "repo"), os.path.join(base, "wt")
+        os.makedirs(repo)
+
+        def git(cwd, *a):
+            return subprocess.run(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                  capture_output=True, text=True).stdout.strip()
+        git(repo, "init", "-q", "-b", "trunk")
+        git(repo, "commit", "-q", "--allow-empty", "-m", "a")
+        git(repo, "worktree", "add", "-q", "-b", "side", wt)
+        git(wt, "commit", "-q", "--allow-empty", "-m", "b")
+        git(repo, "pack-refs", "--all")
+        detached = os.path.join(base, "detached")
+        git(repo, "worktree", "add", "-q", "--detach", detached, "trunk")
+        want = {r: git(r, "rev-parse", "HEAD") for r in (repo, wt, detached, KIT)}
+        if len(set(want.values()) - {""}) < 2:
+            return "the fixture repository did not build: %s" % want
+        real = subprocess.run
+
+        def refuse(*a, **kw):
+            raise AssertionError("spawned %s" % (a[0] if a else kw.get("args"),))
+        subprocess.run = refuse
+        try:
+            got = {r: _kp.head(r) for r in want}
+        except AssertionError as e:
+            return "kitpaths.head %s" % e
+        finally:
+            subprocess.run = real
+        bad = {r: (got[r], w) for r, w in want.items() if got[r] != w}
+        return "kitpaths.head disagrees with git rev-parse: %s" % bad if bad else None
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+SPAWN_PROBE = ("import subprocess, sys\nsys.path.insert(0, sys.argv[1])\nseen = []\n"
+               "orig = subprocess.Popen.__init__\n"
+               "def init(self, args, *a, **kw):\n"
+               "    seen.append(args if isinstance(args, str) else ' '.join(map(str, args)))\n"
+               "    return orig(self, args, *a, **kw)\n"
+               "subprocess.Popen.__init__ = init\n"
+               "__import__(sys.argv[2])\nprint(repr(seen))\n")
+
+
+def spawns_on_import(mod):
+    import ast
+    import subprocess
+    r = subprocess.run([sys.executable, "-c", SPAWN_PROBE, KIT, mod], capture_output=True, text=True,
+                       env=dict(os.environ, DQIX_NO_FRESHNESS="1"), timeout=120)
+    lines = r.stdout.strip().splitlines()
+    return ast.literal_eval(lines[-1]) if lines else ["import failed: %s" % r.stderr.strip()[-200:]]
+
+
+@check("importing buildcfg spawns no process",
+       "configure.py's get_platform called platform.system(), which runs `cmd /c ver` on Windows, on every "
+       "import of buildcfg by every gate, sweep and claim")
+def _buildcfg_spawns_nothing():
+    seen = spawns_on_import("buildcfg")
+    return "importing buildcfg spawned %s" % seen if seen else None
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))

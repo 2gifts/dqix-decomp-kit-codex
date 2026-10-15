@@ -17,8 +17,20 @@ _TOOLS = os.path.join(REPO, "tools")
 REGION = os.environ.get("DQIX_REGION", "usa")
 
 
+def _system():
+    return "Windows" if os.name == "nt" else os.uname().sysname
+
+
+def _machine():
+    if os.name == "nt":
+        return os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE", "")
+    return os.uname().machine
+
+
 def _load():
+    import platform
     cwd, argv = os.getcwd(), sys.argv[:]
+    probes = platform.system, platform.machine
     os.chdir(REPO)
     sys.argv = ["configure.py", REGION]
     if os.environ.get("DQIX_WINE"):
@@ -26,10 +38,12 @@ def _load():
     if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
         sys.argv += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
     sys.path.insert(0, _TOOLS)
+    platform.system, platform.machine = _system, _machine
     try:
         import configure
         return configure
     finally:
+        platform.system, platform.machine = probes
         os.chdir(cwd)
         sys.argv = argv
         if _TOOLS in sys.path:
