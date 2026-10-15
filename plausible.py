@@ -763,6 +763,12 @@ def _symbol_alias(src, out):
 BYTE_POINTER = {"char*", "unsignedchar*", "signedchar*", "u8*", "s8*"}
 
 
+def _byte_self(src, fn, out):
+    for t, n in fn.f["params"][:1]:
+        if n == "self" and re.sub(r"\s+|\bconst\b|\bstruct\b", "", t) in BYTE_POINTER:
+            _hit(out, src.line(fn.f["open"]), "BYTE-SELF", "%s %s" % (t.strip(), n))
+
+
 def _param_retyped(src, fn, out):
     for t, n in fn.f["params"]:
         if not n or re.sub(r"\s+|\bconst\b|\bstruct\b", "", t) not in BYTE_POINTER:
@@ -777,7 +783,7 @@ def _param_retyped(src, fn, out):
 
 
 FN_RULES = [_split_pointer_add, _pointer_round_trip, _int_pun_null_test, _noop_addr_cast,
-            _member_addr_null_test, _self_store, _param_retyped]
+            _member_addr_null_test, _self_store, _param_retyped, _byte_self]
 MANGLED_DECL = re.compile(r'(?m)^[ \t]*extern\s+"C"\s+[^;{}()]*?\b(_Z\w+)\s*\(([^()]*)\)\s*;')
 
 

@@ -3237,8 +3237,11 @@ def _plausible_casts():
     for good in ('extern "C" void f(MessageSystem* self, int state) {\n    MessageSystem* m = self;\n}\n',
                  'void f(char* buf) {\n    char* p = (char*)(buf + 4);\n}\n',
                  'void f(void* p) {\n    MessageSystem* m = (MessageSystem*)p;\n}\n'):
-        if [k for _, k, _ in P.findings(good) if k in ("REINTERPRET-CAST", "PARAM-RETYPED")]:
+        if [k for _, k, _ in P.findings(good) if k in ("REINTERPRET-CAST", "PARAM-RETYPED", "BYTE-SELF")]:
             return "plausible.py flagged %r" % good
+    raw = 'extern "C" void f(char* self, int state) {\n    int i = *(int*)(self + 0x78);\n}\n'
+    if "BYTE-SELF" not in [k for _, k, _ in P.blocking(raw)]:
+        return "plausible.py did not block a function taking its object as `char* self`"
     return None
 
 
