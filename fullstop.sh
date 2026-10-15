@@ -29,6 +29,10 @@ DRY=0
 HARD=0
 [ "$MODE" = "--hard" ] && HARD=1
 
+WORKER_RE='claude\.exe.*\s-p\s.*DQIX'
+POSIX=0
+case "$OSTYPE" in msys*|cygwin*) ;;
+  *) POSIX=1; WORKER_RE='^([^ ]*/)?claude[[:space:]](.*[[:space:]])?-p[[:space:]].*DQIX' ;; esac
 # Anything whose purpose is to run, or to launch, a paid session.
 SPENDERS='supervise\.sh|run_all\.sh|run_module\.sh|run_overlay\.sh|run_main\.sh|pull_all\.sh|pull_fleet\.sh|pull_worker\.sh|restart_pull\.sh|resume_sweep\.sh|resume_one\.sh|smoke\.sh|watchdog\.sh|limit_guard\.sh'
 # Local compute only: no API calls, no worker sessions. DERIVED, NOT ENUMERATED -- anything running
@@ -168,6 +172,53 @@ count_watchers() {
     \$w.Count" 2>/dev/null | tr -d '\r\n '
 }
 
+if [ "$POSIX" -eq 1 ]; then
+  _psx() {
+    local me=${PSELF:-$BASHPID} t=$PSNAP
+    [ -n "$PSELF" ] || t=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
+    printf '%s\n' "$t" | IN="$1" OUT="$2" HOW="$3" SELF="$me" WATCHERS="$WATCHERS" KIDS="$WATCHKIDS" awk '
+      { pp[$1] = $2; age[$1] = $3; c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ ?/, "", c); cmd[$1] = c; id[++k] = $1 }
+      END {
+        re = tolower(ENVIRON["IN"]); out = tolower(ENVIRON["OUT"]); kids = tolower(ENVIRON["KIDS"])
+        s = ENVIRON["SELF"]; for (i = 0; i < 12 && (s in pp); i++) { self[s] = 1; s = pp[s] }
+        for (j = 1; j <= k; j++) {
+          x = id[j]; l = tolower(cmd[x]); ok = 0
+          if (ENVIRON["HOW"] != "watch") ok = l ~ re && l !~ out
+          else if (!(x in self)) {
+            if (l ~ tolower(ENVIRON["WATCHERS"]) && l !~ out) ok = 1
+            n = l; sub(/ .*/, "", n); sub(/.*\//, "", n)
+            if (n ~ /^(tail|grep|ugrep|bash|sh)$/) {
+              p = x; st = 0; so = 0
+              for (i = 0; i < 8; i++) {
+                lp = tolower(cmd[p]); if (lp ~ kids) st = 1
+                if (lp ~ /wlog|dqix-sp|dqix-decomp/) so = 1
+                if (st && so) { ok = 1; break }
+                if (!(pp[p] in pp)) { if (st) ok = 1; break }
+                p = pp[p] } } }
+          if (ok) printf "%s@@@%d@@@%s\n", x, age[x] / 60 + 0.5, substr(cmd[x], 1, 110) } }'
+  }
+  _pkill() {
+    local ids; ids=$(printf '%s\n' "$1" | awk -F'@@@' 'NF > 1 { print $1 }')
+    [ -n "$ids" ] && kill -9 $ids 2>/dev/null
+    printf '%s\n' "$ids" | grep -c .
+  }
+  ps_list() { _psx "$1" "${2:-__never__}|$EXCL"; }
+  kill_spenders() { _pkill "$(ps_list "($WORKER_RE)|$SPENDERS")"; }
+  count_workers() { ps_list "($WORKER_RE)|$SPENDERS" | grep -c .; }
+  list_watchers() { _psx "" "$EXCLW" watch; }
+  kill_watchers() { _pkill "$(list_watchers)"; }
+  count_watchers() { list_watchers | grep -c .; }
+  snapshot() {
+    local PSELF=$BASHPID PSNAP t1 t2 t3
+    PSNAP=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
+    t1=$(ps_list "($WORKER_RE)|$SPENDERS"); t2=$(ps_list "$CPUJOBS" "$NOTCPU"); t3=$(list_watchers)
+    [ -n "$t1" ] && printf '%s\n' "$t1" | sed 's/^/T1@@@/'
+    [ -n "$t2" ] && printf '%s\n' "$t2" | sed 's/^/T2@@@/'
+    [ -n "$t3" ] && printf '%s\n' "$t3" | sed 's/^/T3@@@/'
+    printf 'N1@@@%s\nN3@@@%s\n' "$(printf '%s' "$t1" | grep -c .)" "$(printf '%s' "$t3" | grep -c .)"
+  }
+fi
+
 # TaskStop ends a Monitor task and leaves its bash/tail/grep running, so restarting a watch a few
 # times leaks a loop each time -- five live health.sh loops accumulated in one session, each waking
 # every 120s. Reaping them must not require stopping the fleet, or the choice becomes "leak, or
@@ -231,6 +282,7 @@ elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
       foreach (\$x in \$p) { try { Stop-Process -Id \$x.ProcessId -Force -ErrorAction Stop } catch {} }
       \$p.Count" 2>/dev/null | tr -d '\r\n '
   }
+  if [ "$POSIX" -eq 1 ]; then kill_cpu() { _pkill "$(ps_list "$CPUJOBS" "$NOTCPU")"; }; fi
   echo "  killed: $(kill_cpu)"
   for _i in 1 2; do
     sleep 2

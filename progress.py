@@ -109,11 +109,14 @@ def fleet():
     `pull_all.sh` finds nothing and this reported `drivers 0 workers 0 -- the run died` while a
     worker was mid-function. A false death notice is worse than no notice: it invites a relaunch on
     top of a live fleet, which is the one state this project must never reach. Ask Windows for the
-    command lines instead.
+    command lines instead. Off Windows there is no powershell, and `ps` itself carries them.
     """
-    out = sh("powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | ForEach-Object "
-             "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }")
+    if os.name == "nt":
+        out = sh("powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | ForEach-Object "
+                 "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }")
+    else:
+        out = "\n".join("|".join(ln.split(None, 2)) for ln in sh("ps", "-wweo", "pid=,ppid=,args=").splitlines())
     if not out:
         return -1, -1                            # unknown, not zero -- never claim a false death
 

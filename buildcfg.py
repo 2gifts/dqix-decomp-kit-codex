@@ -73,6 +73,7 @@ _cfg = _load()
 
 MWCC_VERSION = _cfg.MWCC_VERSION
 DECOMP_ME_COMPILER = _cfg.DECOMP_ME_COMPILER
+EXE = getattr(_cfg, "EXE", ".exe" if os.name == "nt" else "")
 COMPILER_ROOT = os.path.normpath(os.path.join(REPO, str(_cfg.mwcc_root)))
 CC = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwccarm.exe"
 AS = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwasmarm.exe"
@@ -140,6 +141,44 @@ def tool_command(executable):
     if runner and not os.path.isabs(runner) and ("/" in runner or "\\" in runner):
         runner = os.path.normpath(os.path.join(REPO, runner))
     return ([runner] if runner else []) + [executable]
+
+
+_FRIDA_DEFER = """(function () {
+const MSCDECL = Process.platform === 'windows' ? 'mscdecl' : 'sysv';
+const text = ptr('0x401000');
+const body = function () {
+/*BODY*/
+};
+const mapped = Process.findRangeByAddress(text);
+if (mapped !== null && mapped.protection.indexOf('x') !== -1) { body(); return; }
+const mprotect = Module.getGlobalExportByName ? Module.getGlobalExportByName('mprotect')
+                                              : Module.getExportByName(null, 'mprotect');
+const gate = Interceptor.attach(mprotect, {
+  onEnter(a) { this.lo = a[0]; this.hi = a[0].add(a[1]); this.prot = a[2].toInt32(); },
+  onLeave(rv) {
+    if (rv.toInt32() === 0 && (this.prot & 7) === 5 && text.compare(this.lo) >= 0 && text.compare(this.hi) < 0) {
+      gate.detach();
+      body();
+    }
+  }
+});
+})();
+"""
+
+
+def frida_script(js):
+    return _FRIDA_DEFER.replace("/*BODY*/", js.replace("'mscdecl'", "MSCDECL"), 1)
+
+
+def frida_spawn(device, argv, cwd):
+    for attempt in range(3):
+        pid = device.spawn(argv, cwd=cwd)
+        try:
+            return pid, device.attach(pid)
+        except Exception as e:
+            if attempt == 2 or "terminated" not in str(e):
+                raise
+            print(f"frida: {e} during attach; respawning", file=sys.stderr)
 
 
 if __name__ == "__main__":

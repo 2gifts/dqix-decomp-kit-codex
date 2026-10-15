@@ -46,9 +46,8 @@ def run(src, mapping, obj, at="0x50b790", nth=1):
     done = threading.Event()
     msgs = []
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=sf.REPO)
-    session = device.attach(pid)
-    script = session.create_script(JS % (mapping, at, nth))
+    pid, session = sf.buildcfg.frida_spawn(device, argv, sf.REPO)
+    script = session.create_script(sf.buildcfg.frida_script(JS % (mapping, at, nth)))
     script.on("message", lambda m, d: msgs.append(m.get("payload", m)))
     script.load()
     session.on("detached", lambda *a: done.set())

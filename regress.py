@@ -1386,6 +1386,31 @@ def _linkage_repairs():
     return "no mangled callee whose bare name the config leaves undeclared, so the repair cannot fire"
 
 
+@check("autorepair leaves a C++ callee whose declaration already mangles to the ROM symbol",
+       "main 0205b234 declared `int GetWordFromTable02042648(int);`, which mangles to the ROM's "
+       "_Z24GetWordFromTable02042648i; autorepair renamed it to that spelling under extern \"C\", "
+       "the commit linked the same, and prready refused it as EXTERN-C-MANGLED")
+def _autorepair_keeps_cxx_callee():
+    import autorepair
+    probe = re.compile(r"^_Z(\d+)(\w*[0-9a-f]{8}\w*)v$")
+    for addr, name in autorepair._symbols("main").items():
+        m = probe.match(name)
+        if m and len(m.group(2)) == int(m.group(1)):
+            bare = m.group(2)
+            break
+    else:
+        return "main has no mangled no-argument callee with an address in its name to probe"
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "probe.cpp")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(f"void {bare}();\nvoid Probe() {{ {bare}(); }}\n")
+    autorepair.repair(path, "main", "02000000")
+    out = open(path, encoding="utf-8").read()
+    if f"{bare}();" not in out or "_Z" in out or 'extern "C"' in out:
+        return "the C++ callee was rewritten: %r" % out
+    return None
+
+
 # ---------------------------------------------------------------- finish_wave.sh
 
 @check("finish_wave refuses a malformed module instead of reporting green",
@@ -4138,6 +4163,60 @@ def _integ_bootstrap():
     return None
 
 
+@check("the integration tree's extract link stays out of the wave's commit",
+       "off Windows link_dir makes extract/usa a symlink, which extract/.gitignore's `*/` does not "
+       "ignore; the wave committed it and the fast-forward replaced the checkout's extracted ROM with a "
+       "link to itself (main 0209a218)")
+def _integ_extract_link_ignored():
+    import subprocess
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+        repo, tree = Path(d, "repo"), Path(d, "tree")
+        (repo / "extract").mkdir(parents=True)
+        (repo / "extract/.gitignore").write_text("*/\n")
+        for args in (["init", "-q", "-b", "decomp-matching"], ["add", "."],
+                     ["-c", "user.name=f", "-c", "user.email=f@f", "commit", "-qm", "f"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        (repo / "extract/usa").mkdir()
+        r = subprocess.run([sys.executable, "-c", "import integ_tree; integ_tree.create()"], cwd=KIT,
+                           capture_output=True, text=True,
+                           env=dict(os.environ, DQIX_MAIN_REPO=str(repo), DQIX_INTEG=str(tree)))
+        if r.returncode or not (tree / "extract/usa").exists():
+            return "create() did not link extract/usa: %s" % r.stderr[-300:]
+        st = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"], capture_output=True,
+                            text=True).stdout.strip()
+        if st:
+            return "the tree's status shows %r" % st
+    return None
+
+
+@check("proton.py hands configure a wine path without spaces",
+       "configure.py writes the -w runner into build.ninja unquoted; Steam's \"Proton 9.0 (Beta)\" path "
+       "failed every assembler step with `/bin/sh: Syntax error: \"(\" unexpected`, and the wave parked "
+       "main 0209a218 as drift")
+def _proton_wine_path():
+    import subprocess
+    from pathlib import Path
+    if os.name == "nt":
+        return None
+    with tempfile.TemporaryDirectory() as d:
+        proton, pfx = Path(d, "Proton 9.0 (Beta)/files"), Path(d, "share/pfx")
+        (proton / "bin").mkdir(parents=True)
+        (proton / "bin/wine").write_text("")
+        pfx.mkdir(parents=True)
+        r = subprocess.run([sys.executable, f"{KIT}/frida/proton.py", sys.executable, "-c",
+                            "import os; print(os.environ['DQIX_WINE'])"], capture_output=True, text=True,
+                           env=dict(os.environ, DQIX_PROTON=str(proton), DQIX_PROTON_PREFIX=str(pfx)))
+        wine = r.stdout.strip()
+        if r.returncode or not wine:
+            return "proton.py failed: %s" % r.stderr[-300:]
+        if re.search(r"[\s()]", wine):
+            return "DQIX_WINE is %r" % wine
+        if os.path.realpath(wine) != os.path.realpath(proton / "bin/wine"):
+            return "DQIX_WINE %r does not reach Proton's wine" % wine
+    return None
+
+
 @check("both integrators skip sha1 without an ARM7 BIOS and still require it with one",
        "finish_wave exited 5 at `RED: sha1 mismatch` on every module for a contributor without the "
        "BIOS dump, so countfix, regionsync and the push never ran; CONTRIBUTING.md asks for sha1 only "
@@ -4616,6 +4695,36 @@ def _git_bash():
     return None
 
 
+@check("psq.sh, fullstop.sh --dry and progress.py see a live pull_worker.sh off Windows",
+       "on Linux all three asked powershell.exe for the process table: psq.sh printed nothing, "
+       "fullstop --dry said 'none running' and STATE.md called the counts unknown, with a worker alive")
+def _posix_process_tools():
+    import subprocess
+    if os.name == "nt":
+        return None
+    with tempfile.TemporaryDirectory() as d:
+        drv = os.path.join(d, "pull_worker.sh")
+        with open(drv, "w") as fh:
+            fh.write("read -t 60 x\n")
+        sh, env = _kp.bash()
+        decoy = subprocess.Popen([sh, drv], stdin=subprocess.PIPE, env=env)
+        try:
+            time.sleep(0.5)
+            run = lambda *a: subprocess.run([sh, f"{KIT}/{a[0]}", *a[1:]], capture_output=True,
+                                            text=True, env=env, timeout=120).stdout
+            listed = run("psq.sh", "--list")
+            if not re.search(r"(?m)^%d " % decoy.pid, listed) or "psq.sh" in listed:
+                return "psq.sh --list: %r" % listed[:300]
+            if not re.search(r"pid %d " % decoy.pid, run("fullstop.sh", "--dry").split("TIER 2")[0]):
+                return "fullstop --dry did not list a live pull_worker.sh in TIER 1"
+            if load("progress").fleet()[1] < 1:
+                return "progress.fleet() counted no live pull_worker.sh"
+        finally:
+            decoy.stdin.close()
+            decoy.wait()
+    return None
+
+
 @check("compiler sweeps enumerate the configured compiler root",
        "ccsweep and pad/ccscore ignored a preinstalled compiler directory")
 def _compiler_sweep_root_fixture():
@@ -5086,6 +5195,9 @@ def _suites_record_results():
     return None
 
 
+PROCESS_READER = "powershell.exe" if os.name == "nt" else "ps"
+
+
 @check("fullstop --dry reads the process table once",
        "six PowerShell process queries and a basename per kit script made every dry run take 20-40 s")
 def _fullstop_one_snapshot():
@@ -5094,9 +5206,10 @@ def _fullstop_one_snapshot():
     d = tempfile.mkdtemp(prefix="fs_")
     try:
         log = os.path.join(d, "calls.log").replace("\\", "/")
-        for name in ("powershell.exe", "basename"):
+        for name in (PROCESS_READER, "basename"):
             with open(os.path.join(d, name), "w", newline="\n") as fh:
                 fh.write("#!/bin/sh\necho %s >> '%s'\n" % (name, log))
+            os.chmod(fh.name, 0o755)
         sh, env = _kp.bash()
         env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_NO_FRESHNESS="1")
         r = subprocess.run([sh, f"{KIT}/fullstop.sh", "--dry"], capture_output=True, text=True, env=env,
@@ -5104,9 +5217,9 @@ def _fullstop_one_snapshot():
         calls = open(log).read().split() if os.path.exists(log) else []
         if "TIER 3" not in r.stdout:
             return "fullstop --dry did not finish: %s" % (r.stdout + r.stderr)[-300:]
-        if calls.count("powershell.exe") != 1 or "basename" in calls:
-            return "fullstop --dry ran powershell %d time(s) and basename %d time(s)" % (
-                calls.count("powershell.exe"), calls.count("basename"))
+        if calls.count(PROCESS_READER) != 1 or "basename" in calls:
+            return "fullstop --dry ran %s %d time(s) and basename %d time(s)" % (
+                PROCESS_READER, calls.count(PROCESS_READER), calls.count("basename"))
         return None
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -5156,10 +5269,12 @@ def _health_one_snapshot():
         for i in range(6):
             open(os.path.join(sp, "wlog", "pull_main_s%d.log" % i), "w").write("10:00 s%d MATCH 02000000\n" % i)
         log = os.path.join(d, "calls.log").replace("\\", "/")
-        with open(os.path.join(d, "powershell.exe"), "w", newline="\n") as fh:
-            fh.write("#!/bin/sh\necho powershell >> '%s'\n" % log)
+        with open(os.path.join(d, PROCESS_READER), "w", newline="\n") as fh:
+            fh.write("#!/bin/sh\necho %s >> '%s'\n" % (PROCESS_READER, log))
+        os.chmod(fh.name, 0o755)
         with open(os.path.join(d, "stat"), "w", newline="\n") as fh:
             fh.write("#!/bin/sh\necho stat >> '%s'\nexec /usr/bin/stat \"$@\"\n" % log)
+        os.chmod(fh.name, 0o755)
         sh, env = _kp.bash()
         env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
         r = subprocess.run([sh, f"{KIT}/health.sh", "--once"], capture_output=True, text=True, env=env, timeout=300)
@@ -5171,9 +5286,41 @@ def _health_one_snapshot():
         shutil.rmtree(d, ignore_errors=True)
     if "ALERT driver" not in r.stdout:
         return "health.sh --once did not report the missing dispatcher: %r" % (r.stdout + r.stderr)[-300:]
-    if calls.count("powershell") != 1 or calls.count("stat") != 1:
-        return "one health cycle ran powershell %d time(s) and stat %d time(s)" % (
-            calls.count("powershell"), calls.count("stat"))
+    if calls.count(PROCESS_READER) != 1 or calls.count("stat") != 1:
+        return "one health cycle ran %s %d time(s) and stat %d time(s)" % (
+            PROCESS_READER, calls.count(PROCESS_READER), calls.count("stat"))
+    return None
+
+
+@check("health.sh off Windows does not count its own awk as a live pull_worker",
+       "the awk counting the `ps` snapshot ran beside ps, so its own program text (pull_worker) was in "
+       "the snapshot: PULLW was never 0 and the 'dispatcher up, ZERO workers' alert could not fire")
+def _health_no_self_count():
+    import shutil
+    import subprocess
+    if os.name == "nt":
+        return None
+    real = shutil.which("ps")
+    sp = tempfile.mkdtemp(prefix="hs_")
+    d = tempfile.mkdtemp(prefix="hsbin_")
+    try:
+        os.makedirs(os.path.join(sp, "wlog"))
+        with open(os.path.join(sp, "wlog", ".zero_workers_since"), "w") as fh:
+            fh.write("0\n")
+        with open(os.path.join(d, "ps"), "w", newline="\n") as fh:
+            fh.write("#!/bin/sh\nsleep 0.2\n'%s' \"$@\" | grep -E '^ *[0-9]+ +[0-9]+ +([^ ]*/)?awk '\n" % real)
+        os.chmod(fh.name, 0o755)
+        sh, env = _kp.bash()
+        env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
+        out = subprocess.run([sh, f"{KIT}/health.sh", "--once"], capture_output=True, text=True, env=env,
+                             timeout=300).stdout
+    except subprocess.TimeoutExpired:
+        return "health.sh --once did not return"
+    finally:
+        shutil.rmtree(sp, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
+    if "ALERT idle" not in out:
+        return "no idle alert with no pull_worker alive: %r" % out[-300:]
     return None
 
 

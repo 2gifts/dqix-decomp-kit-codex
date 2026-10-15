@@ -32,8 +32,8 @@ def function_locations():
 
 
 def diff_unit(unit):
-    out = subprocess.run([f"{REPO}/objdiff-cli.exe", "diff", "-p", REPO, "-u", unit, "-o", "-", "--format", "json"],
-                         capture_output=True, cwd=REPO).stdout
+    out = subprocess.run([f"{REPO}/objdiff-cli{buildcfg.EXE}", "diff", "-p", REPO, "-u", unit, "-o", "-",
+                          "--format", "json"], capture_output=True, cwd=REPO).stdout
     if not out.strip():
         return []
     d = json.loads(out)

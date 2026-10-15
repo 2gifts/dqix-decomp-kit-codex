@@ -209,7 +209,7 @@ Keep an alert-only watch on a running fleet. To wait for a job, wait for the pro
 | `bash killfleet.sh [--all\|--orphans\|--dry]` | escalation: workers only, or supervisor, drivers and workers |
 | `bash stopat.sh '<date>'` | sleeps until the deadline, then `fullstop.sh --hard` |
 
-`fullstop.sh` never touches an interactive `claude.exe` (workers carry ` -p `). It does not stop
+`fullstop.sh` never touches an interactive `claude` or `claude.exe` (workers carry ` -p `). It does not stop
 monitors or `tail` watchers started by your own session; stop those separately. To resume, remove
 `FLEET_STOPPED` and `STOP_PULL` and start `supervise.sh` again.
 

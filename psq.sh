@@ -22,6 +22,20 @@ case "$KIND" in
   *)    PAT='pull_worker\.sh|pull_all\.sh|supervise\.sh|run_all\.sh|integrate_fast\.sh|integrate_all\.sh|finish_wave\.sh|ov_recover\.py|repairsweep\.py|colorsweep\.py|proppurge\.py|transmassive\.py' ;;
 esac
 
+case "$OSTYPE" in msys*|cygwin*) ;; *)
+  _t=$(ps -wweo pid=,ppid=,args= 2>/dev/null)
+  printf '%s\n' "$_t" | PAT="$PAT" SELF=$$ MODE="$MODE" awk '
+    { pp[$1] = $2; c = $0; sub(/^ *[0-9]+ +[0-9]+ ?/, "", c); cmd[$1] = c; id[++k] = $1 }
+    END {
+      s = ENVIRON["SELF"]; for (i = 0; i < 12 && (s in pp); i++) { self[s] = 1; s = pp[s] }
+      for (j = 1; j <= k; j++) {
+        x = id[j]; l = tolower(cmd[x])
+        if ((x in self) || l !~ tolower(ENVIRON["PAT"]) || l ~ /win32_process|psq\.sh/) continue
+        n++; if (ENVIRON["MODE"] == "--list") printf "%s  %s\n", x, substr(cmd[x], 1, 100) }
+      if (ENVIRON["MODE"] != "--list") print n + 0 }'
+  exit ;;
+esac
+
 powershell.exe -NoProfile -Command "
   \$all = Get-CimInstance Win32_Process
   \$byid = @{}; foreach (\$q in \$all) { \$byid[[int]\$q.ProcessId] = \$q }

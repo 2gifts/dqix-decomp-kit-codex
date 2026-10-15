@@ -95,9 +95,8 @@ def run(src, cfg):
     events = []
     done = threading.Event()
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=REPO)
-    session = device.attach(pid)
-    script = session.create_script(JS % json.dumps(cfg))
+    pid, session = buildcfg.frida_spawn(device, argv, REPO)
+    script = session.create_script(buildcfg.frida_script(JS % json.dumps(cfg)))
     script.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     script.load()
     session.on("detached", lambda *a: done.set())

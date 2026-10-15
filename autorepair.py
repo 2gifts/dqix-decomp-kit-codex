@@ -114,7 +114,8 @@ def repair(path, module, addr, _no_rename=False):
                 continue                      # never touch this file's own function
             real = syms.get(a)
             if real and real != ident:
-                renames[ident] = real
+                if not real.startswith(f"_Z{len(ident)}{ident}"):
+                    renames[ident] = real
                 break
     for old, new in renames.items():
         out = re.sub(r'\b' + re.escape(old) + r'\b', new, out)
