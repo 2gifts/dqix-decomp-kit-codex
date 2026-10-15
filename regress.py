@@ -3224,6 +3224,28 @@ def _plausible_type_redefined():
     return None
 
 
+@check("retype_returns gives a function the class every call casts its result to, and drops the casts",
+       "121 casts of call results to one class stood in for a void* or int return type nobody fixed at the "
+       "definition")
+def _retype_returns():
+    R = load("retype_returns")
+    original = {"src/a.cpp": "void* Lookup(int i) {\n    return 0;\n}\n",
+                "src/b.cpp": "struct Entry { int a; };\nvoid* Lookup(int i);\n"
+                             "void f() { ((Entry*)Lookup(1))->a = 0; static_cast<Entry*>(Lookup(2))->a = 1; }\n",
+                "src/c.cpp": "struct Other;\nvoid* Find(int i) {\n    return 0;\n}\n"
+                             "void g() { (Other*)Find(1); (Entry*)Find(2); }\n"}
+    found = R.candidates(original)
+    if found != {"Lookup": ("Entry", "void*")}:
+        return "candidates gave %r" % found
+    a = R.rewrite(original["src/a.cpp"], "Lookup", "Entry", "void*")
+    b = R.rewrite(original["src/b.cpp"], "Lookup", "Entry", "void*")
+    if "Entry* Lookup(int i) {" not in a or "struct Entry;" not in a:
+        return "the definition was not retyped and given the class: %r" % a
+    if "Entry* Lookup(int i);" not in b or "{ Lookup(1)->a = 0;" not in b or "Lookup(2)->a = 1" not in b:
+        return "the declaration or the casts were left: %r" % b
+    return None
+
+
 @check("plausible.py blocks reinterpret_cast and a byte-pointer parameter cast to the game class it really is",
        "a source took `char* self` and wrote `reinterpret_cast<MessageSystem*>(self)` under jpn instead of "
        "typing the parameter MessageSystem* and carrying that type to its callers")
