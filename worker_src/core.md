@@ -684,6 +684,9 @@ is register NUMBERS around a byte value, retype it before touching anything else
   is a struct of one `unsigned char count : 8;` bitfield, read as `data->rank[i].count` (`0218aa24`).
 - Keep a packed value in an `int` local so only the genuinely narrow call site pays for the
   truncation; typing the local `unsigned short` emits `lsl`/`lsr #0x10` at every use (`020307d0`).
+- a u16 member accessor whose result the ROM truncates once into an `unsigned short` local and
+  compares untruncated elsewhere is read through a helper returning `int`:
+  `static inline int GetField06(GameObject* o) { return o->obj3D_.GetField06(); }` (`02191cc0`).
 - three separate `and rX,sl,#0xff` for ONE integer argument are per-call implicit conversions to an
   `unsigned char` PARAMETER, not source casts. Change the callee's parameter type; do not write
   casts at the call sites.
