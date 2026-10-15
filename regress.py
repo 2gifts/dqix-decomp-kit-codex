@@ -5258,6 +5258,113 @@ def _revision_reads_batched():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _script_defs(path, *names, **env):
+    import hashlib
+    src = open(path, encoding="utf-8").read()
+    ns = dict(env, re=re, os=os, sys=sys, hashlib=hashlib)
+    for name in names:
+        m = re.search(r'(?ms)^def %s\(.*?(?=^\S|\Z)' % re.escape(name), src)
+        if not m:
+            return None
+        exec(m.group(0), ns)
+    return ns
+
+
+@check("repairsweep routes on every line of wgate's verdict, not on its first",
+       "wgate prints `RESIDUE <CLASS> ...` before the BYTEDIFF or UNDEF-SYM line, and repairsweep "
+       "tested verdict.startswith(...): the UNDEF-SYM repairs never ran and no BYTEDIFF residue was "
+       "colour-swept. The 557-copy pass of 10-14 swept SIZE verdicts only; its 7 REGPERM and 71 "
+       "SCHED copies were never offered to colorsweep")
+def _repairsweep_routes_on_lines():
+    src = open(f"{KIT}/repairsweep.py", encoding="utf-8").read()
+    if 'verdict.startswith("UNDEF-SYM")' in src:
+        return "an UNDEF-SYM repair still keys on the verdict's first line, the RESIDUE line"
+    ns = _script_defs(f"{KIT}/repairsweep.py", "_says", "sweep_budget", COLORSWEEP_MAX_BYTES=24,
+                      COLORSWEEP_BUDGET=150, COLORSWEEP_BUDGET_MAX=400)
+    if not ns:
+        return "repairsweep.py has no sweep_budget() deciding which verdicts are colour-swept"
+    regperm = ("RESIDUE REGPERM 3 r0->r1\nHINT: scratch only\n"
+               "BYTEDIFF: 3 bytes differ at ['0x2d', '0x31', '0x35'] (NOT byte-exact)")
+    if ns["sweep_budget"](regperm, 0x100) != 150 + 0x100 // 8:
+        return "a REGPERM 3 verdict on a 256-byte function is not swept with the size-scaled budget"
+    big = ("RESIDUE LOOP-SHAPE 1292 1 branch target(s) differ, first at 0x358\n"
+           "BYTEDIFF: 1292 bytes differ at ['0x0'] (NOT byte-exact)")
+    if ns["sweep_budget"](big, 0x800) is not None:
+        return "a 1292-byte LOOP-SHAPE residue on a 2KB function is swept"
+    size = ("RESIDUE UNDERGEN 4 0x11c vs slot 0x120\n"
+            "SIZE/OVERGEN: 1 .text total=0x11c slot=0x120 (define ONLY this func)")
+    if ns["sweep_budget"](size, 0) != 150 + 0x120 // 8:
+        return "a near-size UNDERGEN 4 verdict is not swept"
+    if not ns["_says"]("RESIDUE UNDEF-SYM 1 f\nUNDEF-SYM: ['f'] -- these callee symbols", "UNDEF-SYM"):
+        return "_says() misses the UNDEF-SYM line behind the RESIDUE line"
+    return None
+
+
+@check("repairsweep colour-sweeps one copy per address and never re-sweeps an unchanged source",
+       "every parked copy got its own colorsweep of up to 400 compiles and four flag-set gates, and "
+       "every pass redid both on the same unchanged files: 557 copies of 63 addresses, 4h38m per "
+       "pass, 0 hits")
+def _repairsweep_sweeps_once():
+    import shutil
+    src = open(f"{KIT}/repairsweep.py", encoding="utf-8").read()
+    ns = _script_defs(f"{KIT}/repairsweep.py", "rank", "sweep_picks", "cache_key", "cached_sweep",
+                      "cached_lead")
+    if not ns:
+        return "repairsweep.py has no sweep_picks()/cache_key()/cached_sweep()/cached_lead()"
+    if ("if picks.get(addr) == k:" not in src or "cached_sweep(SWEEPCACHE" not in src
+            or "cached_lead(SWEEPCACHE" not in src):
+        return "the pass does not route its colour and flag sweeps through the per-source cache"
+    near = "RESIDUE UNDERGEN 4 0x11c vs slot 0x120\nSIZE/OVERGEN: 1 .text total=0x11c slot=0x120"
+    regperm = "RESIDUE REGPERM 3 r0->r1\nBYTEDIFF: 3 bytes differ at ['0x2d']"
+    sched = "RESIDUE SCHED 9 x\nBYTEDIFF: 9 bytes differ at ['0x10']"
+    picks = ns["sweep_picks"]([("a", sched, 150), ("a", regperm, 150), ("a", near, 150),
+                               ("b", regperm, None), ("c", sched, 150), ("c", sched, 150)])
+    if picks != {"a": 1, "c": 4}:
+        return "sweep_picks chose %r, want the best sweepable copy per address {'a': 1, 'c': 4}" % picks
+    key = ns["cache_key"]
+    base = key("fp", b"int f;", "main", "02000000", 150, 3, regperm)
+    for other in (key("fp2", b"int f;", "main", "02000000", 150, 3, regperm),
+                  key("fp", b"int f;", "main", "02000000", 151, 3, regperm),
+                  key("fp", b"int f;", "main", "02000000", 150, 3, sched),
+                  key("fp", b"int g;", "main", "02000000", 150, 3, regperm)):
+        if other == base:
+            return "cache_key ignores the kit, the budget, the verdict or the source"
+    d = tempfile.mkdtemp(prefix="sweepcache_")
+    try:
+        work, cache = os.path.join(d, "w.cpp"), os.path.join(d, "cache")
+        before, after = b"// USA: func_02000000\nint f;\n", b"// USA: func_02000000\nint g;\n"
+        calls = []
+
+        def sweep():
+            calls.append(1)
+            open(work, "wb").write(after)
+            return True
+
+        open(work, "wb").write(before)
+        if ns["cached_sweep"](cache, base, work, sweep) is not False:
+            return "a first sweep did not run colorsweep"
+        open(work, "wb").write(before)
+        if ns["cached_sweep"](cache, base, work, sweep) is not True or len(calls) != 1:
+            return "an unchanged source was swept again instead of replaying the cached result"
+        if open(work, "rb").read() != after:
+            return "a cache hit did not restore the swept source"
+        for name in os.listdir(cache):
+            if name.endswith(".cpp") or b"// USA: func_" in open(os.path.join(cache, name), "rb").read():
+                return "the cache holds a taggable source ov_recover.gather() could pick up: %s" % name
+        if ns["cached_sweep"](cache, "other", work, lambda: False) is not None or len(os.listdir(cache)) != 1:
+            return "a colorsweep run that printed no RESULT was cached as finished"
+        probes = []
+        for _ in range(2):
+            lead = ns["cached_lead"](cache, base, lambda: probes.append(1) or "-O4")
+            if lead != "-O4":
+                return "cached_lead returned %r, want the probed flag set" % lead
+        if len(probes) != 1:
+            return "the flag sets were re-gated on an unchanged source"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return None
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
