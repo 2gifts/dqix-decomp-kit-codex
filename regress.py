@@ -4526,6 +4526,44 @@ def _plausible_asm_allowlist():
     return None
 
 
+@check("merge_human stops repairing when a round changes nothing",
+       "a merge whose link failed on a symbol no repair could reach ran eight repair rounds that each "
+       "repointed 0 call sites, then a ninth identical check: nine ~62 s builds, 2026-09-09 02:42-02:51")
+def _merge_human_stops_on_noop_round():
+    import subprocess
+    src = open(f"{KIT}/merge_human.sh", encoding="utf-8").read()
+    start = src.find("tree_state() {")
+    if start < 0:
+        start = src.find("for i in 1 2 3 4 5 6 7 8; do")
+    if start < 0:
+        return "cannot locate the repair loop in merge_human.sh"
+    with tempfile.TemporaryDirectory() as d:
+        root = d.replace("\\", "/")
+        os.makedirs(f"{root}/kit")
+        os.makedirs(f"{root}/sp/wlog")
+        os.makedirs(f"{root}/repo")
+        with open(f"{root}/kit/relink_undefined.py", "w", encoding="utf-8") as fh:
+            fh.write("")
+        with open(f"{root}/kit/merge_fixups.sh", "w", encoding="utf-8") as fh:
+            fh.write("true\n")
+        with open(f"{root}/repo/a.txt", "w", encoding="utf-8") as fh:
+            fh.write("a\n")
+        for args in (("init", "-q"), ("config", "user.name", "regress"), ("config", "user.email", "regress@localhost"),
+                     ("add", "-A"), ("commit", "-q", "-m", "base")):
+            subprocess.run(["git", "-C", f"{root}/repo", *args], capture_output=True)
+        script = (f'set -u\nKIT="{root}/kit"\nSP="{root}/sp"\nARG=1\ncd "{root}/repo"\n'
+                  f'ninja() {{ echo "$*" >> "{root}/calls"; echo "FAILED: build/usa/arm9.o"; return 1; }}\n'
+                  + src[start:])
+        bash, benv = _kp.bash()
+        r = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=benv)
+        calls = open(f"{root}/calls").read().split("\n")[:-1] if os.path.exists(f"{root}/calls") else []
+    if r.returncode != 1 or "STILL FAILS" not in r.stdout:
+        return f"exit {r.returncode}: {(r.stdout + r.stderr).strip()[-300:]}"
+    if calls != ["check"]:
+        return f"ran ninja {len(calls)} times for a repair that changed nothing: {calls}"
+    return None
+
+
 def _plausible_case(kind, bad, good):
     def run():
         P = load("plausible")
