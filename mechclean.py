@@ -272,6 +272,8 @@ def convert(arg, declared, real, scalar_cast):
     if d == r or (d.replace("const", "") == r.replace("const", "") and "const" in r) or \
             (r in ("void*", "voidconst*") and "*" in d):
         return arg
+    if ("*" in d) != ("*" in r):
+        return arg if "*" in r and re.fullmatch(r"0[uUlL]*|NULL", arg) else None
     if "*" in d or "*" in r or scalar_cast:
         inner = re.fullmatch(r"\(\s*(?:const\s+)?(?:struct\s+)?[A-Za-z_][\w\s]*\*+\s*\)\s*(.+)", arg)
         if inner and (plain_expr(inner.group(1)) or wrapped(inner.group(1))) and ("*" in d or "*" in r):
@@ -467,7 +469,10 @@ def typed_call(text, name, scalar_cast, with_header, real=None):
         if len(args) != len(declared):
             return None
         conv = [convert(a, d, r, scalar_cast) for a, d, r in zip(args[member:], declared[member:], real)]
-        if ident == "operator=" and member and len(real) == 1 and real[0].endswith("&"):
+        assign = ident == "operator=" and member and len(real) == 1 and real[0].endswith("&")
+        if None in conv and not assign:
+            return None
+        if assign:
             to = lambda a, t: a[1:].strip() if a.startswith("&") and plain_expr(a[1:].strip()) and not scalar_cast \
                 else "*(%s)%s" % (t, a if plain_expr(a) else "(%s)" % a)
             call = "%s = %s" % (to(args[0], qual + "*"), to(args[1], real[0][:-1].strip() + "*"))

@@ -12,7 +12,7 @@ import mechclean
 REPO, SP = kitpaths.REPO, kitpaths.SP
 WORK = f"{SP}/handwork/addrname"
 USAGE = """python addrname.py [--keep REF] [-j N] [--dry]
-       python addrname.py --remangle [--keep REF] [-j N]
+       python addrname.py --remangle [--history REV]... [--keep REF] [-j N]
        python addrname.py --shared [--keep REF]
 
 Renames every function symbol in config/usa whose name lacks its USA address, so the address stays
@@ -24,10 +24,13 @@ touches compiles to the same object, symbol names aside; an identifier that name
 The rewrites go to $SP/clean/manifest.tsv for landclean.sh. --dry prints the counts and writes
 nothing.
 
---remangle renames a symbol whose `extern "C"` mangled-name callers agree on scalar parameter widths its
-mangling contradicts (the name was guessed wrong; pointer types and arity are left to the mangling) to
-the name that signature mangles to: every region's symbols.txt, its definition and declarations retyped,
-its callers declaring the plain C++ function. It is kept on the same terms.
+--remangle renames a symbol whose `extern "C"` mangled-name callers agree on a parameter count or scalar
+widths its mangling contradicts (the name was guessed wrong; the mangling's pointer types are kept, an
+added pointer parameter takes the callers' type when they agree, else void*) to the name that signature
+mangles to: every region's symbols.txt, its definition and declarations retyped,
+its callers declaring the plain C++ function. A call never gains a cast; a cast an earlier rewrite added to fit
+the old name (`(int)ptr`, `(unsigned char)v`) is removed. --history REV also takes the views REV's parent had,
+for a symbol whose calls still carry a cast REV added to fit the old name. It is kept on the same terms, each symbol verified alone when a unit differs.
 
 --shared renames the names whose identifier another symbol shares: the class's own declaration and
 qualified definitions directly, each unqualified call one at a time, kept when the unit's object moves to
@@ -124,6 +127,10 @@ def probe_name(qual, ident, params, const):
     return names[0] if names else None
 
 
+def pointer(t):
+    return any(c in mechclean.norm_type(t) for c in "*&")
+
+
 def remangle_targets(original, every, keep=()):
     seen = collections.defaultdict(list)
     for rel, text in original.items():
@@ -138,33 +145,35 @@ def remangle_targets(original, every, keep=()):
             continue
         full, real, const = parsed
         qual = full.rsplit("::", 1)[0] if "::" in full else None
-        votes, spelling = collections.Counter(), {}
+        votes, spelling = collections.Counter(), collections.defaultdict(list)
         for params in lists:
-            member = qual is not None and len(params) == len(real) + 1
+            member = qual is not None and len(params) > len(real)
             types = [mechclean.param_type(p) for p in params[member:]]
-            if len(types) != len(real):
+            if any(pointer(r) and not pointer(t) for t, r in zip(types, real)):
                 continue
-            merged = [r if "*" in mechclean.norm_type(r) or "*" in mechclean.norm_type(t) else t
-                      for t, r in zip(types, real)]
-            key = tuple(mechclean.norm_type(t) for t in merged)
+            merged = [r if pointer(r) else t for t, r in zip(types, real)] + types[len(real):]
+            key = tuple("*" if pointer(t) and not (i < len(real) and pointer(real[i])) else mechclean.norm_type(t)
+                        for i, t in enumerate(merged))
             votes[key] += 1
-            spelling.setdefault(key, merged)
+            spelling[key].append(merged)
         if not votes:
             continue
         key = votes.most_common(1)[0][0]
         if key == tuple(mechclean.norm_type(r) for r in real):
             continue
-        new = probe_name(qual, ident(name), spelling[key], const)
+        spelled = [col[0] if k != "*" or len({mechclean.norm_type(t) for t in col}) == 1 else "void*"
+                   for k, col in zip(key, zip(*spelling[key]))]
+        new = probe_name(qual, ident(name), spelled, const)
         if new and new != name:
-            out[name] = (new, qual, ident(name), real, spelling[key])
+            out[name] = (new, qual, ident(name), real, spelled)
     return out
 
 
 def retype(text, name, info):
     new, qual, base, real, params = info
     if re.search(r"\b%s\b" % re.escape(name), text):
-        for scalar_cast, with_header in ((False, False), (True, False), (False, True), (True, True)):
-            done = mechclean.typed_call(text, name, scalar_cast, with_header, params)
+        for with_header in (False, True):
+            done = mechclean.typed_call(text, name, False, with_header, params)
             if done is not None:
                 text = done
                 break
@@ -182,6 +191,51 @@ def retype(text, name, info):
     return pattern.sub(fix, text)
 
 
+CAST = re.compile(r"\(\s*((?:const\s+)?(?:unsigned\s+|signed\s+)?[A-Za-z_]\w*(?:\s+[A-Za-z_]\w*)?\s*\**)\s*\)\s*(.+)",
+                  re.S)
+
+
+def uncast(text, info):
+    new, qual, base, real, params = info
+    at = {i: {mechclean.norm_type(params[i])} | ({mechclean.norm_type(real[i])} if i < len(real) else set())
+          for i in range(len(params)) if i >= len(real) or mechclean.norm_type(params[i]) != mechclean.norm_type(real[i])}
+    for start, end, args in reversed(mechclean.call_sites(text, base)):
+        kept = list(args)
+        for i, arg in enumerate(args):
+            m = CAST.fullmatch(arg)
+            if i in at and m and mechclean.norm_type(m.group(1)) in at[i] and \
+                    (mechclean.plain_expr(m.group(2)) or mechclean.wrapped(m.group(2))):
+                inner = m.group(2).strip()
+                kept[i] = inner[1:-1].strip() if mechclean.wrapped(inner) and mechclean.plain_expr(inner[1:-1].strip()) \
+                    else inner
+        if kept != args:
+            open_at = text.index("(", start)
+            text = text[:open_at + 1] + ", ".join(kept) + text[end - 1:]
+    return text
+
+
+def history(revs):
+    current = {}
+    for path in glob.glob(f"{REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
+        cfg = os.path.relpath(path, REPO).replace("\\", "/")
+        for name, addr in FUNC.findall(open(path, encoding="utf-8").read()):
+            current[(cfg, addr.lower())] = name
+    out = {}
+    for rev in revs:
+        old = {}
+        for cfg in git("ls-tree", "-r", "--name-only", f"{rev}^", "--", "config/usa/arm9").split():
+            if cfg.endswith("symbols.txt"):
+                for name, addr in FUNC.findall(git("show", f"{rev}^:{cfg}")):
+                    if current.get((cfg, addr.lower()), name) != name:
+                        old[name] = current[(cfg, addr.lower())]
+        names = alternation(old)
+        for rel in git("diff-tree", "--no-commit-id", "-r", "--name-only", rev, "--", "src").split():
+            if rel.endswith((".c", ".cpp")):
+                text = git("show", f"{rev}^:{rel}")
+                out[f"{rev}:{rel}"] = names.sub(lambda m: old[m.group(0)], text) if names else text
+    return out
+
+
 def symbol_idents():
     every = collections.defaultdict(set)
     for path in glob.glob(f"{REPO}/config/*/arm9/**/symbols.txt", recursive=True):
@@ -190,32 +244,46 @@ def symbol_idents():
     return every
 
 
-def remangle(jobs, keep):
+def remangle_texts(original, targets):
+    mapping = {name: info[0] for name, info in targets.items()}
+    literal = alternation(mapping)
+    new = {}
+    for rel, text in original.items():
+        out = text
+        if rel.endswith(SOURCES):
+            for name, info in targets.items():
+                if name in out or info[2] in out:
+                    out = retype(out, name, info)
+                    if rel.endswith((".c", ".cpp")):
+                        out = uncast(out, info)
+        out = literal.sub(lambda m: mapping[m.group(0)], out)
+        if out != text:
+            new[rel] = out
+    return new, mapping
+
+
+def remangle(jobs, keep, revs=()):
     blobs, original = mechclean.tree_texts()
     every = symbol_idents()
+    landed = remangle_targets(history(revs), every, keep) if revs else {}
     targets = remangle_targets(original, every, keep)
+    calls = [text for rel, text in original.items() if rel.endswith((".c", ".cpp"))]
+    targets.update({name: info for name, info in landed.items() if name not in targets and
+                    any(info[2] in text and uncast(text, info) != text for text in calls)})
     print(f"symbols whose callers agree on another signature: {len(targets)}", flush=True)
     while targets:
-        mapping = {name: info[0] for name, info in targets.items()}
-        literal = alternation(mapping)
-        new = {}
-        for rel, text in original.items():
-            out = text
-            if rel.endswith(SOURCES):
-                for name, info in targets.items():
-                    if name in out or info[2] in out:
-                        out = retype(out, name, info)
-            out = literal.sub(lambda m: mapping[m.group(0)], out)
-            if out != text:
-                new[rel] = out
+        new, mapping = remangle_texts(original, targets)
         bad, seen = mechclean.verify(original, new, mapping, jobs, WORK)
         if not bad:
             break
-        drop = set()
+        suspects = set()
         for rel in bad:
             text = original[rel] + "".join(original[h] for h in seen[rel])
-            drop |= {name for name, info in targets.items() if name in text or re.search(r"\b%s\b" % info[2], text)}
-        print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} symbol(s)", flush=True)
+            suspects |= {name for name, info in targets.items() if name in text or re.search(r"\b%s\b" % info[2], text)}
+        drop = {name for name in suspects if len(suspects) == 1 or
+                mechclean.verify(original, *remangle_texts(original, {name: targets[name]}), jobs, WORK)[0]} or suspects
+        print(f"{len(bad)} unit(s) differ, e.g. {bad[0]}; dropping {len(drop)} of {len(suspects)} symbol(s) there",
+              flush=True)
         if not drop:
             return 1
         targets = {name: info for name, info in targets.items() if name not in drop}
@@ -297,18 +365,20 @@ def shared_rename(original, new, name, renamed_to, prior=None):
 
 def main():
     args = sys.argv[1:]
-    ref, jobs, dry = None, 8, "--dry" in args
+    ref, jobs, dry, revs = None, 8, "--dry" in args, []
     while args:
         a = args.pop(0)
         if a == "--keep" and args:
             ref = args.pop(0)
         elif a == "-j" and args:
             jobs = int(args.pop(0))
+        elif a == "--history" and args:
+            revs.append(args.pop(0))
         elif a not in ("--dry", "--remangle", "--shared"):
             sys.exit(USAGE)
     keep = kept_names(ref)
     if "--remangle" in sys.argv:
-        return remangle(jobs, keep)
+        return remangle(jobs, keep, revs)
     mapping = targets(keep)
     every = symbol_idents()
     shared = {m for m in mapping if len(every[ident(m)]) > 1}

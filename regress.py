@@ -2677,6 +2677,35 @@ def _addrname():
                         "void h(Obj* o) { _Z3FooP3Objis(o, 1, 2); }\n", "_Z3FooP3Objis", info)
         if "void Foo(Obj*, int, unsigned short);" not in view or "{ Foo(o, 1, 2); }" not in view:
             return "retype left the extern \"C\" view: %r" % view
+        import collections
+        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z7Get_0x1Pvi"
+        try:
+            got = A.remangle_targets(
+                {"src/a.cpp": 'struct Ctx;\nextern "C" int _Z7Get_0x1v(Ctx* c, int i);\n'
+                              "int f(Ctx* c) { return _Z7Get_0x1v(c, 1); }\n",
+                 "src/b.cpp": 'extern "C" int _Z7Get_0x1v(unsigned char* p, int i);\n'
+                              "int g(unsigned char* p) { return _Z7Get_0x1v(p, 2); }\n"},
+                collections.defaultdict(set, {"Get_0x1": {"_Z7Get_0x1v"}}))
+        finally:
+            A.probe_name = probe
+        if got.get("_Z7Get_0x1v", (None,) * 5)[4] != ["void*", "int"]:
+            return "callers passing two arguments to a no-parameter name were not remangled to (void*, int): %r" % got
+        info = got["_Z7Get_0x1v"]
+        body = A.retype("int Get_0x1(void) {\n    return 0;\n}\n", "_Z7Get_0x1v", info)
+        if "int Get_0x1(void*, int) {" not in body:
+            return "the definition did not take the callers' parameters: %r" % body
+        probe, A.probe_name = A.probe_name, lambda qual, ident, params, const: "_Z3BarP3Obj"
+        try:
+            got = A.remangle_targets({"src/a.cpp": 'struct Obj;\nextern "C" void _Z3Bari(Obj* o);\n'
+                                                   "void f(Obj* o) { _Z3Bari(o); }\n"},
+                                     collections.defaultdict(set, {"Bar": {"_Z3Bari"}}))
+        finally:
+            A.probe_name = probe
+        if got.get("_Z3Bari", (None,) * 5)[4] != ["Obj*"]:
+            return "a caller passing a pointer to a guessed int parameter kept the int: %r" % got
+        cast = A.uncast("void Bar(Obj*);\nvoid f(Obj* o) { Bar((int)o); }\n", got["_Z3Bari"])
+        if "{ Bar(o); }" not in cast:
+            return "the (int) an earlier rewrite added to fit the old name was kept: %r" % cast
     sig = [(("_Z3Foov", 0, 4, "STT_FUNC", "STB_GLOBAL", ".text"), ("_Z3Barv", 0, 0, "STT_NOTYPE", "STB_GLOBAL",
                                                                   "SHN_UNDEF")),
            (".text", b"\x00" * 4), (".rela.text", ((0, 1, "_Z3Barv"),))]
@@ -2726,6 +2755,11 @@ def _mechclean_extern_c():
         got = M.typed_call(nested, "_ZNK6Script9Parameter5ToIntEv", False, False) or ""
         if "return ((Script::Parameter*)p)->ToInt(); }" not in got:
             return "nested member rewrite gave %r" % got
+        punned = 'struct Obj;\nextern "C" void _Z3Bari(Obj* o);\nvoid f(Obj* o) { _Z3Bari(o); }\n'
+        for scalar_cast in (False, True):
+            got = M.typed_call(punned, "_Z3Bari", scalar_cast, False)
+            if got is not None:
+                return "a pointer passed to a guessed int parameter was cast to a number: %r" % got
         assign = ('struct Vector3i { int x, y, z; Vector3i& operator=(const Vector3i&); };\n'
                   'extern "C" void _ZN8Vector3iaSERKS_(void* dst, const void* src);\n'
                   'void f(Vector3i* a, char* b) { Vector3i v; _ZN8Vector3iaSERKS_(&v, b + 4); }\n')
