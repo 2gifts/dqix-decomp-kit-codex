@@ -67,10 +67,12 @@ commit_age_min() {
 # seconds where Windows sums UserModeTime, which only ever compares equal across cycles.
 case "$OSTYPE" in msys*|cygwin*) ;; *) snapshot() {
   DRIVERS="" STRAYS="" WORKERS="" OLD="" CPU="" PULLW=""
-  local k v
+  local k v t
+  # Read before the awk starts, as the Windows query skips its own $PID: the awk's text matches pull_worker.
+  t=$(ps -wweo etimes=,times=,args= 2>/dev/null)
   while IFS='=' read -r k v; do
     case "$k" in DRIVERS|STRAYS|WORKERS|OLD|CPU|PULLW) printf -v "$k" '%s' "$v" ;; esac
-  done <<< "$(ps -wweo etimes=,times=,args= 2>/dev/null | AGE="$WORKER_MAX_MIN" awk '
+  done <<< "$(printf '%s\n' "$t" | AGE="$WORKER_MAX_MIN" awk '
     { c = $0; sub(/^ *[0-9]+ +[0-9]+ ?/, "", c); l = tolower(c)
       if (l ~ /run_all\.sh|supervise\.sh|pull_all\.sh|pull_worker\.sh/) d++
       if (l ~ /run_all\.sh|supervise\.sh|run_module\.sh/) s++

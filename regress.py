@@ -5218,6 +5218,40 @@ def _health_one_snapshot():
     return None
 
 
+@check("health.sh off Windows does not count its own awk as a live pull_worker",
+       "the awk counting the `ps` snapshot ran beside ps, so its own program text (pull_worker) was in "
+       "the snapshot: PULLW was never 0 and the 'dispatcher up, ZERO workers' alert could not fire")
+def _health_no_self_count():
+    import shutil
+    import subprocess
+    if os.name == "nt":
+        return None                      # the Win32_Process query skips its own $PID
+    real = shutil.which("ps")
+    sp = tempfile.mkdtemp(prefix="hs_")
+    d = tempfile.mkdtemp(prefix="hsbin_")
+    try:
+        os.makedirs(os.path.join(sp, "wlog"))
+        with open(os.path.join(sp, "wlog", ".zero_workers_since"), "w") as fh:
+            fh.write("0\n")              # no worker since 1970: the idle alert is due
+        with open(os.path.join(d, "ps"), "w", newline="\n") as fh:
+            # Only the live table's awk rows, read once an awk started beside it has exec'd, so no real
+            # fleet on this machine can hide the alert.
+            fh.write("#!/bin/sh\nsleep 0.2\n'%s' \"$@\" | grep -E '^ *[0-9]+ +[0-9]+ +([^ ]*/)?awk '\n" % real)
+        os.chmod(fh.name, 0o755)
+        sh, env = _kp.bash()
+        env = dict(env, PATH=d + os.pathsep + env["PATH"], DQIX_STATE=sp, DQIX_NO_FRESHNESS="1")
+        out = subprocess.run([sh, f"{KIT}/health.sh", "--once"], capture_output=True, text=True, env=env,
+                             timeout=300).stdout
+    except subprocess.TimeoutExpired:
+        return "health.sh --once did not return"
+    finally:
+        shutil.rmtree(sp, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
+    if "ALERT idle" not in out:
+        return "no idle alert with no pull_worker alive: %r" % out[-300:]
+    return None
+
+
 @check("mechclean verify compiles each unchanged original once per process and builds the include graph once",
        "addrname and the header pass call verify in a loop, and every call recompiled every original and "
        "re-read every include")
