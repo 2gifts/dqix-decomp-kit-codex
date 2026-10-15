@@ -8,7 +8,9 @@ no data, whose `// USA:` tag names a usa function, gets a usa block at that func
 has the same size or wgate.py matches the file against it.
 Then from usa to each region with a port tool that has --sync and an extracted ROM: run the sync
 (after compiling the region's objects first when its tool reads them). The ported regions build
-together, and each port is committed when the receiving region's `ninja check` and `ninja sha1` pass.
+together with usa, and each port is committed when the receiving region's `ninja check` and
+`ninja sha1` pass. Every build first reads the region's depfiles in parallel, which ninja would
+otherwise read one at a time.
 When they do not, restore the config of each module whose check failed and build again; restore the
 whole port when that is still red or no module is named. Every region but usa builds from its own
 build/<region>/build.ninja, so regions build at the same time; build.ninja is left configured for usa.
@@ -116,7 +118,24 @@ def keep(region):
     return None
 
 
+def slurp(path):
+    try:
+        with open(path, "rb") as fh:
+            fh.read()
+    except OSError:
+        pass
+
+
+def prewarm(region):
+    paths = [os.path.join(folder, name) for top in ("src", "libs")
+             for folder, _, names in os.walk(os.path.join("build", region, top)) for name in names
+             if name.endswith(".d")]
+    with concurrent.futures.ThreadPoolExecutor(32) as pool:
+        list(pool.map(slurp, paths))
+
+
 def build(region, sha1=True):
+    prewarm(region)
     code, out = run("ninja", "-f", ninja_file(region), "check")
     if code or not sha1:
         return code == 0, out
@@ -166,6 +185,7 @@ def compile_objects(region):
     path = f"build/{region}/objects.ninja"
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(f"include {ninja_file(region)}\nbuild objects: phony {escaped}\n")
+    prewarm(region)
     run("ninja", "-f", path, "-k", "0", "objects")
 
 
@@ -265,7 +285,7 @@ def settle(outs):
     done = {region: (0, f"{region}: in sync") for region in outs if not changed(region)}
     todo = [region for region in outs if region not in done]
     files = {region: ported(region) for region in todo}
-    first = green(todo) if todo else {}
+    first = green([*todo, HOME]) if todo else {}
     dropped = {region: failed_modules(first[region][1], region) for region in todo if not first[region][0]}
     for paths in dropped.values():
         if paths:

@@ -2932,6 +2932,59 @@ def _regionsync_port_keeps_mtime():
     return None
 
 
+@check("a region's depfiles are read in parallel before ninja scans them one at a time",
+       "landpr #166 #167 spent 62-90 s at the start of each region's ninja before running anything: "
+       "ninja reads the 13k depfiles one after another, 5.6 ms each when not cached; 32 threads read "
+       "the same 6378 cold files in 2.2 s instead of 35.9 s")
+def _regionsync_prewarms_depfiles():
+    import threading
+    import time as _time
+    rs = load("regionsync")
+    seen, ninja = {}, []
+    real_open = open
+
+    def opened(path, *args, **kwargs):
+        seen[os.path.normpath(path)] = threading.get_ident()
+        _time.sleep(0.005)
+        return real_open(path, *args, **kwargs)
+    with tempfile.TemporaryDirectory() as root:
+        depfiles = [os.path.normpath(os.path.join("build", "jpn", top, f"d{n}", f"x{n}.d"))
+                    for top in ("src", "libs") for n in range(32)]
+        for path in depfiles + [os.path.join("build", "jpn", "delinks", "y.o")]:
+            os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
+            with real_open(f"{root}/{path}", "w") as fh:
+                fh.write("x.o: x.cpp\n")
+        rs.open = opened
+        rs.run = lambda *args: ninja.append(dict(seen)) or (0, "OK")
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            rs.build("jpn")
+        finally:
+            os.chdir(cwd)
+    if not ninja or set(ninja[0]) != set(depfiles):
+        return "ninja ran before every depfile was read (%d of %d)" % (len(ninja[0]) if ninja else 0, len(depfiles))
+    if len(set(ninja[0].values())) < 4:
+        return "the depfiles were read one at a time"
+    return None
+
+
+@check("regionsync builds usa alongside the regions it ports",
+       "landpr built JPN and EUR for the ports, then usa alone afterwards: 3.2 minutes of a 12-minute "
+       "landing spent on a build that could have run beside the others")
+def _regionsync_builds_home_with_ports():
+    rs = load("regionsync")
+    calls = []
+    rs.changed = lambda region: True
+    rs.ported = lambda region: 1
+    rs.green = lambda regions: calls.append(sorted(regions)) or {r: (True, "") for r in regions}
+    rs.finish = lambda region, ok, dropped, files, log: (0, region)
+    done = rs.settle({"jpn": "", "eur": ""})
+    if calls != [["eur", "jpn", "usa"]] or sorted(done) != ["eur", "jpn"]:
+        return "settle() built %s and reported %s" % (calls, sorted(done))
+    return None
+
+
 @check("integrate_all ports to the other regions once: in its last module's wave, or after the loop",
        "finish_wave ran regionsync (4-5 minutes) after each module it landed, so integrate_all paid it "
        "once per module; then regionsync.sh after the loop threw away the ports the last module's gate "
