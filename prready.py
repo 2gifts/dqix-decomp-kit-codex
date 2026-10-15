@@ -158,7 +158,7 @@ def kit(kit_tip, decomp_tip):
 def decomp(decomp_tip):
     problems = []
     changed = git(REPO, "diff", "--name-only", f"{decomp_tip}...HEAD").stdout.split()
-    lines = gitread.diff_lines(REPO, [f"{decomp_tip}...HEAD"], ["src", "config"])
+    lines = gitread.diff_lines(REPO, [f"{decomp_tip}...HEAD"], ["src", "include", "config"])
     plus = lambda path: lines.get(path, ([], []))[0]
     minus = lambda path: lines.get(path, ([], []))[1]
     regions = [p.rstrip("/").split("/")[-1] for p in git(REPO, "ls-tree", "-d", "--name-only", "HEAD", "config/").stdout.split()]
@@ -195,6 +195,12 @@ def decomp(decomp_tip):
             if gained > 0:
                 problems.append(f"CODEGEN PRAGMA {path}: adds {gained}; a match never lands behind one "
                                 f"(AGENTS.md rule 8): remove it and find what the source lacks")
+        if path.startswith(("src/", "include/")):
+            gained = sum(l.count("reinterpret_cast") for l in plus(path)) - \
+                sum(l.count("reinterpret_cast") for l in minus(path))
+            if gained > 0:
+                problems.append(f"REINTERPRET-CAST {path}: adds {gained}; give the value the type it really has "
+                                f"instead of casting it")
     for path in changed:
         if path.startswith("config/usa/") and path.endswith("symbols.txt"):
             before = names(show(REPO, decomp_tip, path))

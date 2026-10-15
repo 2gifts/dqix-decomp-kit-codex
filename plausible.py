@@ -881,6 +881,23 @@ def _type_redefined(src, out):
 
 
 REINTERPRET = re.compile(r"\breinterpret_cast\s*<\s*([^>]*?)\s*>")
+CAST_OF = re.compile(r"(?:\(\s*(?:const\s+)?(?:struct\s+|class\s+)?([A-Za-z_]\w*(?:::\w+)*)\s*\*\s*\)|"
+                     r"static_cast\s*<\s*(?:const\s+)?([A-Za-z_]\w*(?:::\w+)*)\s*\*\s*>\s*\()\s*"
+                     r"([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+|[A-Za-z_]\w*\s*\()")
+
+
+def _repeated_cast(src, out):
+    seen = {}
+    for m in CAST_OF.finditer(src.code):
+        target = m.group(1) or m.group(2)
+        if target in BUILTIN or target in SCALAR_TYPEDEFS:
+            continue
+        what = re.sub(r"\s+", "", m.group(3))
+        key = (target, what)
+        seen.setdefault(key, []).append(m.start())
+        if len(seen[key]) == 2:
+            _hit(out, src.line(m.start()), "REPEATED-CAST",
+                 "%s cast to %s* more than once" % (what.rstrip("(") + ("()" if what.endswith("(") else ""), target))
 
 
 def _reinterpret_cast(src, out):
@@ -950,7 +967,8 @@ def _hand_asm(src, out):
 
 
 FILE_RULES = [_inline_local_return, _inline_offset_add, _inline_identity, _symbol_alias, _mangle_arity,
-              _extern_c_mangled, _type_redefined, _reinterpret_cast, _mixed_access, _transliterated, _hand_asm]
+              _extern_c_mangled, _type_redefined, _reinterpret_cast, _repeated_cast, _mixed_access,
+              _transliterated, _hand_asm]
 
 
 def _body_start(lines):

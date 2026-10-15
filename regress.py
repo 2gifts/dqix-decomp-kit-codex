@@ -2025,6 +2025,7 @@ def _prready():
             return f"prready.py decomp refused a tooling change landpr supplied itself: {out.strip()[-300:]}"
         git(decomp, "reset", "-q", "--hard", "HEAD~1")
         commit(decomp, {".github/workflows/match.yml": "on: pull_request\n",
+                        "include/A.h": "inline int* view(char* p) { return reinterpret_cast<int*>(p); }\n",
                         "src/Dead.cpp": "void Dead() {}\n",
                         "src/Untagged.cpp": "void Untagged() {}\n",
                         "config/jpn/arm9/delinks.txt": "src/Untagged.cpp:\n    complete\n"
@@ -2043,7 +2044,8 @@ def _prready():
         commit(pub_kit, {"README.md": "x\n"})
         want = {"decomp": ("KIT BEHIND", "DECOMP BEHIND", "OUTSIDE A MATCH .github/workflows/match.yml",
                            "DEAD FILE src/Dead.cpp", "HALF RENAME Foo", "CODEGEN PRAGMA src/A.cpp: adds 2",
-                           "NO USA TAG src/Untagged.cpp", "NAME WITHOUT ADDRESS _Z3Bazv"),
+                           "NO USA TAG src/Untagged.cpp", "NAME WITHOUT ADDRESS _Z3Bazv",
+                           "REINTERPRET-CAST include/A.h"),
                 "kit": ("KIT BEHIND", "NO DEAD ENDS", "UNPROVEN CITATION 02000400", "UNPROVEN CITATION 02150010")}
         for mode, needles in want.items():
             code, out = prready(mode)
@@ -3242,6 +3244,14 @@ def _plausible_casts():
     raw = 'extern "C" void f(char* self, int state) {\n    int i = *(int*)(self + 0x78);\n}\n'
     if "BYTE-SELF" not in [k for _, k, _ in P.blocking(raw)]:
         return "plausible.py did not block a function taking its object as `char* self`"
+    twice = ("void f(S* s) {\n    g(static_cast<MapEntryList*>(s->list));\n    h((MapEntryList*)s->list);\n}\n",
+             "void f() {\n    ((Entry*)Lookup(1))->a = 0;\n    ((Entry*)Lookup(2))->b = 0;\n}\n")
+    for bad in twice:
+        if "REPEATED-CAST" not in [k for _, k, _ in P.blocking(bad)]:
+            return "plausible.py did not block one shared value cast to the same type twice: %r" % bad
+    once = "void f(S* s) {\n    g(static_cast<MapEntryList*>(s->list));\n    h((Other*)s->list);\n}\n"
+    if [k for _, k, _ in P.findings(once) if k == "REPEATED-CAST"]:
+        return "plausible.py flagged two different casts as a repeat"
     return None
 
 
