@@ -186,6 +186,7 @@ def _sweep():
 def _behaviour():
     m = _regress()
     m.run_checks()
+    m.record()
     if m.FAILED:
         return "%d behaviour test(s) failing: %s" % (len(m.FAILED),
                                                      ", ".join(n for n, _w, _b in m.FAILED))
@@ -469,13 +470,13 @@ def _all_parse():
             ast.parse(read(f))
         except SyntaxError as e:
             bad.append(f"{os.path.basename(f)}:{e.lineno}")
+    from concurrent.futures import ThreadPoolExecutor
     shell, env = _kp.bash()
-    for f in _g.glob(f"{KIT}/*.sh"):
-        if os.path.basename(f).startswith("_"):
-            continue
-        r = subprocess.run([shell, "-n", f], capture_output=True, text=True, env=env)
-        if r.returncode != 0:
-            bad.append(os.path.basename(f))
+    scripts = [f for f in _g.glob(f"{KIT}/*.sh") if not os.path.basename(f).startswith("_")]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(lambda f: subprocess.run([shell, "-n", f], capture_output=True, text=True,
+                                                       env=env).returncode, scripts))
+    bad += [os.path.basename(f) for f, rc in zip(scripts, codes) if rc != 0]
     return f"{len(bad)} script(s) do not parse: {bad[:5]}" if bad else None
 
 
@@ -1050,14 +1051,13 @@ def _lever_readers_agree():
        "nothing, and printed 'none running' while two watches stayed live for six hours -- a "
        "kill-all that reports success and leaves the watchers up is worse than no kill-all")
 def _fullstop_sees_watchers():
-    import subprocess, time
+    import subprocess
     log = f"{SP}/wlog/.selfcheck_decoy.log"
     open(log, "a").close()
     decoy = subprocess.Popen(
         ["tail", "-f", "-n", "0", "wlog/.selfcheck_decoy.log"], cwd=SP,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        time.sleep(1.5)
         sh, env = _kp.bash()
         out = subprocess.run([sh, f"{KIT}/fullstop.sh", "--dry"],
                              capture_output=True, text=True, timeout=180, env=env).stdout
@@ -1162,6 +1162,7 @@ def _pragma_ratchet():
        "asm transcriptions reached the tree through pre-policy fleet batches, landpr and merge_human, "
        "which no gate checked: 10 files and 4 functions with no hand-written source had landed")
 def _landed_asm():
+    import bisect
     import subprocess
     import plausible
     import pragmas
@@ -1170,11 +1171,12 @@ def _landed_asm():
     ranges = {}
     for path in glob.glob(f"{REPO}/config/usa/arm9/delinks.txt") + glob.glob(f"{REPO}/config/usa/arm9/overlays/*/delinks.txt"):
         cfg = os.path.dirname(path)
-        funcs = [int(a, 16) for a in re.findall(r"(?m)^\S+\s+kind:function\([^)]*\)\s+addr:0x([0-9a-fA-F]+)",
-                                                 read(f"{cfg}/symbols.txt") or "")]
+        funcs = sorted(int(a, 16) for a in re.findall(r"(?m)^\S+\s+kind:function\([^)]*\)\s+addr:0x([0-9a-fA-F]+)",
+                                                      read(f"{cfg}/symbols.txt") or ""))
         for name, body in re.findall(r"(?m)^(\S[^\n]*):[ \t]*\n((?:[ \t]+[^\n]*\n?)*)", read(path) or ""):
             for lo, hi in re.findall(r"\.text start:0x([0-9a-f]+) end:0x([0-9a-f]+)", body):
-                ranges.setdefault(name, []).extend(a for a in funcs if int(lo, 16) <= a < int(hi, 16))
+                ranges.setdefault(name, []).extend(
+                    funcs[bisect.bisect_left(funcs, int(lo, 16)):bisect.bisect_left(funcs, int(hi, 16))])
     bad = []
     for f in tracked:
         if f not in ranges:
@@ -1185,7 +1187,7 @@ def _landed_asm():
                 bad.append("%s (%s)" % (f, ",".join(off)))
             continue
         text = read(f"{REPO}/{f}") or ""
-        if plausible.ASM_SITE.search(text):
+        if "asm" in text and plausible.ASM_SITE.search(text):
             hits = [h[2] for h in plausible.blocking(text) if h[1] == "HAND-ASM"]
             if hits:
                 bad.append("%s (%s)" % (f, ",".join(sorted(set(hits)))))
@@ -1228,6 +1230,14 @@ def _evolve_capped():
     return None
 
 
+OUT = []
+
+
+def say(line):
+    print(line)
+    OUT.append(line)
+
+
 fails = 0
 for name, why, fn in CHECKS:
     try:
@@ -1236,9 +1246,10 @@ for name, why, fn in CHECKS:
         bad = f"check raised {e!r}"
     if bad:
         fails += 1
-        print(f"FAIL  {name}: {bad}")
-        print(f"      why it matters: {why}")
+        say(f"FAIL  {name}: {bad}")
+        say(f"      why it matters: {why}")
     else:
-        print(f"ok    {name}")
-print(f"{len(CHECKS) - fails}/{len(CHECKS)} invariants hold")
+        say(f"ok    {name}")
+say(f"{len(CHECKS) - fails}/{len(CHECKS)} invariants hold")
+_kp.record("selfcheck", OUT)
 sys.exit(1 if fails else 0)

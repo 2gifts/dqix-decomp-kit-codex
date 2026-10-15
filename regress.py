@@ -83,6 +83,12 @@ def run_checks(shards=SHARDS):
     return FAILED
 
 
+def record(nbad=0):
+    line = "%d passed, %d failed" % (PASSED[0], len(FAILED) + nbad)
+    _kp.record("regress", ["FAIL  %s: %s" % (name, bad) for name, _fault, bad in FAILED] + [line])
+    return line
+
+
 def load(mod):
     spec = importlib.util.spec_from_file_location("_r_" + mod, f"{KIT}/{mod}.py")
     m = importlib.util.module_from_spec(spec)
@@ -4485,6 +4491,80 @@ def _claim_gates_in_process():
         shutil.rmtree(d, ignore_errors=True)
 
 
+@check("countfix diffs its units concurrently and keeps their order",
+       "selfcheck and both landing paths ran objdiff-cli once per unit in series, through one shared "
+       "output file")
+def _countfix_concurrent():
+    import threading
+    C = load("countfix")
+    live, peak, lock = [0], [0], threading.Lock()
+
+    def slow(unit):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.2)
+        with lock:
+            live[0] -= 1
+        size = 6 if unit == "b" else 8
+        left = {"name": unit, "size": str(size + 2), "address": "0",
+                "instructions": [{"diff_kind": "DIFF_DELETE", "instruction": {"formatted": "lsl r0, #0x0"}}]}
+        return [(left, {"name": unit, "size": str(size), "instructions": []})]
+    C.diff_unit = slow
+    C.function_locations = lambda: {u: [("cfg", 0)] for u in "abcd"}
+    _relocs, sizes = C.plan(list("abcd"))
+    if peak[0] < 2:
+        return "countfix.plan ran its units one at a time"
+    if [s[1] for s in sizes] != list("abcd"):
+        return "countfix.plan reordered its units: %s" % [s[1] for s in sizes]
+    return None
+
+
+@check("progress reads selfcheck's and regress's recorded results instead of re-running them",
+       "pull_all runs progress.py every 120 s and each run spent 3 minutes re-running both suites")
+def _progress_reads_results():
+    import subprocess
+    P = load("progress")
+    with tempfile.TemporaryDirectory() as d:
+        sp, _kp.SP = _kp.SP, d
+        real = subprocess.run
+
+        def refuse(*a, **kw):
+            raise AssertionError("spawned %s" % (a[0] if a else kw.get("args"),))
+        try:
+            _kp.record("selfcheck", ["ok    x", "56/57 invariants hold"])
+            subprocess.run = refuse
+            got = P.last_result("selfcheck"), P.last_result("regress")
+        except AssertionError as e:
+            return "progress %s" % e
+        finally:
+            subprocess.run = real
+            _kp.SP = sp
+    if not got[0].startswith("56/57 invariants hold") or got[1] != "did not run":
+        return "progress read %r" % (got,)
+    return None
+
+
+@check("selfcheck and regress record their result where progress and health read it",
+       "nothing wrote wlog/selfcheck.txt, so health.sh's invariant alert could never fire")
+def _suites_record_results():
+    with tempfile.TemporaryDirectory() as d:
+        sp, _kp.SP = _kp.SP, d
+        try:
+            R = load("regress")
+            R.PASSED[0], R.FAILED[:] = 3, [("a check", "its fault", "what broke")]
+            line = R.record()
+            text = open(_kp.result_path("regress"), encoding="utf-8").read()
+        finally:
+            _kp.SP = sp
+    if line != "3 passed, 1 failed" or not text.endswith("3 passed, 1 failed\n") or "FAIL  a check" not in text:
+        return "regress recorded %r" % text
+    src = open(f"{KIT}/selfcheck.py", encoding="utf-8").read()
+    if '_kp.record("selfcheck"' not in src or "m.record()" not in src:
+        return "selfcheck no longer records its own result and regress's"
+    return None
+
+
 if __name__ == "__main__":
     if "--shard" in sys.argv:
         k, n = map(int, sys.argv[sys.argv.index("--shard") + 1].split("/"))
@@ -4501,5 +4581,5 @@ if __name__ == "__main__":
     if not slow:
         print("(skipped %d end-to-end crack test(s); run with --slow after ANY colorsweep change)"
               % len(FUNCTIONAL))
-    print("%d passed, %d failed" % (PASSED[0], len(FAILED) + nbad))
+    print(record(nbad))
     sys.exit(1 if (FAILED or nbad) else 0)

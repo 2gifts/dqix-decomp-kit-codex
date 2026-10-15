@@ -158,6 +158,22 @@ def behind():
     return count
 
 
+def result_path(name):
+    return os.path.join(SP, "wlog", name + ".txt")
+
+
+def record(name, lines):
+    path = result_path(name)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def stale_message(count):
     return (f"KIT IS {count} COMMIT(S) BEHIND the published kit: run `python {KIT}/kit_update.py` now "
             "(it keeps your own unpublished commits on top)")
