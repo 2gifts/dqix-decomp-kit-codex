@@ -1470,6 +1470,48 @@ def _staging_sweep_keeps_match():
     return None
 
 
+@check("a slot claims its next function while the post-session sweep of the last one runs",
+       "the slot waited for presweep --force on every miss before claiming again: 177 sessions spent "
+       "434 slot-minutes there, p90 914 s, most killed by the 900 s timeout with nothing to show")
+def _postsweep_detached():
+    import subprocess
+    src = open(f"{KIT}/pull_worker.sh", encoding="utf-8").read()
+    start = src.find('  if [ "$v" = miss ] && [ -f "$_keep" ]; then\n')
+    end = src.find("\n  fi\n", start)
+    if start < 0 or end < 0:
+        return "pull_worker.sh does not start the post-session sweep after the session's verdict"
+    block = src[start:end + 6]
+    with tempfile.TemporaryDirectory() as d:
+        root = d.replace("\\", "/")
+        os.makedirs(f"{root}/kit")
+        os.makedirs(f"{root}/stage")
+        with open(f"{root}/kit/presweep.py", "w", encoding="utf-8") as fh:
+            fh.write("import os, sys, time\nsecond = os.path.exists(sys.argv[3] + '.swept')\ntime.sleep(3)\n"
+                     "p = sys.argv[3] + '.swept'\nopen(p, 'w').write('// SCRATCH-USA: func_0201aaaa\\n')\n"
+                     "print('MATCH ' + p if second else 'IMPROVED 4 2')\n")
+        with open(f"{root}/a.cpp", "w", encoding="utf-8") as fh:
+            fh.write("// USA: func_0201aaaa\n")
+        script = (f'KIT="{root}/kit"\nMARG=main\nADDR=0201aaaa\nSLOT=1\nLOG="{root}/log"\nSTAGE="{root}/stage"\n'
+                  f'v=miss\n_keep="{root}/a.cpp"\n_post_pid=""\necho "t $EPOCHREALTIME"\n{block}echo "t $EPOCHREALTIME"\n'
+                  f'{block}echo "t $EPOCHREALTIME"\nwait\n')
+        bash, benv = _kp.bash()
+        r = subprocess.run([bash, "-c", script], capture_output=True, text=True, env=benv)
+        stamps = [float(l.split()[1].replace(",", ".")) for l in r.stdout.splitlines() if l.startswith("t ")]
+        log = open(f"{root}/log").read() if os.path.exists(f"{root}/log") else ""
+        staged = open(f"{root}/stage/0201aaaa.cpp").read() if os.path.exists(f"{root}/stage/0201aaaa.cpp") else ""
+    if len(stamps) != 3:
+        return "the harness did not run: %s" % (r.stdout + r.stderr).strip()[-300:]
+    if stamps[1] - stamps[0] > 2:
+        return "the slot waited %.1fs for the post-session sweep" % (stamps[1] - stamps[0])
+    if stamps[2] - stamps[0] < 2.5:
+        return "a second sweep started before the slot's first one finished"
+    if "s1 postsweep 0201aaaa 4 2" not in log or "s1 postsweep MATCHED 0201aaaa" not in log:
+        return "the sweeps' results were not logged: %r" % log
+    if "// USA: func_0201aaaa" not in staged:
+        return "a sweep MATCH was not staged under its real tag: %r" % staged
+    return None
+
+
 def _compile_elf(text, repo, postcompile=False, rev=None):
     import io
     import subprocess

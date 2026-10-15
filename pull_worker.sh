@@ -74,7 +74,7 @@ cap_for() {   # $1 = size in bytes
 
 cd "$REPO" || exit 2
 LOG="$SP/wlog/pull_${MOD}_s${SLOT}.log"
-spent=0; matched=0; tried=0
+spent=0; matched=0; tried=0; _post_pid=""
 
 # WORKERS WRITE TO STAGING, NOT TO src/. finish_wave's preflight quarantines untracked .cpp that
 # belong to a module OTHER than the one it is integrating -- correct on its own, since foreign files
@@ -376,27 +376,6 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
     # unconditionally destroyed them: ov024:021f9874 sat at OVERGEN 4 until a later session ended at
     # SHAPE 87 and copied over the same basename, so the ledger still advertised "4 bytes" while the
     # only file behind it was 87 bytes off -- and the near-miss queue sent opus at it on that basis.
-    # SWEEP THE SESSION'S OWN OUTPUT, NOW. This artifact is the closest anyone has been to this
-    # address and colorsweep has never seen it -- the rules only ever reached it through the hourly
-    # repairsweep, which walks a 475-candidate pool in order, so a session ending ONE rule short of
-    # a match sat unswept for hours. It costs CPU, the address is still claimed, and a MATCH here is
-    # a function closed for the price of a compile.
-    if [ -f "$f" ] && [ "$v" != "MATCH" ]; then
-      _post=$(timeout "${POSTSWEEP_TIMEOUT:-900}" python "$KIT/presweep.py" "$MARG" "$ADDR" "$f" --force 2>/dev/null | tr -d '\r')
-      case "$_post" in
-        MATCH*)
-          _pf=${_post#MATCH }
-          mkdir -p "$STAGE"
-          sed 's|^// SCRATCH-USA: func_|// USA: func_|' "$_pf" > "$STAGE/$ADDR.cpp" 2>/dev/null
-          echo "$(date '+%H:%M') s$SLOT postsweep MATCHED $ADDR from this session's own artifact" >> "$LOG"
-          v="MATCH"
-          ;;
-        IMPROVED*)
-          echo "$(date '+%H:%M') s$SLOT postsweep $ADDR ${_post#IMPROVED }" >> "$LOG"
-          ;;
-      esac
-    fi
-
     # Nothing is compared or discarded: a differing artifact lands under a unique name, so the row
     # blocker.py writes always points at the file that actually produced it.
     _keep="-"
@@ -466,7 +445,24 @@ EOF
   fi
   _swept=0
   echo "$(date '+%H:%M') s$SLOT $v $ADDR \$$cost (slot \$$spent/\$$BUDGET)" >> "$LOG"
+  if [ "$v" = miss ] && [ -f "$_keep" ]; then
+    [ -n "$_post_pid" ] && wait "$_post_pid" 2>/dev/null
+    (
+      _post=$(timeout "${POSTSWEEP_TIMEOUT:-900}" python "$KIT/presweep.py" "$MARG" "$ADDR" "$_keep" --force 2>/dev/null | tr -d '\r')
+      case "$_post" in
+        MATCH*)
+          sed 's|^// SCRATCH-USA: func_|// USA: func_|' "${_post#MATCH }" > "$STAGE/$ADDR.cpp" 2>/dev/null
+          echo "$(date '+%H:%M') s$SLOT postsweep MATCHED $ADDR from this session's own artifact" >> "$LOG"
+          ;;
+        IMPROVED*)
+          echo "$(date '+%H:%M') s$SLOT postsweep $ADDR ${_post#IMPROVED }" >> "$LOG"
+          ;;
+      esac
+    ) &
+    _post_pid=$!
+  fi
   (cd "$REPO" && python "$KIT/pad/repool.py" --apply --rev a70058a0 >/dev/null 2>&1)
 done
 
+[ -n "$_post_pid" ] && wait "$_post_pid" 2>/dev/null
 echo "$(date '+%H:%M') s$SLOT done: $matched/$tried matched, \$$spent spent" >> "$LOG"
