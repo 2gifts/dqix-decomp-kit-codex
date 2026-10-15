@@ -2932,10 +2932,10 @@ def _regionsync_port_keeps_mtime():
     return None
 
 
-@check("a region's depfiles are read in parallel before ninja scans them one at a time",
+@check("a region's depfiles and objects are read in parallel before ninja and mwld read them one at a time",
        "landpr #166 #167 spent 62-90 s at the start of each region's ninja before running anything: "
-       "ninja reads the 13k depfiles one after another, 5.6 ms each when not cached; 32 threads read "
-       "the same 6378 cold files in 2.2 s instead of 35.9 s")
+       "ninja reads the 13k depfiles one after another, 5.6 ms each when not cached, and mwld then reads "
+       "every object the same way; 32 threads read 6378 cold depfiles in 2.2 s instead of 35.9 s")
 def _regionsync_prewarms_depfiles():
     import threading
     import time as _time
@@ -2948,9 +2948,9 @@ def _regionsync_prewarms_depfiles():
         _time.sleep(0.005)
         return real_open(path, *args, **kwargs)
     with tempfile.TemporaryDirectory() as root:
-        depfiles = [os.path.normpath(os.path.join("build", "jpn", top, f"d{n}", f"x{n}.d"))
-                    for top in ("src", "libs") for n in range(32)]
-        for path in depfiles + [os.path.join("build", "jpn", "delinks", "y.o")]:
+        depfiles = [os.path.normpath(os.path.join("build", "jpn", top, f"d{n}", f"x{n}{ext}"))
+                    for top in ("src", "libs", "delinks") for n in range(16) for ext in (".d", ".o")]
+        for path in depfiles + [os.path.join("build", "jpn", "arm9.lcf")]:
             os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
             with real_open(f"{root}/{path}", "w") as fh:
                 fh.write("x.o: x.cpp\n")
@@ -2963,9 +2963,10 @@ def _regionsync_prewarms_depfiles():
         finally:
             os.chdir(cwd)
     if not ninja or set(ninja[0]) != set(depfiles):
-        return "ninja ran before every depfile was read (%d of %d)" % (len(ninja[0]) if ninja else 0, len(depfiles))
+        return "ninja ran before every depfile and object was read (%d of %d)" % (
+            len(ninja[0]) if ninja else 0, len(depfiles))
     if len(set(ninja[0].values())) < 4:
-        return "the depfiles were read one at a time"
+        return "the depfiles and objects were read one at a time"
     return None
 
 
