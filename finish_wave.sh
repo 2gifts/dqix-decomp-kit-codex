@@ -180,7 +180,7 @@ if [ "$(git rev-parse --short HEAD)" != "$H0" ]; then
   [ "$_cf" -ne 0 ] && [ "$_cf" -ne 3 ] && echo "WARN countfix failed (exit $_cf): landed function counts were not corrected"
   if [ "$_cf" -eq 3 ]; then
     if ninja check >/tmp/fw_countfix.log 2>&1 && sha1_ok; then
-      git add config/ && git commit -q -m "Align config with landed functions"
+      git add "config/$REGION/" && git commit -q -m "Align config with landed functions"
     else
       python "$KIT/countfix.py" --restore
       ninja check >/dev/null 2>&1

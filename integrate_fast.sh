@@ -164,7 +164,10 @@ python tools/configure.py "$REGION" --no-extract "${_compiler_args[@]}" >> "$LOG
 echo "$(date '+%H:%M') wired $placed modules, configured, building once" >> "$LOG"
 
 green=0
-if ninja check >/tmp/if_check.log 2>&1 && sha1_ok; then green=1; fi
+if [ "$REGION" = usa ]; then
+  python "$KIT/regionsync.py" --gate >/tmp/if_check.log 2>&1 && green=1
+  grep -a "^GATE " /tmp/if_check.log >> "$LOG"
+elif ninja check >/tmp/if_check.log 2>&1 && sha1_ok; then green=1; fi
 
 landed=$(tail -n +$((_mark + 1)) "$LOG" | sed -n 's/^integrated \([0-9]*\);.*/\1/p' \
          | awk '{s += $1} END {print s + 0}')
@@ -186,9 +189,10 @@ if [ "$green" = "1" ]; then
     python "$KIT/countfix.py" --restore >> "$LOG" 2>&1
     ninja check >/dev/null 2>&1
   fi
-  git add -A config/ src/ >> "$LOG" 2>&1
+  git add -A "config/$REGION" src/ >> "$LOG" 2>&1
   if git diff --cached --quiet; then
     echo "$(date '+%H:%M') $landed integrated but NOTHING TO COMMIT -- staging kept" | tee -a "$LOG"
+    git checkout -- config/ >> "$LOG" 2>&1
     exit 4
   fi
   # NO --author OVERRIDE. A hardcoded identity here beats ~/.gitconfig, so waves kept committing

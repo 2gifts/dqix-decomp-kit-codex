@@ -1,6 +1,7 @@
 """Port matched files between regions, keeping each port only if the receiving region builds.
 
     python regionsync.py [decomp tree]     default: the current directory
+    python regionsync.py --gate [decomp tree]
 
 First into usa: a file delinked in another region but not in config/usa, owning one `.text` range and
 no data, whose `// USA:` tag names a usa function, gets a usa block at that function when the function
@@ -14,9 +15,17 @@ build/<region>/build.ninja, so regions build at the same time; build.ninja is le
 Each file another region delinks that stays out of usa prints a `NOT IN USA <file>: <why>` line.
 Exit 0: every region in sync, ported or skipped. 1: a port was red and was restored, in part or in
 full, or a file is NOT IN USA.
+
+--gate is the landing's build, before it commits: port the uncommitted usa wiring to every region with
+an extracted ROM, then build usa and every region the port or the landing's changes to tracked src/ or
+include/ files reach, all at once. It prints usa's build log, then a `GATE <region>:` line per region.
+Exit 0 when usa is green and no region those changes reach is red. The ports stay uncommitted;
+regionsync.py commits them after the landing, its builds already done. A port whose inputs are
+unchanged since its last run (build/<region>/ported) is not run again.
 """
 import concurrent.futures
 import glob
+import hashlib
 import os
 import re
 import shutil
@@ -107,15 +116,15 @@ def keep(region):
     return None
 
 
-def build(region):
+def build(region, sha1=True):
     code, out = run("ninja", "-f", ninja_file(region), "check")
-    if code:
-        return False, out
+    if code or not sha1:
+        return code == 0, out
     code, sha = run("ninja", "-f", ninja_file(region), "sha1")
     return code == 0 and "OK" in sha, out + sha
 
 
-def green(regions):
+def green(regions, sha1=True):
     regions = sorted(set(regions), key=lambda region: region == HOME)
     results = {}
     for region in regions:
@@ -128,8 +137,24 @@ def green(regions):
     if todo:
         tools()
         with concurrent.futures.ThreadPoolExecutor(len(todo)) as pool:
-            results.update(zip(todo, pool.map(build, todo)))
+            results.update(zip(todo, pool.map(lambda region: build(region, sha1), todo)))
     return results
+
+
+def gate(regions):
+    shared = bool(run("git", "status", "--porcelain", "--untracked-files=no", "--", "src", "include")[1].strip())
+    for region in regions:
+        run("git", "checkout", "HEAD", "--", f"config/{region}")
+        port(region, PORTS[region])
+    sha1 = os.path.isfile("arm7_bios.bin")
+    touched = [region for region in regions if shared or changed(region)]
+    results = green([HOME, *touched], sha1)
+    redo = [region for region in touched
+            if shared and results[HOME][0] and not results[region][0] and changed(region)]
+    if redo:
+        run("git", "checkout", "--", *(f"config/{region}" for region in redo))
+        results.update(green(redo, sha1))
+    return results, [region for region in touched if shared and not results[region][0]]
 
 
 def compile_objects(region):
@@ -278,17 +303,66 @@ def finish(region, ok, dropped, files, log):
     return 0, f"{region}: {message}"
 
 
+def port_inputs(region):
+    digest = hashlib.sha1()
+    for root in (f"config/{HOME}", f"config/{region}"):
+        for folder, _, names in sorted(os.walk(root)):
+            for name in sorted(names):
+                path = os.path.join(folder, name)
+                with open(path, "rb") as fh:
+                    digest.update(path.replace("\\", "/").encode() + b"\0" + fh.read())
+    def git(*args, feed=None):
+        return subprocess.run(["git", *args], input=feed, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace").stdout
+    blobs = {}
+    for line in git("ls-files", "-s", "-z", "--", "src", "include", "tools").split("\0"):
+        meta, _, path = line.partition("\t")
+        if len(meta.split()) == 3:
+            blobs[path] = meta.split()[1]
+    entries = iter(git("status", "--porcelain", "-z", "-uall", "--", "src", "include", "tools").split("\0"))
+    dirty = []
+    for entry in entries:
+        if len(entry) > 3:
+            dirty.append(entry[3:])
+            if entry[0] in "RC":
+                dirty.append(next(entries, ""))
+    present = [path for path in dirty if os.path.isfile(path)]
+    for path in dirty:
+        blobs.pop(path, None)
+    if present:
+        blobs.update(zip(present, git("hash-object", "--stdin-paths", feed="\n".join(present) + "\n").split()))
+    digest.update("\n".join(f"{path} {sha}" for path, sha in sorted(blobs.items())).encode())
+    return digest.hexdigest()
+
+
 def port(region, tool):
     if not os.path.isfile(tool) or "--sync" not in run(sys.executable, tool, "--help")[1]:
         return (0, f"{region}: {tool} has no --sync, not ported"), ""
     if not os.path.isdir(f"extract/{region}"):
         return (0, f"{region}: no extracted {region} ROM, not ported"), ""
+    stamp = f"build/{region}/ported"
+    if os.path.isfile(stamp) and read(stamp) == port_inputs(region):
+        return None, ""
     if region in READS_OBJECTS:
         compile_objects(region)
+    before = {}
+    for folder, _, names in os.walk(f"config/{region}"):
+        for name in names:
+            path = os.path.join(folder, name)
+            with open(path, "rb") as fh:
+                before[path] = (os.stat(path), fh.read())
     code, out = run(sys.executable, tool, "--sync")
     if code:
         run("git", "checkout", "--", f"config/{region}")
         return (1, f"{region}: {tool} --sync failed: {out.strip().splitlines()[-1:]}"), ""
+    for path, (st, data) in before.items():
+        if os.path.isfile(path) and os.stat(path).st_mtime_ns != st.st_mtime_ns:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    os.makedirs(os.path.dirname(stamp), exist_ok=True)
+    with open(stamp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(port_inputs(region))
     return None, out
 
 
@@ -313,11 +387,31 @@ def sync(pairs):
     return [lines[region] for region, _ in pairs]
 
 
+def gate_main():
+    regions = [region for region in PORTS if os.path.isdir(f"extract/{region}")]
+    results, blocking = gate(regions)
+    ok, log = results[HOME]
+    sys.stdout.buffer.write((log if log.endswith("\n") else log + "\n").encode("utf-8", "replace"))
+    for region in regions:
+        good, text = results.get(region, (True, ""))
+        verdict = ("not built: the landing does not reach it" if region not in results else "green" if good
+                   else "RED" if region in blocking else "red at its own config, not this landing's")
+        print(f"GATE {region}: {verdict}", flush=True)
+        if not good:
+            os.makedirs(f"{kitpaths.SP}/wlog", exist_ok=True)
+            with open(f"{kitpaths.SP}/wlog/gate_{region}.txt", "w", encoding="utf-8") as fh:
+                fh.write(text)
+    sys.exit(0 if ok and not blocking else 1)
+
+
 def main():
-    if len(sys.argv) > 2 or sys.argv[1:2] in (["-h"], ["--help"]):
+    args = [a for a in sys.argv[1:] if a != "--gate"]
+    if len(args) > 1 or args[:1] in (["-h"], ["--help"]):
         sys.exit(__doc__)
-    if len(sys.argv) == 2:
-        os.chdir(sys.argv[1])
+    if args:
+        os.chdir(args[0])
+    if "--gate" in sys.argv:
+        gate_main()
     status = 0
     try:
         for pairs in ([("usa", None)], list(PORTS.items())):

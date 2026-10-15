@@ -1853,6 +1853,57 @@ def _retag_bound_name():
     return None
 
 
+@check("ov_recover commits its region's wiring and leaves the gate's ports to the other regions for regionsync",
+       "the gate builds the ports with the landing, and `git add -A` swept the uncommitted config/jpn port into "
+       "the match commit, past regionsync's red-module restore")
+def _ov_recover_commit_leaves_ports():
+    import ast
+    import subprocess
+    src = open(f"{KIT}/ov_recover.py", encoding="utf-8").read()
+    wanted = {"sh", "commit", "consistent", "dirty_tracked", "unstage_foreign", "committed_addrs", "tag_addr"}
+    nodes = [n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    if {n.name for n in nodes} != wanted:
+        return "ov_recover.py lacks %s" % sorted(wanted - {n.name for n in nodes})
+    with tempfile.TemporaryDirectory() as root:
+        def git(*args):
+            return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True).stdout
+        files = {"config/usa/arm9/delinks.txt": "src/Old.cpp:\n    .text start:0x02000100 end:0x02000110\n",
+                 "config/jpn/arm9/delinks.txt": "src/Old.cpp:\n    .text start:0x02000200 end:0x02000210\n",
+                 "src/Old.cpp": "// USA: func_02000100\n"}
+        for path, text in files.items():
+            os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
+            with open(f"{root}/{path}", "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        for args in (("init", "-q"), ("config", "user.name", "regress"), ("config", "user.email", "regress@localhost"),
+                     ("add", "-A"), ("commit", "-q", "-m", "base")):
+            git(*args)
+        for path, block in (("config/usa/arm9/delinks.txt", "\nsrc/New.cpp:\n    .text start:0x02000000 end:0x02000010\n"),
+                            ("config/jpn/arm9/delinks.txt", "\nsrc/New.cpp:\n    .text start:0x02000020 end:0x02000030\n")):
+            with open(f"{root}/{path}", "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(block)
+        with open(f"{root}/src/New.cpp", "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("// USA: func_02000000\n")
+        ns = {"os": os, "re": re, "sys": sys, "time": time, "subprocess": subprocess, "_TRACKED": None,
+              "_INDEX_MUTATORS": frozenset(("add", "reset", "checkout", "commit")), "REPO": root,
+              "CFG": "config/usa/arm9", "HEXC": "[0-9a-fA-F]", "TAGRE": r"// USA: func_([0-9a-fA-F]{8})\b",
+              "MSG": "Match {n}", "AUTH": [], "NOCOMMIT": False, "_DIRTY_BASE": set(),
+              "OTHER_CONFIGS": ["config/jpn"]}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "commit-regression", "exec"), ns)
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            st = ns["commit"](1)
+        finally:
+            os.chdir(cwd)
+        landed = git("show", "--name-only", "--format=", "HEAD").split()
+        left = git("status", "--porcelain", "--", "config/jpn").strip()
+    if st != "ok" or sorted(landed) != ["config/usa/arm9/delinks.txt", "src/New.cpp"]:
+        return f"commit returned {st!r} and committed {landed}"
+    if not left:
+        return "the jpn port did not stay in the working tree for regionsync"
+    return None
+
+
 def _scaffold(module, addr):
     import subprocess
     r = subprocess.run([sys.executable, f"{KIT}/scaffold.py", module, addr], capture_output=True, text=True,
@@ -2724,20 +2775,162 @@ def _regionsync_port_compiles_only():
     return None
 
 
-@check("integrate_all ports to the other regions once, after every module",
+@check("regionsync's gate links every region with its port at once, and committing the port links nothing",
+       "a landing linked USA in its gate, then regionsync ported it and linked JPN and EUR after it: two link "
+       "phases per landing (335 s for a 29-function integrate_fast, 161 s of it regionsync)")
+def _regionsync_gate_prebuilds_ports():
+    import shutil
+    import subprocess
+    from types import SimpleNamespace
+    rs = load("regionsync")
+    if not hasattr(rs, "gate"):
+        return "regionsync.py has no gate()"
+    link = "'build %s: mwld %s' % (arm9, obj)"
+    if link not in _FAKE_CONFIGURE:
+        return "the fake configure no longer has the link edge this test makes depend on the config"
+    configure = _FAKE_CONFIGURE.replace(link, "'build %s: mwld %s | config/%s/delinks.txt' % (arm9, obj, region)")
+    port = ('import sys\nif "--help" in sys.argv:\n    print("--sync")\n    sys.exit()\n'
+            'open("port_calls", "a").write("%s\\n")\n'
+            'p = "config/%s/delinks.txt"\nif "src/b.cpp:" not in open(p).read():\n'
+            '    open(p, "a").write("\\nsrc/b.cpp:\\n    .text start:0x2 end:0x4\\n")\n')
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="regionsync_gate_", dir=f"{SP}/handwork",
+                                     ignore_cleanup_errors=True) as root:
+        files = {"tools/configure.py": configure, "tools/fake.py": _FAKE_TOOL, "src/a.cpp": "a\n",
+                 "tools/port_jpn.py": port % ("jpn", "jpn"), "tools/port_eur.py": port % ("eur", "eur"),
+                 ".gitignore": "build/\nevents/\nport_calls\n*.ninja\n.ninja_*\ntool.exe\n"}
+        files.update({f"config/{r}/delinks.txt": "src/a.cpp:\n    .text start:0x0 end:0x2\n" for r in ("usa", "jpn", "eur")})
+        for path, text in files.items():
+            os.makedirs(os.path.dirname(f"{root}/{path}"), exist_ok=True)
+            with open(f"{root}/{path}", "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        for region in ("jpn", "eur"):
+            os.makedirs(f"{root}/extract/{region}")
+        for args in (("init", "-q"), ("config", "user.name", "regress"), ("config", "user.email", "regress@localhost"),
+                     ("add", "-A"), ("commit", "-q", "-m", "base")):
+            subprocess.run(["git", "-C", root, *args], capture_output=True)
+
+        def links():
+            if not os.path.isdir("events"):
+                return {}
+            out = {}
+            for name in os.listdir("events"):
+                what, target, edge, _ = name.split(" ")
+                if what == "link":
+                    out.setdefault(target, {})[edge] = float(open(os.path.join("events", name)).read())
+            shutil.rmtree("events")
+            return out
+        with open(f"{root}/src/b.cpp", "w", encoding="utf-8") as fh:
+            fh.write("b\n")
+        with open(f"{root}/config/usa/delinks.txt", "a", encoding="utf-8") as fh:
+            fh.write("\nsrc/b.cpp:\n    .text start:0x2 end:0x4\n")
+        rs.PORTS = {"jpn": "tools/port_jpn.py", "eur": "tools/port_eur.py"}
+        rs.kitpaths = SimpleNamespace(SP=root)
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            results, blocking = rs.gate(["jpn", "eur"])
+            gated = links()
+            ported = subprocess.run(["git", "status", "--porcelain", "--", "config/jpn", "config/eur"],
+                                    capture_output=True, text=True).stdout.split("\n")[:-1]
+            for args in (("add", "-A", "--", ".", ":(exclude)config/jpn", ":(exclude)config/eur"),
+                         ("commit", "-q", "-m", "Match 1")):
+                subprocess.run(["git", *args], capture_output=True)
+            lines = rs.sync(list(rs.PORTS.items()))
+            relinked = links()
+            log = subprocess.run(["git", "log", "--format=%s"], capture_output=True, text=True).stdout.split("\n")
+            calls = open("port_calls").read().split()
+            again, _ = rs.gate(["jpn", "eur"])
+            untouched = links()
+        finally:
+            os.chdir(cwd)
+    if sorted(results) != ["eur", "jpn", "usa"] or not all(ok for ok, _ in results.values()) or blocking:
+        return f"gate() returned {results} {blocking}"
+    if len(gated) != 3 or max(t["start"] for t in gated.values()) >= min(t["end"] for t in gated.values()):
+        return f"the gate did not link the three regions at once: {gated}"
+    if sorted(p[3:] for p in ported) != ["config/eur/delinks.txt", "config/jpn/delinks.txt"]:
+        return f"the gate left these changes for regionsync: {ported}"
+    if relinked:
+        return f"committing the ports the gate had built linked again: {sorted(relinked)}"
+    if sorted(calls) != ["eur", "jpn"]:
+        return f"the port tools ran again after the landing committed, on unchanged inputs: {calls}"
+    if log[:3] != ["Port 1 matched files to EUR", "Port 1 matched files to JPN", "Match 1"]:
+        return f"regionsync committed {log[:3]} ({lines})"
+    if sorted(again) != ["usa"] or untouched:
+        return f"a gate with nothing to port built {sorted(again)} and linked {sorted(untouched)}"
+    return None
+
+
+@check("a port tool that rewrites a config file unchanged leaves its timestamp alone",
+       "a rewrite with identical bytes still bumps the mtime, and every delinks.txt feeds the region's delink "
+       "step, so ninja relinks the whole region for nothing")
+def _regionsync_port_keeps_mtime():
+    rs = load("regionsync")
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(f"{root}/extract/jpn")
+        os.makedirs(f"{root}/config/jpn/arm9")
+        os.makedirs(f"{root}/tools")
+        path = f"{root}/config/jpn/arm9/delinks.txt"
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("src/a.cpp:\n")
+        os.utime(path, (1_000_000_000, 1_000_000_000))
+        with open(f"{root}/tools/port.py", "w", encoding="utf-8") as fh:
+            fh.write('import sys\nif "--help" in sys.argv:\n    print("--sync")\n    sys.exit()\n'
+                     'p = "config/jpn/arm9/delinks.txt"\nt = open(p).read()\nopen(p, "w").write(t)\n')
+        rs.compile_objects = lambda region: None
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            done, _ = rs.port("jpn", "tools/port.py")
+        finally:
+            os.chdir(cwd)
+        mtime = os.stat(path).st_mtime
+    if done or mtime != 1_000_000_000:
+        return f"port returned {done} and left the unchanged file's mtime at {mtime}"
+    return None
+
+
+@check("integrate_all ports to the other regions once: in its last module's wave, or after the loop",
        "finish_wave ran regionsync (4-5 minutes) after each module it landed, so integrate_all paid it "
-       "once per module")
+       "once per module; then regionsync.sh after the loop threw away the ports the last module's gate "
+       "had already built and linked JPN and EUR a second time")
 def _regionsync_once_per_integrate_all():
+    import shutil
+    import subprocess
     fw = open(f"{KIT}/finish_wave.sh", encoding="utf-8").read()
-    ia = open(f"{KIT}/integrate_all.sh", encoding="utf-8").read()
     if '[ "${DQIX_REGIONSYNC:-}" = defer ] || python "$KIT/regionsync.py"' not in fw:
         return "finish_wave runs regionsync.py even when its caller defers it"
-    loop, _, after = ia.partition("\ndone\n")
-    if 'DQIX_REGIONSYNC=defer bash "$KIT/finish_wave.sh"' not in loop or 'bash "$KIT/regionsync.sh"' not in after:
-        return "integrate_all does not defer regionsync to one regionsync.sh after its loop"
     rs = open(f"{KIT}/regionsync.sh", encoding="utf-8").read()
     if "wave_lock_acquire" not in rs or "integ_tree.py\" publish" not in rs:
         return "regionsync.sh does not hold the wave lock and publish its ports"
+    bash, benv = _kp.bash()
+    got = {}
+    for moves in ("004 main", "004"):
+        with tempfile.TemporaryDirectory() as d:
+            root = d.replace("\\", "/")
+            kit, sp, repo = f"{root}/kit", f"{root}/sp", f"{root}/repo"
+            for folder in (kit, f"{sp}/wlog", f"{sp}/staging/main", f"{sp}/staging/ov004", repo):
+                os.makedirs(folder)
+            shutil.copyfile(f"{KIT}/integrate_all.sh", f"{kit}/integrate_all.sh")
+            files = {
+                f"{kit}/kitpaths.py": f"import sys\nprint({{'state': {sp!r}, 'repo': {repo!r}}}[sys.argv[1]])\n",
+                f"{kit}/cov.py": "",
+                f"{kit}/finish_wave.sh": (f'echo "$1 ${{DQIX_REGIONSYNC:-inline}}" >> "{root}/calls"\n'
+                                          f'case " {moves} " in *" $1 "*) git -C "{repo}" commit -q --allow-empty -m "$1";; esac\n'),
+                f"{kit}/regionsync.sh": f'echo regionsync.sh >> "{root}/calls"\n',
+                f"{sp}/staging/main/a.cpp": "", f"{sp}/staging/ov004/b.cpp": "", f"{sp}/staging/ov004/c.cpp": ""}
+            for path, text in files.items():
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(text)
+            for args in (("init", "-q", "-b", "decomp-matching"), ("config", "user.name", "regress"),
+                         ("config", "user.email", "regress@localhost"), ("commit", "-q", "--allow-empty", "-m", "base")):
+                subprocess.run(["git", "-C", repo, *args], capture_output=True)
+            subprocess.run([bash, f"{kit}/integrate_all.sh"], capture_output=True, text=True, env=benv)
+            got[moves] = open(f"{root}/calls").read().split("\n")[:-1] if os.path.exists(f"{root}/calls") else []
+    want = {"004 main": ["004 defer", "main inline"], "004": ["004 defer", "main inline", "regionsync.sh"]}
+    bad = {moves: calls for moves, calls in got.items() if calls != want[moves]}
+    if bad:
+        return "modules that moved the branch -> calls: " + "; ".join(f"[{m}] {c}" for m, c in bad.items())
     return None
 
 

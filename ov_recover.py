@@ -13,6 +13,7 @@ import re, subprocess, os, sys, glob, time, shutil, hashlib
 import srcdir
 import culprits
 import buildcfg
+import regionsync
 # The scratchpad is wherever THIS file lives; the old absolute %TEMP% path was deleted by Windows
 # cleanup on 2026-08-24 and took the whole pipeline with it.
 SP = _kp.SP
@@ -120,6 +121,12 @@ if f"gated/{SUF}" not in STAGING: STAGING = list(STAGING) + [f"gated/{SUF}"]
 _TRACKED = None
 _INDEX_MUTATORS = frozenset(("add", "reset", "checkout", "commit", "rm", "mv",
                              "read-tree", "update-index"))
+PORT_REGIONS = ([r for r in regionsync.PORTS if os.path.isdir(f"extract/{r}")]
+                if REGION == regionsync.HOME and os.environ.get("DQIX_REGIONSYNC") != "defer" else [])
+OTHER_CONFIGS = [f"config/{r}" for r in (regionsync.HOME, *regionsync.PORTS)
+                 if r != REGION and os.path.isdir(f"config/{r}")]
+BLOCKED = set()
+PORTS_PENDING = [False]
 
 def sh(*a):
     global _TRACKED
@@ -178,6 +185,8 @@ def clean():
     # config to HEAD. That is the intended superset (`git checkout HEAD -- src/` was already
     # project-wide); it only ever discards UNCOMMITTED config edits, which a wave must not carry.
     sh("git", "checkout", "HEAD", "--", CFG + "/", "src/", "include/")
+    if PORTS_PENDING[0]:
+        drop_ports()
     # Tolerate a file vanishing between the glob and the remove. The `git checkout` above
     # can delete it, and so can a second wave running concurrently -- and an unguarded
     # os.remove raises FileNotFoundError, which aborts the ENTIRE recovery pass and makes
@@ -213,6 +222,13 @@ def clean():
         _rm(f)
     for o in glob.glob(f"{SRCDIR}/**/*.o", recursive=True): _rm(o)
     for o in glob.glob(f"{SRCDIR}/*.o"): _rm(o)
+
+
+def drop_ports():
+    PORTS_PENDING[0] = False
+    if PORT_REGIONS or BLOCKED:
+        sh("git", "checkout", "HEAD", "--", *OTHER_CONFIGS)
+
 
 def sweep_foreign():
     """Move other modules' untracked .cpp out of the tree, preserving them in quarantine.
@@ -270,9 +286,27 @@ def gate():
             except OSError: pass
             print("  modsize preflight RED (link would abort) — skipping ninja check")
             return False
-    r = sh("ninja", "check")
-    out = r.stdout + r.stderr
-    ok = r.returncode == 0 and "abort" not in out and "FAILED" not in out
+    regions = PORT_REGIONS if GATES[0] <= 1 else sorted(BLOCKED)
+    results, blocking = {}, []
+    if regions:
+        results, blocking = regionsync.gate(regions)
+        BLOCKED.update(blocking)
+        rc, out = int(not results[regionsync.HOME][0]), results[regionsync.HOME][1]
+    else:
+        r = sh("ninja", "check")
+        rc, out = r.returncode, r.stdout + r.stderr
+    ok = rc == 0 and "abort" not in out and "FAILED" not in out and not blocking
+    if regions:
+        PORTS_PENDING[0] = True
+        if not ok:
+            drop_ports()
+        for region in regions:
+            if not results.get(region, (True, ""))[0]:
+                print(f"  {region}: red{' -- this candidate set breaks it' if region in blocking else ''}")
+                try:
+                    open(f"{SP}/wlog/gate_{SUF}_{region}.txt", "w", encoding='utf-8', errors='ignore').write(
+                        results[region][1])
+                except OSError: pass
     if not ok:   # keep the real reason; a silent red used to be indistinguishable from a bad func
         # lcfcheck turns a red gate into a one-line diagnosis when the cause is link LAYOUT: it proves
         # from the generated lcf + the built objects that every `<obj>.o(<sec>)` line resolves to
@@ -282,7 +316,7 @@ def gate():
         try:
             open(f"{SP}/wlog/gate_{SUF}.txt", "w", encoding='utf-8', errors='ignore').write(
                 f"--- configure ---\n{cf.stdout}\n{cf.stderr}\n--- lcfcheck ---\n{lc.stdout}\n"
-                f"--- ninja check (rc={r.returncode}) ---\n{out}")
+                f"--- ninja check (rc={rc}) ---\n{out}")
         except OSError: pass
     return ok
 
@@ -395,7 +429,7 @@ def commit(n):
     # deferred 42 TRUSTED functions this way, and re-running the identical gate later committed 41/42.
     # An 8-hour, ~50-function loss from an unchecked return code. Retry the lock, then re-check.
     for _try in range(4):
-        r1 = sh("git", "add", "-A")
+        r1 = sh("git", "add", "-A", "--", ".", *(f":(exclude){p}" for p in OTHER_CONFIGS))
         unstage_foreign()
         r2 = sh("git", *AUTH, "commit", "-q", "-m", MSG.format(n=n))
         if sh("git", "rev-parse", "HEAD").stdout.strip() != before: return 'ok'
@@ -701,6 +735,7 @@ def recurse(addrs):
         prune_unwired()                      # drop dead untracked .cpp before commit; keep only delinked
         st = commit(f"batch of {len(addrs)}")
         if st == 'ok':
+            PORTS_PENDING[0] = False
             _now = committed_addrs(); _real = [a for a in addrs if a in _now]
             committed[0] += len(_real); print(f"  committed {len(_real)}/{len(addrs)} delinked ({sorted(_real)[:3]}...)")
         elif st == 'nothing':                 # green but zero delinked = all guard-rejected this pass
@@ -711,6 +746,7 @@ def recurse(addrs):
             if _real:
                 st2 = commit(f"batch of {len(addrs)}")
                 if st2 == 'ok':
+                    PORTS_PENDING[0] = False
                     _now = committed_addrs(); _real = [a for a in addrs if a in _now]
                     committed[0] += len(_real)
                     print(f"  committed {len(_real)}/{len(addrs)} delinked after commit-retry ({sorted(_real)[:3]}...)")
