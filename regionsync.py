@@ -9,8 +9,8 @@ has the same size or wgate.py matches the file against it.
 Then from usa to each region with a port tool that has --sync and an extracted ROM: run the sync
 (after compiling the region's objects first when its tool reads them). The ported regions build
 together with usa, and each port is committed when the receiving region's `ninja check` and
-`ninja sha1` pass. Every build first reads the region's depfiles and objects in parallel, which ninja
-and mwld would otherwise read one at a time.
+`ninja sha1` pass. Every build first reads the region's depfiles and objects in parallel; ninja and
+mwld would otherwise read them one at a time.
 When they do not, restore the config of each module whose check failed and build again; restore the
 whole port when that is still red or no module is named. Every region but usa builds from its own
 build/<region>/build.ninja, so regions build at the same time; build.ninja is left configured for usa.
