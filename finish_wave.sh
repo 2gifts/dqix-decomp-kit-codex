@@ -47,9 +47,9 @@ else
   SRCDIR=$(python "$KIT/srcdir.py" "$OV")
   TAGPRE="func_ov${OV}_"; LBL="ov${OV}"
 fi
-SDKDIR=$(python "$KIT/srcdir.py" --sdk "$OV")
+LIBDIRS=$(python "$KIT/srcdir.py" --lib "$OV")
 OWNDIRS=("$SRCDIR")
-[ -n "$SDKDIR" ] && OWNDIRS+=("$SDKDIR")
+for _d in $LIBDIRS; do OWNDIRS+=("$_d"); done
 Q="$SP/quarantine"; mkdir -p "$Q"
 
 # ===== SELF-HEALING PREFLIGHT — never abort/lose on stale/dupe/leftover files; quarantine them =====
@@ -68,7 +68,7 @@ git checkout HEAD -- include/ config/ src/ 2>/dev/null
 #    ALL of src/, not src/Combat/ alone: the update-compiler base put ARM9 main's sources in
 #    src/World, src/Util, src/System and six more, and a half-written file there reds every module.
 git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' \
-  | grep -v "^$SRCDIR/" | { if [ -n "$SDKDIR" ]; then grep -v "^$SDKDIR/"; else cat; fi; } | while read -r f; do
+  | grep -vE "^($(IFS='|'; echo "${OWNDIRS[*]}"))/" | while read -r f; do
   mv "$f" "$Q/$(basename "$f")" 2>/dev/null; done
 # A candidate's address is the one on its `// USA:` tag, never just the first func_ symbol in the
 # file: every source declares its CALLEES with the same prefix, and those are usually already

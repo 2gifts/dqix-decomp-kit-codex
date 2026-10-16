@@ -19,16 +19,18 @@ re-measure one of those before citing it.
   original re-read. Use `WGATE_FLAGS`, `MWCC` or `WGATE_ALLOW_PRAGMA` to locate the difference, then
   fix the C and match at the default. `tools/cc_overrides.txt` and `tools/cc_flag_overrides.txt`
   stay empty; `wgate.py` refuses codegen pragmas and `selfcheck.py` ratchets the committed count.
-- NitroSDK and NitroSystem code is the second build: mwccarm 2.0/sp1p2 at `-O4,p`, for every file
-  under `src/NitroSDK/`. It is one contiguous block (USA main `0x020af20c..0x020d6bac`, with
-  either-build margins `0x020aeec8..0x020af20c` and `0x020d6bac..0x020d6c0c`; `sdk_ranges.txt` per
-  region). `wgate` gates the block on the SDK build only and a margin on both, and the wave files an
-  SDK-build match under `src/NitroSDK/Main/`. OS_VSNPrintf (`020d3160`) overgenerates by 128 bytes on
-  sp1p5 and later, so sp1p6 is not it.
-- MSL (`-O4,p` on sp1p5 or later) and the overlay 31 network libraries (sp1p6 or later) are further
-  library builds that `configure.py` does not define yet. A library function outside the SDK range
-  that matches only under another flag set is pinned for a maintainer decision and skipped; it is
-  never configured by a contributor. In game code the same symptom means the source is wrong.
+- Library code has its own builds, one per directory (`LIBRARY_BUILDS` in `configure.py`):
+  `src/NitroSDK/` mwccarm 2.0/sp1p2 `-O4,p`; `src/MSL/` 2.0/sp2p2 `-O4,p -ipa file`; `src/Runtime/`
+  2.0/sp2p2 `-O4,p -char unsigned`. `lib_ranges.txt` gives each library's block per region (USA main:
+  MSL `0x02001578..0x0200c578`, runtime `..0x0200f398`, SDK `0x020af20c..0x020d6bac` with
+  either-build margins `0x020aeec8..0x020af20c` and `0x020d6bac..0x020d6c0c`). `wgate` gates a block on
+  its library build only and a margin on both, and the wave files the match under that library's
+  `Main/`. OS_VSNPrintf (`020d3160`) overgenerates by 128 bytes on sp1p5 and later, so the SDK is not
+  sp1p6.
+- The overlay 31 network libraries (sp1p6 or later) are a further library build `configure.py` does
+  not define yet. A library function outside every `lib_ranges.txt` block that matches only under
+  another flag set is pinned for a maintainer decision and skipped; it is never configured by a
+  contributor. In game code the same symptom means the source is wrong.
 - Command-line `-opt noprop`, `-opt nocse` and similar switches are accepted and ignored by mwccarm
   2.0. Only the `#pragma` form changes codegen, so a flag test can falsely show "no difference".
 - Copy propagation is on in the ROM. When a function looks like it needs `opt_propagation off`,

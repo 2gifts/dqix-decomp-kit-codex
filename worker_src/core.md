@@ -266,9 +266,9 @@ without the pragma is the right basin, a better one with it is not.
 
 - **`optimize_for_size off` closes it:** if-conversion predicated an arm the ROM branches. The arm
   is usually one instruction short (the size boundary is under "Predication vs branch"), or the arms
-  are inverted (`r24_arm_invert`). In the SDK block (`sdk_ranges.txt`) the pragma stands in for the
-  SDK build: delete it and gate again; the gate compiles there with mwccarm 2.0/sp1p2 `-O4,p`
-  (`020d16b0`, `020d3160`).
+  are inverted (`r24_arm_invert`). In a library block (`lib_ranges.txt`) the pragma stands in for
+  the library build: delete it and gate again; the gate compiles there with that library's build,
+  e.g. mwccarm 2.0/sp1p2 `-O4,p` for the SDK (`020d16b0`, `020d3160`).
 - **`opt_propagation off` closes it:** propagation sank a constant past a store the ROM puts it
   before, staged nothing where the ROM holds a constant in a callee-saved register across a call,
   folded a variable index into the base add (ROM: two immediate adds and a register-offset load), or
@@ -1222,11 +1222,11 @@ together. A switch arm that does only what "no arm" does should not be written.
   it as `default:` makes mwcc emit a compare chain instead. `02005ac4` needed an explicit `case 3:`
   to get the target's table dispatch.
 
-## LOOP FORM — mwcc does NOT rotate loops
+## LOOP FORM — mwcc -O2 does NOT rotate loops
 A `while` emits a `b` to a bottom test; it will never become the target's top-tested do-while. Pick
 the form directly:
-- guarded do-while `if (n != 0) { do { ... } while (n != 0); }` for a top-tested loop (`02002b90`,
-  `022378e4` — both loops).
+- guarded do-while `if (n != 0) { do { ... } while (n != 0); }` for a top-tested loop (`022378e4` —
+  both loops).
 - `while (y < h) { ...; if (count >= max) break; }` plus an explicit `max == 0` early return
   (`020e1438`).
 - A SIZE gap of a few bytes spread over several loops is usually this and nothing else: rewriting

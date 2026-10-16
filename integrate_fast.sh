@@ -116,7 +116,7 @@ for p in glob.glob(f"{SP}/staging/*/*.cpp"):
         by[mod][m.group(1).lower()] = open(p, encoding="utf-8", errors="ignore").read()
         paths[(mod, m.group(1).lower())] = p
 moved = 0
-sdk = []
+lib = []
 for mod, cands in by.items():
     builds = {}
     try:
@@ -131,11 +131,11 @@ for mod, cands in by.items():
                 shutil.move(p, f"{bad}/{os.path.basename(p)}")
                 moved += 1
                 print(f"pre-classify held back {a}: {v}")
-        elif builds.get(a) == "sdk" and p:
-            sdk.append(f"{mod} {os.path.basename(p)}")
+        elif builds.get(a, "game") != "game" and p:
+            lib.append(f"{mod} {os.path.basename(p)} {builds[a]}")
 os.makedirs(f"{SP}/wlog", exist_ok=True)
-open(f"{SP}/wlog/stage_sdk.txt", "w", encoding="utf-8").write("".join(l + "\n" for l in sdk))
-print(f"pre-classify: {moved} candidate(s) held back, {len(sdk)} on the SDK build")
+open(f"{SP}/wlog/stage_lib.txt", "w", encoding="utf-8").write("".join(l + "\n" for l in lib))
+print(f"pre-classify: {moved} candidate(s) held back, {len(lib)} on a library build")
 PRE
 
 placed=0
@@ -154,11 +154,12 @@ for d in "$SP"/staging/*/; do
   tag=$(basename "$d"); mod=${tag#ov}
   ls "$d"*.cpp >/dev/null 2>&1 || continue
   if [ "$mod" = "main" ]; then dst="$REPO/src/Combat/Main"; else dst="$REPO/src/Combat/Overlay_$((10#$mod))"; fi
-  sdkdst="$(python "$KIT/srcdir.py" --sdk "$mod")"
   mkdir -p "$dst"
   for f in "$d"*.cpp; do
-    if [ -n "$sdkdst" ] && grep -qxF "$mod $(basename "$f")" "$SP/wlog/stage_sdk.txt" 2>/dev/null; then
-      mkdir -p "$REPO/$sdkdst"; cp "$f" "$REPO/$sdkdst/"
+    lb=$(awk -v m="$mod" -v b="$(basename "$f")" '$1 == m && $2 == b {print $3}' "$SP/wlog/stage_lib.txt" 2>/dev/null)
+    if [ -n "$lb" ]; then
+      libdst="$REPO/$(python "$KIT/srcdir.py" --lib "$mod" "$lb")"
+      mkdir -p "$libdst"; cp "$f" "$libdst/"
     else
       cp "$f" "$dst"/
     fi

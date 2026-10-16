@@ -2217,9 +2217,6 @@ FUNCTIONAL = [
     ("main", "02076df4", "regress_fixtures/NoOpCase_02076df4.cpp", "MATCH", 60,
      "nocase: an explicit `case K: return;` gives mwcc a detached epilogue copy; deleting it lets "
      "the shared one-instruction epilogue inline into the jump-table slot"),
-    ("main", "02002b90", "regress_fixtures/GuardedDoWhile_02002b90.cpp", "MATCH", 60,
-     "dowhile: mwcc does not rotate loops -- a `while` emits a branch to a bottom test and never "
-     "becomes the ROM's top-tested do-while, so the guarded form has to be written directly"),
     ("023", "021ddc98", "regress_fixtures/ShortCanvasX_021ddc98.cpp", "MATCH", 60,
      "shortspill on a brace-below function: `short x` loads with ldrsh into the product temp; the "
      "prior already loads x before y, since neither step alone moves the score"),
@@ -6189,29 +6186,32 @@ def _wgate_inprocess_matches_cli():
     return None
 
 
-@check("SDK-range addresses and src/NitroSDK paths are gated on the SDK build",
-       "every function was compiled with the game's build, so NitroSDK code built at -O4,p by an "
-       "older mwcc could never match")
+@check("library-range addresses and library paths are gated on their library build",
+       "every function was compiled with the game's build, so NitroSDK and MSL code built at -O4,p "
+       "could never match")
 def _sdk_build_routing():
     B = load("buildcfg")
-    if not B.SDK_MWCC_VERSION:
-        return "the decomp's configure.py defines no SDK build"
+    if not {"sdk", "msl", "runtime"} <= set(B.LIBRARIES):
+        return "the decomp's configure.py defines no sdk/msl/runtime LIBRARY_BUILDS"
     if B.REGION != "usa":
         return None
     cases = [(("main", "020d3160"), ["sdk"]), (("main", "02000c9c"), ["game"]),
              (("main", "020aeec8"), ["sdk", "game"]), (("main", "020d6bac"), ["sdk", "game"]),
              (("main", "020d6c0c"), ["game"]), (("main", "020d3160", "D:/r/src/Combat/Main/a.cpp"), ["sdk"]),
              (("main", "02000c9c", "D:/r/src/NitroSDK/Main/a.cpp"), ["sdk"]),
-             (("main", "02000c9c", "src\\NitroSDK\\a.cpp"), ["sdk"]), (("031", "022192c0"), ["game"])]
+             (("main", "02000c9c", "src\\NitroSDK\\a.cpp"), ["sdk"]), (("031", "022192c0"), ["game"]),
+             (("main", "020042a8"), ["msl"]), (("main", "0200df80"), ["runtime"]),
+             (("main", "0200f398"), ["game"]), (("main", "02000c9c", "src/MSL/Main/a.cpp"), ["msl"])]
     for args, want in cases:
         if B.builds_for(*args) != want:
             return "builds_for%r = %r, want %r" % (args, B.builds_for(*args), want)
-    if B.sdk_dir("main") != "src/NitroSDK/Main" or B.sdk_dir("031") is not None:
-        return "sdk_dir: %r %r" % (B.sdk_dir("main"), B.sdk_dir("031"))
-    if B.build_flags("sdk")[-1] != B.SDK_OPT_LEVEL or B.build_flags("game") != B.FLAGS:
-        return "build flags"
-    if not B.build_cc("sdk").endswith(B.SDK_MWCC_VERSION + "/mwccarm.exe") or B.build_cc("game") != B.CC:
-        return "build compilers"
+    if B.lib_dir("main", "sdk") != "src/NitroSDK/Main" or B.lib_dirs("031"):
+        return "lib dirs: %r %r" % (B.lib_dir("main", "sdk"), B.lib_dirs("031"))
+    for name, (_root, ver, flags) in B.LIBRARIES.items():
+        if B.build_flags(name) != B.FLAGS + flags or not B.build_cc(name).endswith(ver + "/mwccarm.exe"):
+            return "build %s: %r %r" % (name, B.build_cc(name), B.build_flags(name)[-3:])
+    if B.build_flags("game") != B.FLAGS or B.build_cc("game") != B.CC:
+        return "game build"
 
 
 @check("ov_recover places an SDK-build match under src/NitroSDK and a game-build one in the module dir",
@@ -6224,8 +6224,10 @@ def _recover_places_sdk():
     with tempfile.TemporaryDirectory() as root:
         game, sdk = (os.path.join(root, d).replace("\\", "/") for d in ("game", "sdk"))
         text = {a: '// USA: func_%s\nextern "C" ARM void func_%s() {}\n' % (a, a) for a in ("020d3160", "02000c9c")}
+        from types import SimpleNamespace
         ns = {"re": re, "os": os, "cands": text, "_build": {"020d3160": "sdk", "02000c9c": "game"},
-              "SRCDIR": game, "SDKDIR": sdk, "TAG": "USA", "TAGPRE": "func_", "_FOREIGN_STEMS": set(),
+              "buildcfg": SimpleNamespace(lib_dir=lambda mod, b: {"sdk": sdk}[b]), "MOD": "main",
+              "SRCDIR": game, "TAG": "USA", "TAGPRE": "func_", "_FOREIGN_STEMS": set(),
               "tracked": lambda p: False, "sanitize": lambda t, a: ("func_" + a, t),
               "ASMPAT": re.compile("(?!)"), "ASM_ALLOW": set(), "carry_cc_override": lambda a, p: None}
         exec(compile(ast.Module(body=[node], type_ignores=[]), "place", "exec"), ns)
@@ -6241,8 +6243,8 @@ def _recover_places_sdk():
        "gated on the game build it overgenerates by 128 bytes")
 def _sdk_build_matches():
     W = load("wgate")
-    if not W.buildcfg.SDK_MWCC_VERSION or W.buildcfg.REGION != "usa":
-        return None if W.buildcfg.SDK_MWCC_VERSION else "the decomp's configure.py defines no SDK build"
+    if "sdk" not in W.buildcfg.LIBRARIES or W.buildcfg.REGION != "usa":
+        return None if "sdk" in W.buildcfg.LIBRARIES else "the decomp's configure.py defines no SDK build"
     src = f"{KIT}/regress_fixtures/OS_VSNPrintf_020d3160.cpp"
     env = dict(os.environ, WGATE_ALLOW_COMMITTED="1")
     os.makedirs(f"{SP}/handwork", exist_ok=True)

@@ -27,7 +27,7 @@
 !/asm_allow.txt
 !/skiplist_main.txt
 !/skiplist_ov.txt
-!/sdk_ranges.txt
+!/lib_ranges.txt
 
 /_*.py
 /_*.sh

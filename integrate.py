@@ -90,8 +90,8 @@ except IOError:
 
 
 def cc_for(path):
-    if buildcfg.is_sdk_path(path):
-        return buildcfg.build_cc("sdk")
+    if buildcfg.path_build(path) != "game":
+        return buildcfg.build_cc(buildcfg.path_build(path))
     v = _CC_OVR.get(os.path.basename(str(path)))
     return buildcfg.cc_path(v)
 

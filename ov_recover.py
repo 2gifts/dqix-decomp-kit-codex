@@ -59,8 +59,7 @@ def tag_addr(txt):
     return m.group(1).lower() if m else None       # .lower() is a no-op on the overlay class
 
 
-SDKDIR = buildcfg.sdk_dir(MOD)
-SRCDIRS = [SRCDIR] + ([SDKDIR] if SDKDIR else [])
+SRCDIRS = [SRCDIR] + buildcfg.lib_dirs(MOD)
 
 
 def src_cpps():
@@ -559,7 +558,7 @@ def place(addrs):
                 # address, which is what place() falls back to on any collision anyway.
                 name = f"{TAGPRE}{a}"
                 print(f"  PLACE-FALLBACK {a}: no ARM/THUMB keyword, naming file {name}.cpp")
-        d = SDKDIR if _build.get(a) == "sdk" and SDKDIR else SRCDIR
+        d = buildcfg.lib_dir(MOD, _build[a]) if _build.get(a, "game") != "game" else SRCDIR
         os.makedirs(d, exist_ok=True)
         bn = f"{d}/{name}.cpp"
         if tracked(bn) or bn in used or os.path.exists(bn) or name in _FOREIGN_STEMS:

@@ -110,43 +110,43 @@ def cc_path(version):
     return f"{COMPILER_ROOT}/{version}/mwccarm.exe" if version else CC
 
 
-SDK_MWCC_VERSION = getattr(_cfg, "SDK_MWCC_VERSION", None)
-SDK_OPT_LEVEL = getattr(_cfg, "SDK_OPT_LEVEL", None)
-SDK_SRC = "src/NitroSDK"
-_SDK_RANGES = os.path.join(_kp.KIT, "sdk_ranges.txt")
+LIBRARIES = {name: (f"src/{root}", ver, list(flags))
+             for name, (root, ver, flags) in getattr(_cfg, "LIBRARY_BUILDS", {}).items()}
+_LIB_RANGES = os.path.join(_kp.KIT, "lib_ranges.txt")
 
 
-def sdk_ranges(mod):
-    if not SDK_MWCC_VERSION:
-        return []
+def lib_ranges(mod):
     out = []
     try:
-        for line in open(_SDK_RANGES, encoding="utf-8"):
+        for line in open(_LIB_RANGES, encoding="utf-8"):
             p = line.split()
-            if len(p) == 5 and p[0] == REGION and p[1] == mod:
-                out.append((int(p[2], 16), int(p[3], 16), p[4]))
+            if len(p) in (5, 6) and p[0] == REGION and p[1] == mod and p[4] in LIBRARIES:
+                out.append((int(p[2], 16), int(p[3], 16), p[4], p[5:] == ["either"]))
     except OSError:
         pass
     return out
 
 
-def sdk_zone(mod, addr):
+def lib_zone(mod, addr):
     a = int(addr, 16) if isinstance(addr, str) else addr
-    return next((kind for lo, hi, kind in sdk_ranges(mod) if lo <= a < hi), None)
+    return next(((b, either) for lo, hi, b, either in lib_ranges(mod) if lo <= a < hi), (None, False))
 
 
-def sdk_dir(mod):
-    if not sdk_ranges(mod):
-        return None
-    return f"{SDK_SRC}/Main" if mod == "main" else f"{SDK_SRC}/Overlay_{int(mod)}"
+def lib_dir(mod, build):
+    root = LIBRARIES[build][0]
+    return f"{root}/Main" if mod == "main" else f"{root}/Overlay_{int(mod)}"
 
 
-def is_sdk_path(path):
+def lib_dirs(mod):
+    return [lib_dir(mod, b) for b in dict.fromkeys(b for _lo, _hi, b, _e in lib_ranges(mod))]
+
+
+def path_build(path):
     p = "/" + str(path).replace("\\", "/")
-    return f"/{SDK_SRC}/" in p and bool(SDK_MWCC_VERSION)
+    return next((b for b, (root, _v, _f) in LIBRARIES.items() if f"/{root}/" in p), "game")
 
 
-BUILDS = {"game": (None, []), "sdk": (SDK_MWCC_VERSION, [SDK_OPT_LEVEL] if SDK_OPT_LEVEL else [])}
+BUILDS = {"game": (None, []), **{b: (ver, flags) for b, (_root, ver, flags) in LIBRARIES.items()}}
 
 
 def build_cc(name):
@@ -157,14 +157,12 @@ def build_flags(name):
     return FLAGS + BUILDS[name][1]
 
 
-def path_build(path):
-    return "sdk" if is_sdk_path(path) else "game"
-
-
 def builds_for(mod, addr, path=None):
-    if path is not None and is_sdk_path(path):
-        return ["sdk"]
-    return {"sdk": ["sdk"], "either": ["sdk", "game"]}.get(sdk_zone(mod, addr), ["game"])
+    own = path_build(path) if path is not None else "game"
+    if own != "game":
+        return [own]
+    build, either = lib_zone(mod, addr)
+    return ([build, "game"] if either else [build]) if build else ["game"]
 
 
 _POSTCOMPILE = []
