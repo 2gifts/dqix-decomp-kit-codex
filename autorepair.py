@@ -303,9 +303,6 @@ def repair(path, module, addr, _no_rename=False):
     return applied
 
 
-_FLAGS = list(buildcfg.FLAGS)
-
-
 def _emits_symbol(path, want):
     """Compile `path` and check it defines `want` (when we know what the ROM demands).
 
@@ -320,10 +317,11 @@ def _emits_symbol(path, want):
     """
     import subprocess
     import tempfile
-    cc = buildcfg.CC
+    build = buildcfg.path_build(path)
     obj = os.path.join(tempfile.gettempdir(), f"autorepair_{os.getpid()}.o")
     try:
-        r = subprocess.run(buildcfg.tool_command(cc) + _FLAGS + ["-c", path, "-o", obj],
+        r = subprocess.run(buildcfg.tool_command(buildcfg.build_cc(build)) + buildcfg.build_flags(build)
+                           + ["-c", path, "-o", obj],
                            capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             return False, "repair did not compile"

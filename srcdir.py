@@ -35,4 +35,7 @@ def for_module(mod):
 
 
 if __name__ == "__main__":
-    print(for_module(sys.argv[1]))
+    if sys.argv[1] == "--sdk":
+        print(buildcfg.sdk_dir(sys.argv[2]) or "")
+    else:
+        print(for_module(sys.argv[1]))

@@ -90,8 +90,14 @@ except IOError:
 
 
 def cc_for(path):
+    if buildcfg.is_sdk_path(path):
+        return buildcfg.build_cc("sdk")
     v = _CC_OVR.get(os.path.basename(str(path)))
     return buildcfg.cc_path(v)
+
+
+def flags_for(path):
+    return buildcfg.build_flags(buildcfg.path_build(path))
 
 
 def _read_keep_nl(p):
@@ -422,7 +428,7 @@ for f, addr in pending:
             open(f, "w", encoding="utf-8", newline="\n").write(ftxt)
 
     obj = f"{SP}/_int_{LBL}_{os.getpid()}.o"
-    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + FLAGS + ["-c", cf, "-o", obj], capture_output=True, text=True)
+    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + flags_for(f) + ["-c", cf, "-o", obj], capture_output=True, text=True)
     if r.returncode != 0:
         verdicts.append(("COMPILE", addr))
         print("COMPILE FAIL", f, (r.stdout + r.stderr)[-300:])
@@ -590,7 +596,7 @@ for f, addrs in sorted(TU.items()):
     at = len(keep) if at is None else at
 
     obj = f"{SP}/_int_{LBL}_{os.getpid()}.o"
-    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + FLAGS + ["-c", f, "-o", obj], capture_output=True, text=True)
+    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + flags_for(f) + ["-c", f, "-o", obj], capture_output=True, text=True)
     if r.returncode != 0:
         tu_fail(f, addrs, "COMPILE", (r.stdout + r.stderr)[-300:])
         continue

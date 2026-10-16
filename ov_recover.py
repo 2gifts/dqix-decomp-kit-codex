@@ -59,6 +59,14 @@ def tag_addr(txt):
     return m.group(1).lower() if m else None       # .lower() is a no-op on the overlay class
 
 
+SDKDIR = buildcfg.sdk_dir(MOD)
+SRCDIRS = [SRCDIR] + ([SDKDIR] if SDKDIR else [])
+
+
+def src_cpps():
+    return [f for d in SRCDIRS for f in glob.glob(f"{d}/*.cpp")]
+
+
 _BOUND = None
 
 
@@ -203,7 +211,7 @@ def clean():
     # re-gated by every repair sweep, which now also runs colorsweep on 2-24 byte residues, so a
     # preserved near-miss converts later for no model tokens at all.
     _hold = f"{SP}/hold_{SUF}"
-    for f in glob.glob(f"{SRCDIR}/*.cpp"):
+    for f in src_cpps():
         if tracked(f):
             continue
         try:
@@ -220,8 +228,9 @@ def clean():
         except OSError:
             pass
         _rm(f)
-    for o in glob.glob(f"{SRCDIR}/**/*.o", recursive=True): _rm(o)
-    for o in glob.glob(f"{SRCDIR}/*.o"): _rm(o)
+    for d in SRCDIRS:
+        for o in glob.glob(f"{d}/**/*.o", recursive=True): _rm(o)
+        for o in glob.glob(f"{d}/*.o"): _rm(o)
 
 
 def drop_ports():
@@ -247,7 +256,7 @@ def sweep_foreign():
     # src/World, src/Util, src/System and six more, and configure.py globs every one of them.
     for f in glob.glob("src/**/*.cpp", recursive=True):
         p = f.replace(chr(92), "/")
-        if p.startswith(SRCDIR + "/") or tracked(p):
+        if any(p.startswith(d + "/") for d in SRCDIRS) or tracked(p):
             continue
         try:
             shutil.move(p, f"{q}/{os.path.basename(p)}")
@@ -487,7 +496,7 @@ def gather(files):
         cands.setdefault(a, txt)
 for d in STAGING:
     if d == "src":  # steady-state: fresh untracked worker output in src
-        gather(f for f in glob.glob(f"{SRCDIR}/*.cpp") if not tracked(f))
+        gather(f for f in src_cpps() if not tracked(f))
     else:
         gather(glob.glob(f"{SP}/{d}/*.cpp"))
 
@@ -498,7 +507,7 @@ for d in STAGING:
 HOLD = f"{SP}/hold_{SUF}"
 os.makedirs(HOLD, exist_ok=True)
 _held = 0
-for _fp in glob.glob(f"{SRCDIR}/*.cpp"):
+for _fp in src_cpps():
     if tracked(_fp): continue
     open(f"{HOLD}/{os.path.basename(_fp)}", 'w', encoding='utf-8', newline='\n').write(
         open(_fp, encoding='utf-8', errors='ignore').read()); _held += 1
@@ -550,11 +559,13 @@ def place(addrs):
                 # address, which is what place() falls back to on any collision anyway.
                 name = f"{TAGPRE}{a}"
                 print(f"  PLACE-FALLBACK {a}: no ARM/THUMB keyword, naming file {name}.cpp")
-        bn = f"{SRCDIR}/{name}.cpp"
+        d = SDKDIR if _build.get(a) == "sdk" and SDKDIR else SRCDIR
+        os.makedirs(d, exist_ok=True)
+        bn = f"{d}/{name}.cpp"
         if tracked(bn) or bn in used or os.path.exists(bn) or name in _FOREIGN_STEMS:
-            bn = f"{SRCDIR}/{name}_{a}.cpp"
+            bn = f"{d}/{name}_{a}.cpp"
         if bn.rsplit('/', 1)[-1][:-4] in _FOREIGN_STEMS or bn in used:   # still not unique -> force it
-            bn = f"{SRCDIR}/{TAGPRE}{a}.cpp"
+            bn = f"{d}/{TAGPRE}{a}.cpp"
         if f"// {TAG}: {TAGPRE}{a}" not in txt:
             _defpat = ('(?m)^(?:extern "C"\\s+)?'
                        '(?:__declspec\\([^)]*\\)\\s*)?'
@@ -609,12 +620,12 @@ def try_set(addrs):
     global _DIRTY_BASE, _TRACKED
     _DIRTY_BASE = dirty_tracked()
     place(addrs)
-    for o in glob.glob(f"{SRCDIR}/*.o"): os.remove(o)
+    for o in [o for d in SRCDIRS for o in glob.glob(f"{d}/*.o")]: os.remove(o)
     # KEEP THE INTEGRATOR'S OUTPUT. It names exactly why each candidate was rejected
     # (NON-TEXT, NO-DEF, DUP-ADDR, OVERGEN, REPAIR...), and swallowing it is why waves
     # reported a bare "wired-0 -> defer" for faults that took a hand investigation to
     # find. One file per module, truncated per pass so it always reflects this wave.
-    _u = [f for f in sorted(glob.glob(f"{SRCDIR}/*.cpp")) if not tracked(f)]
+    _u = [f for f in sorted(src_cpps()) if not tracked(f)]
     print(f"  DBG-PLACED untracked={len(_u)} {[os.path.basename(x) for x in _u[:3]]}")
     if _u:
         _tx = open(_u[0], encoding="utf-8", errors="ignore").read()
@@ -659,7 +670,7 @@ def prune_unwired():
     # remove untracked .cpp that integrate_ov did NOT wire (addr not in delinks) so git add -A can
     # never commit a DEAD file. Every candidate is snapshotted in HOLD, so removal loses nothing.
     now = committed_addrs()
-    for fp in glob.glob(f"{SRCDIR}/*.cpp"):
+    for fp in src_cpps():
         if tracked(fp): continue
         a = tag_addr(open(fp, encoding='utf-8', errors='ignore').read())
         if (a is None) or (a not in now): os.remove(fp)
@@ -816,15 +827,18 @@ print(f"[{SUF}] {len(cands)} candidates")
 sys.path.insert(0, KIT)
 from classify import classify
 _cls = {}
+_build = {}
 for _a in sorted(variants):
-    _best, _bv = None, None
+    _best, _bv, _bb = None, None, None
     for _i, _txt in enumerate(variants[_a]):      # try each held attempt; first TRUSTED wins
         _nm = (vnames.get(_a) or [None] * (_i + 1))[_i] if _i < len(vnames.get(_a, [])) else None
-        _v = classify(MOD, {_a: _txt}, names={_a: _nm} if _nm else None).get(_a, 'COMPILE')
+        _builds = {}
+        _v = classify(MOD, {_a: _txt}, names={_a: _nm} if _nm else None, builds=_builds).get(_a, 'COMPILE')
         if _bv is None or _v == 'TRUSTED':
-            _best, _bv = _txt, _v
+            _best, _bv, _bb = _txt, _v, _builds.get(_a)
         if _v == 'TRUSTED': break
     _cls[_a] = _bv
+    _build[_a] = _bb
     cands[_a] = _best
 # DRIFT PARKING: funcs already proven to break the link layout (not the bytes). Re-placing them every
 # wave costs an extra red gate each time and nothing else, so park them for a few waves. Not permanent —

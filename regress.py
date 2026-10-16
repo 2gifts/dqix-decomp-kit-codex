@@ -2345,7 +2345,8 @@ def _delegated_failure_stops_gate():
     ns = {"sys":sys,"os":os,"glob":__import__("glob"),"re":re,"subprocess":subprocess,
           "_TRACKED":{"stale"},"_INDEX_MUTATORS":frozenset(),"clean":lambda:events.append("clean"),
           "dirty_tracked":lambda:set(),"place":place,"tracked":lambda path:True,"gate":gate,
-          "committed_addrs":lambda:set(),"REPO":root,"SRCDIR":source,"SP":root,"HOLD":hold,
+          "committed_addrs":lambda:set(),"REPO":root,"SRCDIR":source,"SRCDIRS":[source],
+          "src_cpps":lambda:__import__("glob").glob(os.path.join(source,"*.cpp")),"SP":root,"HOLD":hold,
           "SUF":"main","TAGPRE":"func_","INTARGS":[],"INT":os.path.join(root,"delegate.py")}
     exec(compile(ast.Module(body=nodes,type_ignores=[]),"try-set-regression","exec"),ns)
     with open(ns["INT"],"w") as out: out.write("import dqix_intentionally_missing_startup_dependency\n")
@@ -2475,7 +2476,7 @@ def _finish_bulk_snapshot_behaviour():
             with open(os.path.join(source,filename),"w") as out:
                 out.write("// USA: func_" + addr + "\n")
         with open(os.path.join(q,".done_main"),"w") as out: out.write("02000000\n")
-        body = 'cd "$1" || exit 99; SP="$1/state"; Q="$1/quarantine"; OV=main; REGION_TAG=USA; TAGPRE=func_; SRCDIR="src/Combat/Main"; calls="$1/calls"\n'
+        body = 'cd "$1" || exit 99; SP="$1/state"; Q="$1/quarantine"; OV=main; REGION_TAG=USA; TAGPRE=func_; SRCDIR="src/Combat/Main"; OWNDIRS=("$SRCDIR"); calls="$1/calls"\n'
         # Record actual quarantine moves without changing their arguments or result.
         body += 'mv() { printf "%s\\n" "$1" >> "$SP/../moves"; command mv "$@"; }\n'
         body += 'git() { echo x >> "$calls"; '
@@ -3467,10 +3468,11 @@ def _asmgen_ual():
 def _plausible_same_arms():
     P = load("plausible")
     wrap = "void f(Obj* obj) {\n    %s\n}\n"
-    for bad in ("g(c, obj->action ? obj->context : obj->context);", "x = k ? h(a) : h(a);"):
+    for bad in ("g(c, obj->action ? obj->context : obj->context);", "x = k ? h(a) : h(a);", "p = k ? 'a' : 'a';"):
         if "TERNARY-SAME-ARMS" not in repr(P.findings(wrap % bad)):
             return "plausible.py missed TERNARY-SAME-ARMS in %r" % bad
-    for good in ("g(c, obj->action ? obj->context : 0);", "x = k ? a + b : b;", "y = k ? s->a : s->ab;"):
+    for good in ("g(c, obj->action ? obj->context : 0);", "x = k ? a + b : b;", "y = k ? s->a : s->ab;",
+                 "int pad = (flag & 16) ? '0' : ' ';"):
         if [k for _, k, _ in P.findings(wrap % good) if k == "TERNARY-SAME-ARMS"]:
             return "plausible.py flagged %r" % good
     return None
@@ -6185,6 +6187,90 @@ def _wgate_inprocess_matches_cli():
             if (rc, got) != (r.returncode, r.stdout):
                 return "%s: command exit %d %r, gate() %d %r" % (addr, r.returncode, r.stdout[-120:], rc, got[-120:])
     return None
+
+
+@check("SDK-range addresses and src/NitroSDK paths are gated on the SDK build",
+       "every function was compiled with the game's build, so NitroSDK code built at -O4,p by an "
+       "older mwcc could never match")
+def _sdk_build_routing():
+    B = load("buildcfg")
+    if not B.SDK_MWCC_VERSION:
+        return "the decomp's configure.py defines no SDK build"
+    if B.REGION != "usa":
+        return None
+    cases = [(("main", "020d3160"), ["sdk", "game"]), (("main", "02000c9c"), ["game"]),
+             (("main", "020d3160", "D:/r/src/Combat/Main/a.cpp"), ["sdk", "game"]),
+             (("main", "02000c9c", "D:/r/src/NitroSDK/Main/a.cpp"), ["sdk"]),
+             (("main", "02000c9c", "src\\NitroSDK\\a.cpp"), ["sdk"]), (("031", "022192c0"), ["game"])]
+    for args, want in cases:
+        if B.builds_for(*args) != want:
+            return "builds_for%r = %r, want %r" % (args, B.builds_for(*args), want)
+    if B.sdk_dir("main") != "src/NitroSDK/Main" or B.sdk_dir("031") is not None:
+        return "sdk_dir: %r %r" % (B.sdk_dir("main"), B.sdk_dir("031"))
+    if B.build_flags("sdk")[-1] != B.SDK_OPT_LEVEL or B.build_flags("game") != B.FLAGS:
+        return "build flags"
+    if not B.build_cc("sdk").endswith(B.SDK_MWCC_VERSION + "/mwccarm.exe") or B.build_cc("game") != B.CC:
+        return "build compilers"
+
+
+@check("ov_recover places an SDK-build match under src/NitroSDK and a game-build one in the module dir",
+       "every match was written to the module's own directory, which the decomp compiles with the "
+       "game build, so an SDK-build match failed the wave's ninja check")
+def _recover_places_sdk():
+    import ast
+    src = open(f"{KIT}/ov_recover.py", encoding="utf-8").read()
+    node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "place")
+    with tempfile.TemporaryDirectory() as root:
+        game, sdk = (os.path.join(root, d).replace("\\", "/") for d in ("game", "sdk"))
+        text = {a: '// USA: func_%s\nextern "C" ARM void func_%s() {}\n' % (a, a) for a in ("020d3160", "02000c9c")}
+        ns = {"re": re, "os": os, "cands": text, "_build": {"020d3160": "sdk", "02000c9c": "game"},
+              "SRCDIR": game, "SDKDIR": sdk, "TAG": "USA", "TAGPRE": "func_", "_FOREIGN_STEMS": set(),
+              "tracked": lambda p: False, "sanitize": lambda t, a: ("func_" + a, t),
+              "ASMPAT": re.compile("(?!)"), "ASM_ALLOW": set(), "carry_cc_override": lambda a, p: None}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "place", "exec"), ns)
+        ns["place"](["020d3160", "02000c9c"])
+        got = sorted(os.path.relpath(os.path.join(d, f), root).replace("\\", "/")
+                     for d, _s, fs in os.walk(root) for f in fs)
+        if got != ["game/func_02000c9c.cpp", "sdk/func_020d3160.cpp"]:
+            return "placed %r" % got
+
+
+@check("the gate and classify match OS_VSNPrintf on the SDK build only, and name that build",
+       "main 020d3160 is byte-exact with NitroSDK's own os_printf.c only on mwcc 2.0/sp1p2 -O4,p; "
+       "gated on the game build it overgenerates by 128 bytes")
+def _sdk_build_matches():
+    W = load("wgate")
+    if not W.buildcfg.SDK_MWCC_VERSION or W.buildcfg.REGION != "usa":
+        return None if W.buildcfg.SDK_MWCC_VERSION else "the decomp's configure.py defines no SDK build"
+    src = f"{KIT}/regress_fixtures/OS_VSNPrintf_020d3160.cpp"
+    env = dict(os.environ, WGATE_ALLOW_COMMITTED="1")
+    os.makedirs(f"{SP}/handwork", exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=f"{SP}/handwork", ignore_cleanup_errors=True) as d:
+        saved = _kp.SP, W.gatelog.SP
+        _kp.SP = W.gatelog.SP = d
+        try:
+            out = []
+            if W.gate("main", "020d3160", src, out=out, env=env) != 0 or out != ["MATCH"]:
+                return "SDK build did not match, or MATCH is not the gate's only line: %r" % out[-3:]
+            out = []
+            if W.gate("main", "020d3160", src, out=out, env=dict(env, WGATE_FLAGS="-O2")) == 0:
+                return "the game build matched too, so the case proves nothing"
+            bad = os.path.join(d, "vsn_bad.cpp")
+            with open(bad, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(open(src, encoding="utf-8").read().replace("char buf[24];", "char buf[28];"))
+            out = []
+            W.gate("main", "020d3160", bad, out=out, env=env)
+            if not (out and out[0].startswith("RESIDUE ") and out[1].startswith("BUILDS sdk=")
+                    and not out[-1].startswith("BUILDS")):
+                return "a two-build failure must read RESIDUE, BUILDS, then the message: %r" % out[:3]
+            C = load("classify")
+            C.SP = d
+            builds = {}
+            verdict = C.classify("main", {"020d3160": open(src, encoding="utf-8").read()}, builds=builds)
+            if verdict.get("020d3160") not in ("TRUSTED", "RISKY") or builds.get("020d3160") != "sdk":
+                return "classify: %r %r" % (verdict, builds)
+        finally:
+            _kp.SP, W.gatelog.SP = saved
 
 
 @check("nearmiss gates a list of candidates in parallel and answers in their order",

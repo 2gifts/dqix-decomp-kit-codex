@@ -47,6 +47,9 @@ else
   SRCDIR=$(python "$KIT/srcdir.py" "$OV")
   TAGPRE="func_ov${OV}_"; LBL="ov${OV}"
 fi
+SDKDIR=$(python "$KIT/srcdir.py" --sdk "$OV")
+OWNDIRS=("$SRCDIR")
+[ -n "$SDKDIR" ] && OWNDIRS+=("$SDKDIR")
 Q="$SP/quarantine"; mkdir -p "$Q"
 
 # ===== SELF-HEALING PREFLIGHT — never abort/lose on stale/dupe/leftover files; quarantine them =====
@@ -64,7 +67,8 @@ git checkout HEAD -- include/ config/ src/ 2>/dev/null
 # 3. QUARANTINE (preserve, don't delete) untracked .cpp in OTHER module dirs — they pollute configure.
 #    ALL of src/, not src/Combat/ alone: the update-compiler base put ARM9 main's sources in
 #    src/World, src/Util, src/System and six more, and a half-written file there reds every module.
-git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' | grep -v "^$SRCDIR/" | while read -r f; do
+git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' \
+  | grep -v "^$SRCDIR/" | { if [ -n "$SDKDIR" ]; then grep -v "^$SDKDIR/"; else cat; fi; } | while read -r f; do
   mv "$f" "$Q/$(basename "$f")" 2>/dev/null; done
 # A candidate's address is the one on its `// USA:` tag, never just the first func_ symbol in the
 # file: every source declares its CALLEES with the same prefix, and those are usually already
@@ -83,7 +87,7 @@ git grep -hoE "// ${REGION_TAG}: ${TAGPRE}[0-9a-fA-F]{8}" HEAD -- src/ 2>/dev/nu
 # BULK-TRACKED-BEGIN: one checked index snapshot, never per-file Git.
 mkdir -p "$SP/handwork" || { echo "FATAL: cannot create preflight scratch"; exit 6; }
 _tracked_tmp="$SP/handwork/fw_tracked_$$.nul"
-if ! git ls-files --cached -z -- "$SRCDIR/" > "$_tracked_tmp"; then
+if ! git ls-files --cached -z -- "${OWNDIRS[@]/%//}" > "$_tracked_tmp"; then
   rm -f "$_tracked_tmp"
   echo "FATAL: cannot read tracked paths; refusing duplicate quarantine"
   exit 6
@@ -107,7 +111,9 @@ for _tracked_path in "${_fw_tracked_paths[@]}"; do
 done
 rm -f "$_tracked_tmp"
 # BULK-TRACKED-END
-for f in "$SRCDIR"/*.cpp; do
+_own_cpps=()
+for _d in "${OWNDIRS[@]}"; do _own_cpps+=("$_d"/*.cpp); done
+for f in "${_own_cpps[@]}"; do
   [ -e "$f" ] || continue
   [ -n "${_fw_tracked["$f"]+present}" ] && continue   # tracked: leave it
   a=$(addr_of "$f")

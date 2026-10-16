@@ -116,20 +116,26 @@ for p in glob.glob(f"{SP}/staging/*/*.cpp"):
         by[mod][m.group(1).lower()] = open(p, encoding="utf-8", errors="ignore").read()
         paths[(mod, m.group(1).lower())] = p
 moved = 0
+sdk = []
 for mod, cands in by.items():
+    builds = {}
     try:
-        verdicts = C.classify(mod, cands)
+        verdicts = C.classify(mod, cands, builds=builds)
     except Exception as e:
         print(f"pre-classify {mod}: {e}")
         continue
     for a, v in verdicts.items():
+        p = paths.get((mod, a))
         if v not in ("TRUSTED", "RISKY"):
-            p = paths.get((mod, a))
             if p and os.path.exists(p):
                 shutil.move(p, f"{bad}/{os.path.basename(p)}")
                 moved += 1
                 print(f"pre-classify held back {a}: {v}")
-print(f"pre-classify: {moved} candidate(s) held back")
+        elif builds.get(a) == "sdk" and p:
+            sdk.append(f"{mod} {os.path.basename(p)}")
+os.makedirs(f"{SP}/wlog", exist_ok=True)
+open(f"{SP}/wlog/stage_sdk.txt", "w", encoding="utf-8").write("".join(l + "\n" for l in sdk))
+print(f"pre-classify: {moved} candidate(s) held back, {len(sdk)} on the SDK build")
 PRE
 
 placed=0
@@ -148,7 +154,15 @@ for d in "$SP"/staging/*/; do
   tag=$(basename "$d"); mod=${tag#ov}
   ls "$d"*.cpp >/dev/null 2>&1 || continue
   if [ "$mod" = "main" ]; then dst="$REPO/src/Combat/Main"; else dst="$REPO/src/Combat/Overlay_$((10#$mod))"; fi
-  mkdir -p "$dst"; cp "$d"*.cpp "$dst"/ 2>/dev/null
+  sdkdst="$(python "$KIT/srcdir.py" --sdk "$mod")"
+  mkdir -p "$dst"
+  for f in "$d"*.cpp; do
+    if [ -n "$sdkdst" ] && grep -qxF "$mod $(basename "$f")" "$SP/wlog/stage_sdk.txt" 2>/dev/null; then
+      mkdir -p "$REPO/$sdkdst"; cp "$f" "$REPO/$sdkdst/"
+    else
+      cp "$f" "$dst"/
+    fi
+  done
   # Wire config only -- no build. That is what makes one global build possible.
   python "$KIT/integrate.py" "$mod" >> "$LOG" 2>&1 && placed=$((placed+1))
 done

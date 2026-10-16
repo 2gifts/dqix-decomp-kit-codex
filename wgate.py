@@ -143,17 +143,53 @@ def _scratch(stem, ext):
     return f"{stem}{os.getpid()}_{threading.get_ident()}{ext}"
 
 
-def gate(OV, ADDR, SRC, SEC=None, out=None, env=None):
-    out = [] if out is None else out
-    env = os.environ if env is None else env
+def _run(OV, ADDR, SRC, SEC, out, env, build=None, state=None):
     try:
-        _gate(OV, ADDR, SRC, SEC, out, env)
+        _gate(OV, ADDR, SRC, SEC, out, env, build, state)
     except _Exit as e:
         return e.code
     return 0
 
 
-def _gate(OV, ADDR, SRC, SEC, out, env):
+def _rank(attempt):
+    i, (_b, _code, state, _res) = attempt
+    cls, metric = state.get("cls", ""), state.get("metric", -1)
+    return (cls == "NO-COMPILE", cls in ("OVERGEN", "UNDERGEN"),
+            cls not in ("UNDEF-SYM", "WRONG-SYMBOL", "RELOC-WRONG"), metric if metric >= 0 else 1 << 30, i)
+
+
+def gate(OV, ADDR, SRC, SEC=None, out=None, env=None):
+    out = [] if out is None else out
+    env = os.environ if env is None else env
+    builds = buildcfg.builds_for(OV, ADDR, SRC)
+    if env.get("MWCC") or env.get("WGATE_FLAGS", "").split() or builds == ["game"]:
+        return _run(OV, ADDR, SRC, SEC, out, env)
+    attempts = []
+    for b in builds:
+        res, state = [], {}
+        code = _run(OV, ADDR, SRC, SEC, res, env, b, state)
+        attempts.append((b, code, state, res))
+        if code == 0 or not state.get("compiled"):
+            break
+    last = attempts[-1]
+    b, code, state, res = last if last[1] == 0 or not last[2].get("compiled") else \
+        min(enumerate(attempts), key=_rank)[1]
+    if state.get("compiled"):
+        try:
+            gatelog.record(OV, ADDR, env.get("WGATE_SESSION", "-"), state["cls"], state["metric"], SRC)
+            out.extend(gatelog.banner(gatelog.read(OV, ADDR), env.get("WGATE_SESSION", "-"), ADDR,
+                                      state["cls"], state["metric"]))
+        except (OSError, KeyError):
+            pass
+    at = next((i + 1 for i, line in enumerate(res) if line.startswith("RESIDUE ")), None)
+    if code != 0 and len(attempts) > 1 and at is not None:
+        res = res[:at] + ["BUILDS " + " ".join(f"{a[0]}={a[2].get('cls', '?')}:{a[2].get('metric', -1)}"
+                                              for a in attempts) + f" (residue above: {b})"] + res[at:]
+    out.extend(res)
+    return code
+
+
+def _gate(OV, ADDR, SRC, SEC, out, env, build=None, state=None):
     print = out.append
     _SRC = os.path.join(REPO, SRC)
     _extra = env.get("WGATE_FLAGS", "").split()
@@ -178,6 +214,9 @@ def _gate(OV, ADDR, SRC, SEC, out, env):
     _SESS = env.get("WGATE_SESSION", "-")
 
     def _gate_record(cls, metric=-1, detail="", hint=""):
+        if state is not None and state.get("compiled"):
+            state["cls"], state["metric"] = cls, metric
+            return
         try:
             gatelog.record(OV, ADDR, _SESS, cls, metric, SRC)
             for line in gatelog.banner(gatelog.read(OV, ADDR), _SESS, ADDR, cls, metric):
@@ -247,6 +286,8 @@ def _gate(OV, ADDR, SRC, SEC, out, env):
     # one worker's compile output could be read by another, giving false verdicts (mostly false BYTEDIFF, so
     # workers abandoned functions that had actually matched). Unique per PID = no cross-talk.
     _OBJ=_scratch(f"{SCR}/wg_", ".o")
+    if state is not None:
+        state["compiled"] = True
     try:
         # A `.s` GOES TO THE ASSEMBLER. Handing one to mwccarm reports a C syntax error on a line that is
         # perfectly good assembly, so the eighteen secure-area stubs and every SDK routine that has no C
@@ -254,7 +295,9 @@ def _gate(OV, ADDR, SRC, SEC, out, env):
         if SRC.lower().endswith(".s"):
             _cmd=buildcfg.tool_command(buildcfg.AS)+buildcfg.AS_FLAGS+["-o",_OBJ,SRC]
         else:
-            _cmd=buildcfg.tool_command(cc_for(SRC, env))+_flags+flags_for(SRC)+["-c",SRC,"-o",_OBJ]
+            _cc, _bf = (cc_for(SRC, env), _flags) if build is None else \
+                (buildcfg.build_cc(build), buildcfg.build_flags(build))
+            _cmd=buildcfg.tool_command(_cc)+_bf+flags_for(SRC)+["-c",SRC,"-o",_OBJ]
         r=subprocess.run(_cmd,capture_output=True,text=True,cwd=REPO)
         if r.returncode!=0:
             _err=(r.stdout+r.stderr).strip().replace("\t"," ")

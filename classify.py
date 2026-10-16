@@ -158,7 +158,7 @@ def _verdicts():
     return _CACHE['verdicts']
 
 
-def classify(MOD, cands, workdir=None, names=None):
+def classify(MOD, cands, workdir=None, names=None, builds=None):
     """cands: {addr: source_text}. Returns {addr: 'TRUSTED'|'RISKY'|<BAD verdict>}.
     MOD: overlay number ("000".."035") or "main".
 
@@ -174,7 +174,11 @@ def classify(MOD, cands, workdir=None, names=None):
     keys = {}
     src = f"{work}/c.cpp"
     obj = f"{work}/c.o"
-    for addr, txt in cands.items():
+    for addr, txt, _b in [(a, t, b) for a, t in cands.items() for b in buildcfg.builds_for(MOD, a)]:
+        if out.get(addr) in ('TRUSTED', 'RISKY'):
+            continue
+        if builds is not None:
+            builds[addr] = _b
         _si = sizes.get(addr)
         if not _si:
             out[addr] = 'NOSLOT'; continue
@@ -187,15 +191,16 @@ def classify(MOD, cands, workdir=None, names=None):
             # Not in any CODE section (rodata/data/bss) -> not an emittable function. Parked, never struck.
             out[addr] = 'SECTION'; continue
         _want = _want or '.text'
-        _cc = cc_for((names or {}).get(addr) or src)
+        _cc = cc_for((names or {}).get(addr) or src) if _b == "game" else buildcfg.build_cc(_b)
+        _bflags = buildcfg.build_flags(_b) + flags_for((names or {}).get(addr) or src)
         if _headers():
-            _flags = " ".join(FLAGS + flags_for((names or {}).get(addr) or src))
+            _flags = " ".join(_bflags)
             keys[addr] = "\t".join((MOD, addr, str(slot), _want, _cc, _headers(),
                                     hashlib.sha1((_flags + "\0" + txt).encode()).hexdigest()))
             if keys[addr] in _verdicts():
                 out[addr] = _verdicts()[keys[addr]]; continue
         open(src, 'w', encoding='utf-8').write(txt)
-        r = subprocess.run(buildcfg.tool_command(_cc) + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
+        r = subprocess.run(buildcfg.tool_command(_cc) + _bflags + ["-c", src, "-o", obj], capture_output=True, text=True,
                            cwd=REPO)
         if r.returncode != 0:
             out[addr] = 'COMPILE'; continue

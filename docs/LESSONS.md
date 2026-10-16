@@ -19,10 +19,15 @@ re-measure one of those before citing it.
   original re-read. Use `WGATE_FLAGS`, `MWCC` or `WGATE_ALLOW_PRAGMA` to locate the difference, then
   fix the C and match at the default. `tools/cc_overrides.txt` and `tools/cc_flag_overrides.txt`
   stay empty; `wgate.py` refuses codegen pragmas and `selfcheck.py` ratchets the committed count.
-- The MSL C runtime is the measured exception: its library code matches at `-O4,p`. A library
-  function that matches only under another flag set is pinned for a maintainer decision and
-  skipped; it is never configured by a contributor. In game code the same symptom means the source
-  is wrong.
+- NitroSDK and NitroSystem code is the second build: mwccarm 2.0/sp1p2 at `-O4,p`, for every file
+  under `src/NitroSDK/`. `sdk_ranges.txt` gives the rough range per region (USA main
+  `0x020aeec8..0x020d6d18`); `wgate` gates an address there on both builds and prints `BUILD sdk`
+  or `BUILD game` with the MATCH, and the wave files an SDK-build match under `src/NitroSDK/Main/`.
+  OS_VSNPrintf (`020d3160`) overgenerates by 128 bytes on sp1p5 and later, so sp1p6 is not it.
+- MSL (`-O4,p` on sp1p5 or later) and the overlay 31 network libraries (sp1p6 or later) are further
+  library builds that `configure.py` does not define yet. A library function outside the SDK range
+  that matches only under another flag set is pinned for a maintainer decision and skipped; it is
+  never configured by a contributor. In game code the same symptom means the source is wrong.
 - Command-line `-opt noprop`, `-opt nocse` and similar switches are accepted and ignored by mwccarm
   2.0. Only the `#pragma` form changes codegen, so a flag test can falsely show "no difference".
 - Copy propagation is on in the ROM. When a function looks like it needs `opt_propagation off`,

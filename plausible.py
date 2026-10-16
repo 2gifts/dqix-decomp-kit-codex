@@ -581,6 +581,8 @@ def _line_rules(src, fn, out):
                         continue
                 if kind == "COMPARE-MINUS-ONE" and re.search(r"->\s*-", m.group(0)):
                     continue
+                if kind == "TERNARY-SAME-ARMS" and not rx.match(src.text, src.starts[ln - 1] + m.start()):
+                    continue
                 _hit(out, ln, kind, m.group(0).strip()[:60])
 
 

@@ -95,8 +95,12 @@ def _diff(OV, ADDR, SRC, SEC, out, diagnose, CTX, MAXRUNS):
         SEC = '.' + _hit if _hit else ".text"
 
     _OBJ = f"{SCR}/wdiff_{os.getpid()}_{threading.get_ident()}.o"
+    _cc, _flags = CC, FLAGS
+    if not (os.environ.get("MWCC") or _extra):
+        _b = os.environ.get("WDIFF_BUILD") or buildcfg.builds_for(OV, ADDR, SRC)[0]
+        _cc, _flags = buildcfg.build_cc(_b), buildcfg.build_flags(_b)
     try:
-        r = subprocess.run(buildcfg.tool_command(CC) + FLAGS + ["-c", SRC, "-o", _OBJ],
+        r = subprocess.run(buildcfg.tool_command(_cc) + _flags + ["-c", SRC, "-o", _OBJ],
                            capture_output=True, text=True, cwd=REPO)
         if r.returncode != 0:
             raise Fail("COMPILE-FAIL: " + (r.stdout + r.stderr)[-600:])
