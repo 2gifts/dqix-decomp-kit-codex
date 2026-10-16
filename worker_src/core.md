@@ -394,6 +394,13 @@ instead of a second extern at +4), and a narrow local (`char`/`short`/`bool`) sp
 them to get or lose that edge (`0218d2f4`, `0218c04c`). `schedforce` names it as an `mwar`/`mraw` edge;
 `pad/renum/aliasdump.py` shows the alias behind each query.
 
+**Several globals read off ONE base literal, with different alias edges per field = separate
+objects DEFINED in the file** (`0215ef14`). mwcc addresses objects its own file defines through the
+section base, so `ldr rX,=A; ldrsb [rX,#5]; ldrsb [rX,#9]` comes from `signed char
+data_ov004_021707e8[6]; Tail data_ov004_021707f0;` defined (not `extern`) in the source. One struct
+over both stays SCHED 27 (wrong alias edges); two `extern`s give one literal per object (OVERGEN).
+Size each defined object up to the next symbol, or dsd refuses the file's `.bss` range.
+
 How the numbers are assigned (decompiled): IRO temps `@N` first (newest first, the low band), then
 declared locals in reverse declaration order, then lowering temps (operands before the op, a for
 condition after the body), then pcode-expansion temps (offset splits, constants). An IRO temp appears
