@@ -123,16 +123,16 @@ def sdk_ranges(mod):
     try:
         for line in open(_SDK_RANGES, encoding="utf-8"):
             p = line.split()
-            if len(p) == 4 and p[0] == REGION and p[1] == mod:
-                out.append((int(p[2], 16), int(p[3], 16)))
+            if len(p) == 5 and p[0] == REGION and p[1] == mod:
+                out.append((int(p[2], 16), int(p[3], 16), p[4]))
     except OSError:
         pass
     return out
 
 
-def in_sdk_range(mod, addr):
+def sdk_zone(mod, addr):
     a = int(addr, 16) if isinstance(addr, str) else addr
-    return any(lo <= a < hi for lo, hi in sdk_ranges(mod))
+    return next((kind for lo, hi, kind in sdk_ranges(mod) if lo <= a < hi), None)
 
 
 def sdk_dir(mod):
@@ -164,7 +164,7 @@ def path_build(path):
 def builds_for(mod, addr, path=None):
     if path is not None and is_sdk_path(path):
         return ["sdk"]
-    return ["sdk", "game"] if in_sdk_range(mod, addr) else ["game"]
+    return {"sdk": ["sdk"], "either": ["sdk", "game"]}.get(sdk_zone(mod, addr), ["game"])
 
 
 _POSTCOMPILE = []

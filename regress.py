@@ -6198,8 +6198,9 @@ def _sdk_build_routing():
         return "the decomp's configure.py defines no SDK build"
     if B.REGION != "usa":
         return None
-    cases = [(("main", "020d3160"), ["sdk", "game"]), (("main", "02000c9c"), ["game"]),
-             (("main", "020d3160", "D:/r/src/Combat/Main/a.cpp"), ["sdk", "game"]),
+    cases = [(("main", "020d3160"), ["sdk"]), (("main", "02000c9c"), ["game"]),
+             (("main", "020aeec8"), ["sdk", "game"]), (("main", "020d6bac"), ["sdk", "game"]),
+             (("main", "020d6c0c"), ["game"]), (("main", "020d3160", "D:/r/src/Combat/Main/a.cpp"), ["sdk"]),
              (("main", "02000c9c", "D:/r/src/NitroSDK/Main/a.cpp"), ["sdk"]),
              (("main", "02000c9c", "src\\NitroSDK\\a.cpp"), ["sdk"]), (("031", "022192c0"), ["game"])]
     for args, want in cases:
@@ -6255,11 +6256,11 @@ def _sdk_build_matches():
             out = []
             if W.gate("main", "020d3160", src, out=out, env=dict(env, WGATE_FLAGS="-O2")) == 0:
                 return "the game build matched too, so the case proves nothing"
-            bad = os.path.join(d, "vsn_bad.cpp")
+            bad = os.path.join(d, "edge_bad.cpp")
             with open(bad, "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(open(src, encoding="utf-8").read().replace("char buf[24];", "char buf[28];"))
+                fh.write('#include <globaldefs.h>\n\nextern "C" ARM void func_020aeec8() {}\n')
             out = []
-            W.gate("main", "020d3160", bad, out=out, env=env)
+            W.gate("main", "020aeec8", bad, out=out, env=env)
             if not (out and out[0].startswith("RESIDUE ") and out[1].startswith("BUILDS sdk=")
                     and not out[-1].startswith("BUILDS")):
                 return "a two-build failure must read RESIDUE, BUILDS, then the message: %r" % out[:3]
