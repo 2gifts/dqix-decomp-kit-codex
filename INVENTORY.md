@@ -504,6 +504,8 @@ uncountable and cannot trip a false stall.
 `pad/objmap.py <module> <0xsymbol_addr> [more_modules...]` reconstruct a global object's field layout
 from every load and store off its address in the image -- the evidence for a struct's offsets and
 widths, instead of a guessed `char pad[N]` ·
+`ghidra/DecompAt.py <out-dir> <hex-addr>...` Ghidra headless post-script: decompile the function of
+the compiler containing each address into `<out-dir>`; the commands are in `docs/COMPILER.md` ·
 `bandcost.py` cost per size band from the worker logs, in `$/match` and `$/matched-byte` -- judge a
 band on the second ·
 `naming/` the naming pass (name every identifier in matched functions); `naming/HANDOFF.md` first

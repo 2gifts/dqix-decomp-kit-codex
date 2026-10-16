@@ -9,6 +9,7 @@
 !/worker_src/
 !/pad/
 !/frida/
+!/ghidra/
 !/inv/
 !/merge_port/
 !/naming/

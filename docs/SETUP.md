@@ -165,7 +165,8 @@ its own prefix on first use (`wibo` is statically linked and Frida cannot inject
 `colorforce.py` and `schedforce.py` first check that the hooked replay reproduces the native compile.
 The hook addresses belong to that exact compiler binary; another mwccarm build needs new addresses.
 `colorforce.py` and `renum.py` read the ROM through `forcereal.rom` and accept overlays only
-(`ovNNN`); `schedforce.py` also accepts `main`.
+(`ovNNN`); `schedforce.py` also accepts `main`. [COMPILER.md](COMPILER.md) maps the backend and
+covers decompiling it with Ghidra.
 
 ## Keeping up to date
 

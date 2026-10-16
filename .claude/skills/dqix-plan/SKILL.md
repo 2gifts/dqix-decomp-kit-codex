@@ -93,7 +93,7 @@ work the pragma-free source. Route a worker miss by its residue:
   and require a MATCH or a general rule. Group plateaus by blocker class, one agent per class.
   Colour/scheduler forcing for register or order residues; for UNDERGEN/OVERGEN the agent reads the
   backend (pyghidra MCP or Ghidra headless on `$REPO/tools/mwccarm/2.0/sp2p2/mwccarm.exe`) to learn
-  what spills or skips code.
+  what spills or skips code. Procedure, backend address map and worked example: `docs/COMPILER.md`.
 
 ## Read nothing except what a step tells you to
 
