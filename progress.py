@@ -9,6 +9,7 @@ Costs no model tokens. `pull_all.sh` refreshes it every loop, and it is safe to 
 
     python progress.py          # rewrite STATE.md
     python progress.py --print  # and echo it
+    python progress.py --fresh  # run selfcheck and regress instead of reading their last results
 
 Hand-written knowledge -- cracked idioms, open residues, what has been ruled out -- stays in
 OPEN_WORK.md, which this file links to rather than duplicates.
@@ -23,6 +24,8 @@ import os
 import re
 import subprocess
 import sys
+
+import spans
 
 SP = _kp.SP
 KIT = _kp.KIT
@@ -62,8 +65,8 @@ def coverage():
             dl = open(cfg + "/delinks.txt", encoding="utf-8", errors="ignore").read()
         except OSError:
             continue
-        ranges = [(int(a, 16), int(b, 16)) for a, b in re.findall(
-            r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$", dl)]
+        ranges = spans.Spans((int(a, 16), int(b, 16)) for a, b in re.findall(
+            r"(?m)^\s*\.(?:text|init) start:0x([0-9a-fA-F]+) end:0x([0-9a-fA-F]+)\s*$", dl))
         for m in re.finditer(r"(?m)^(\S+)\s+kind:function\((?:arm|thumb),size=0x([0-9a-fA-F]+)\)"
                              r"\s+addr:0x([0-9a-fA-F]+)", sym):
             size, addr = int(m.group(2), 16), int(m.group(3), 16)
@@ -71,7 +74,7 @@ def coverage():
                 continue
             tot_b += size
             tot_n += 1
-            if any(s <= addr < e for s, e in ranges):
+            if addr in ranges:
                 done_b += size
                 done_n += 1
                 continue
@@ -106,11 +109,14 @@ def fleet():
     `pull_all.sh` finds nothing and this reported `drivers 0 workers 0 -- the run died` while a
     worker was mid-function. A false death notice is worse than no notice: it invites a relaunch on
     top of a live fleet, which is the one state this project must never reach. Ask Windows for the
-    command lines instead.
+    command lines instead. Off Windows there is no powershell, and `ps` itself carries them.
     """
-    out = sh("powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | ForEach-Object "
-             "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }")
+    if os.name == "nt":
+        out = sh("powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process | ForEach-Object "
+                 "{ \"$($_.ProcessId)|$($_.ParentProcessId)|$($_.CommandLine)\" }")
+    else:
+        out = "\n".join("|".join(ln.split(None, 2)) for ln in sh("ps", "-wweo", "pid=,ppid=,args=").splitlines())
     if not out:
         return -1, -1                            # unknown, not zero -- never claim a false death
 
@@ -134,6 +140,19 @@ def fleet():
     return roots("pull_all.sh"), roots("pull_worker.sh")
 
 
+def last_result(name):
+    if "--fresh" in sys.argv:
+        out = sh(sys.executable, KIT + "/" + name + ".py", cwd=SP).splitlines()
+        return out[-1] if out else "did not run"
+    path = _kp.result_path(name)
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+        when = datetime.datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        return "did not run"
+    return "%s  (as of %s)" % (lines[-1], when) if lines else "did not run"
+
+
 def main():
     tot_b, tot_n, done_b, done_n, left = coverage()
     rem_b = sum(v[1] for v in left.values()) or 1
@@ -142,8 +161,8 @@ def main():
     flags = [f for f in ("FLEET_STOPPED", "STOP_PULL", "USAGE_LIMIT_STOP", "wave.lock")
              if os.path.exists(os.path.join(SP, f))]
     staged = sorted(glob.glob(SP + "/staging/*/*.cpp"))
-    self_out = sh(sys.executable, KIT + "/selfcheck.py", cwd=SP).splitlines()
-    regress_marker = sh(sys.executable, KIT + "/regress.py", cwd=SP).splitlines()
+    self_out = last_result("selfcheck")
+    regress_marker = last_result("regress")
 
     L = []
     a = L.append
@@ -200,8 +219,8 @@ def main():
     a("")
     a("## Health")
     a("")
-    a("    selfcheck: %s" % (self_out[-1] if self_out else "did not run"))
-    a("    regress:   %s" % (regress_marker[-1] if regress_marker else "did not run"))
+    a("    selfcheck: %s" % self_out)
+    a("    regress:   %s" % regress_marker)
     a("")
     a("## Last finished functions")
     a("")

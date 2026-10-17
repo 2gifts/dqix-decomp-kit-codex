@@ -184,8 +184,8 @@ Routing:
 
 | command | shows |
 |---|---|
-| `bash health.sh` | loop; prints `ALERT <kind>: ...` lines (driver down, burn without output, hung worker, no commit, idle dispatcher, starvation, red gate, selfcheck failure, crack candidates); when quiet, an `OK` line every 30 minutes and a periodic band summary |
-| `bash verdictwatch.sh [seconds]` | one line per worker MATCH/miss across every module |
+| `bash health.sh [--once]` | loop; prints `ALERT <kind>: ...` lines (driver down, burn without output, hung worker, no commit, idle dispatcher, starvation, red gate, selfcheck failure, crack candidates); when quiet, an `OK` line every 30 minutes and a periodic band summary; `--once` runs one cycle |
+| `bash verdictwatch.sh [--once] [seconds]` | one line per worker MATCH/miss across every module; `--once` runs one pass |
 | `bash leverwatch.sh --once` | exits on the first lever needing promotion |
 | `bash psq.sh [--count\|--list\|--kind work\|job]` | live DQIX processes, excluding the querying process and its ancestors |
 | `python progress.py --print` | rewrites and prints `STATE.md`: fleet, coverage in functions and bytes, remaining work per band, HEAD, staged-not-committed, selfcheck, recent verdicts |
@@ -209,7 +209,7 @@ Keep an alert-only watch on a running fleet. To wait for a job, wait for the pro
 | `bash killfleet.sh [--all\|--orphans\|--dry]` | escalation: workers only, or supervisor, drivers and workers |
 | `bash stopat.sh '<date>'` | sleeps until the deadline, then `fullstop.sh --hard` |
 
-`fullstop.sh` never touches an interactive `claude.exe` (workers carry ` -p `). It does not stop
+`fullstop.sh` never touches an interactive `claude` or `claude.exe` (workers carry ` -p `). It does not stop
 monitors or `tail` watchers started by your own session; stop those separately. To resume, remove
 `FLEET_STOPPED` and `STOP_PULL` and start `supervise.sh` again.
 

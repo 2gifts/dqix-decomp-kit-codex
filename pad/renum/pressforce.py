@@ -75,9 +75,8 @@ Interceptor.replace(ptr('0x4feb70'), new NativeCallback(function () {
 def run(src, cfg, obj):
     events, done = [], threading.Event()
     dev = frida.get_local_device()
-    pid = dev.spawn(sf.compile_argv(src, obj), cwd=sf.REPO)
-    ses = dev.attach(pid)
-    scr = ses.create_script(JS % json.dumps(cfg))
+    pid, ses = sf.buildcfg.frida_spawn(dev, sf.compile_argv(src, obj), sf.REPO)
+    scr = ses.create_script(sf.buildcfg.frida_script(JS % json.dumps(cfg)))
     scr.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     scr.load()
     ses.on("detached", lambda *a: done.set())

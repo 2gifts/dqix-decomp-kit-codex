@@ -29,6 +29,10 @@ DRY=0
 HARD=0
 [ "$MODE" = "--hard" ] && HARD=1
 
+WORKER_RE='claude\.exe.*\s-p\s.*DQIX'
+POSIX=0
+case "$OSTYPE" in msys*|cygwin*) ;;
+  *) POSIX=1; WORKER_RE='^([^ ]*/)?claude[[:space:]](.*[[:space:]])?-p[[:space:]].*DQIX' ;; esac
 # Anything whose purpose is to run, or to launch, a paid session.
 SPENDERS='supervise\.sh|run_all\.sh|run_module\.sh|run_overlay\.sh|run_main\.sh|pull_all\.sh|pull_fleet\.sh|pull_worker\.sh|restart_pull\.sh|resume_sweep\.sh|resume_one\.sh|smoke\.sh|watchdog\.sh|limit_guard\.sh'
 # Local compute only: no API calls, no worker sessions. DERIVED, NOT ENUMERATED -- anything running
@@ -41,8 +45,12 @@ SPENDERS='supervise\.sh|run_all\.sh|run_module\.sh|run_overlay\.sh|run_main\.sh|
 # `python -u repairsweep.py` drivers survived a --hard stop on 2026-09-05, immediately respawned
 # their colorsweep children, and the kill line reported success. So match the script BASENAMES too,
 # read off disk for the same reason the path match exists -- a list read at run time cannot go stale.
-_cpunames=$(ls "$KIT"/*.py "$KIT"/*.sh 2>/dev/null | xargs -n1 basename 2>/dev/null \
-            | sed 's/\./\\./g' | paste -sd'|' -)
+_cpunames=""
+for _f in "$KIT"/*.py "$KIT"/*.sh; do
+  [ -e "$_f" ] || continue
+  _b=${_f##*/}
+  _cpunames="${_cpunames:+$_cpunames|}${_b//./\\.}"
+done
 CPUJOBS="dqix.sp|handwork.evo|permuter\.py${_cpunames:+|$_cpunames}"
 # Monitors and their children. These spend nothing, but a stop that leaves them running is not a
 # stop the user can see: on 2026-08-25 this script printed "none running" for both tiers while two
@@ -127,6 +135,32 @@ WATCH_FILTER="\$all = Get-CimInstance Win32_Process
       }
       \$ok })"
 
+SPEND1="(claude\.exe.*\s-p\s.*DQIX)|$SPENDERS"
+
+snapshot() {
+  powershell.exe -NoProfile -Command "$WATCH_FILTER
+    function row(\$tag, \$x) {
+      \$m = [int]((Get-Date) - \$x.CreationDate).TotalMinutes
+      \$c = \$x.CommandLine -replace '[\r\n]+', ' '; if (\$c.Length -gt 110) { \$c = \$c.Substring(0,110) }
+      '{0}@@@{1}@@@{2}@@@{3}' -f \$tag, \$x.ProcessId, \$m, \$c }
+    foreach (\$x in \$all) {
+      if (\$x.CommandLine -match '$SPEND1' -and \$x.CommandLine -notmatch '$EXCL') { row T1 \$x }
+      if (\$x.CommandLine -match '$CPUJOBS' -and \$x.CommandLine -notmatch '$NOTCPU' -and
+          \$x.CommandLine -notmatch '$EXCL') { row T2 \$x } }
+    foreach (\$x in \$w) { row T3 \$x }
+    'N1@@@' + @(\$all | Where-Object { \$_.CommandLine -notmatch '$EXCL' -and (
+      (\$_.Name -eq 'claude.exe' -and \$_.CommandLine -match '\s-p\s.*DQIX') -or
+      (\$_.CommandLine -match '$SPENDERS')) }).Count
+    'N3@@@' + \$w.Count" 2>/dev/null | tr -d '\r' | sed '/^$/d'
+}
+
+pick() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in "$1@@@"*) printf '%s\n' "${line#"$1@@@"}" ;; esac
+  done <<< "$SNAP"
+}
+
 kill_watchers() {   # monitors, and the tail/grep children a Monitor leaves behind
   powershell.exe -NoProfile -Command "$WATCH_FILTER
     foreach (\$x in \$w) { try { Stop-Process -Id \$x.ProcessId -Force -ErrorAction Stop } catch {} }
@@ -138,13 +172,52 @@ count_watchers() {
     \$w.Count" 2>/dev/null | tr -d '\r\n '
 }
 
-list_watchers() {
-  powershell.exe -NoProfile -Command "$WATCH_FILTER
-    \$w | ForEach-Object {
-      \$m = [int]((Get-Date) - \$_.CreationDate).TotalMinutes
-      \$c = \$_.CommandLine; if (\$c.Length -gt 110) { \$c = \$c.Substring(0,110) }
-      '{0}@@@{1}@@@{2}' -f \$_.ProcessId, \$m, \$c }" 2>/dev/null | tr -d '\r' | sed '/^$/d'
-}
+if [ "$POSIX" -eq 1 ]; then
+  _psx() {
+    local me=${PSELF:-$BASHPID} t=$PSNAP
+    [ -n "$PSELF" ] || t=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
+    printf '%s\n' "$t" | IN="$1" OUT="$2" HOW="$3" SELF="$me" WATCHERS="$WATCHERS" KIDS="$WATCHKIDS" awk '
+      { pp[$1] = $2; age[$1] = $3; c = $0; sub(/^ *[0-9]+ +[0-9]+ +[0-9]+ ?/, "", c); cmd[$1] = c; id[++k] = $1 }
+      END {
+        re = tolower(ENVIRON["IN"]); out = tolower(ENVIRON["OUT"]); kids = tolower(ENVIRON["KIDS"])
+        s = ENVIRON["SELF"]; for (i = 0; i < 12 && (s in pp); i++) { self[s] = 1; s = pp[s] }
+        for (j = 1; j <= k; j++) {
+          x = id[j]; l = tolower(cmd[x]); ok = 0
+          if (ENVIRON["HOW"] != "watch") ok = l ~ re && l !~ out
+          else if (!(x in self)) {
+            if (l ~ tolower(ENVIRON["WATCHERS"]) && l !~ out) ok = 1
+            n = l; sub(/ .*/, "", n); sub(/.*\//, "", n)
+            if (n ~ /^(tail|grep|ugrep|bash|sh)$/) {
+              p = x; st = 0; so = 0
+              for (i = 0; i < 8; i++) {
+                lp = tolower(cmd[p]); if (lp ~ kids) st = 1
+                if (lp ~ /wlog|dqix-sp|dqix-decomp/) so = 1
+                if (st && so) { ok = 1; break }
+                if (!(pp[p] in pp)) { if (st) ok = 1; break }
+                p = pp[p] } } }
+          if (ok) printf "%s@@@%d@@@%s\n", x, age[x] / 60 + 0.5, substr(cmd[x], 1, 110) } }'
+  }
+  _pkill() {
+    local ids; ids=$(printf '%s\n' "$1" | awk -F'@@@' 'NF > 1 { print $1 }')
+    [ -n "$ids" ] && kill -9 $ids 2>/dev/null
+    printf '%s\n' "$ids" | grep -c .
+  }
+  ps_list() { _psx "$1" "${2:-__never__}|$EXCL"; }
+  kill_spenders() { _pkill "$(ps_list "($WORKER_RE)|$SPENDERS")"; }
+  count_workers() { ps_list "($WORKER_RE)|$SPENDERS" | grep -c .; }
+  list_watchers() { _psx "" "$EXCLW" watch; }
+  kill_watchers() { _pkill "$(list_watchers)"; }
+  count_watchers() { list_watchers | grep -c .; }
+  snapshot() {
+    local PSELF=$BASHPID PSNAP t1 t2 t3
+    PSNAP=$(ps -wweo pid=,ppid=,etimes=,args= 2>/dev/null)
+    t1=$(ps_list "($WORKER_RE)|$SPENDERS"); t2=$(ps_list "$CPUJOBS" "$NOTCPU"); t3=$(list_watchers)
+    [ -n "$t1" ] && printf '%s\n' "$t1" | sed 's/^/T1@@@/'
+    [ -n "$t2" ] && printf '%s\n' "$t2" | sed 's/^/T2@@@/'
+    [ -n "$t3" ] && printf '%s\n' "$t3" | sed 's/^/T3@@@/'
+    printf 'N1@@@%s\nN3@@@%s\n' "$(printf '%s' "$t1" | grep -c .)" "$(printf '%s' "$t3" | grep -c .)"
+  }
+fi
 
 # TaskStop ends a Monitor task and leaves its bash/tail/grep running, so restarting a watch a few
 # times leaks a loop each time -- five live health.sh loops accumulated in one session, each waking
@@ -172,7 +245,8 @@ fi
 
 echo
 echo "TIER 1 -- token spenders (immediate)"
-_found=$(ps_list "(claude\.exe.*\s-p\s.*DQIX)|$SPENDERS")
+SNAP=$(snapshot)
+_found=$(pick T1)
 if [ -z "$_found" ]; then
   echo "  none running"
 else
@@ -187,15 +261,16 @@ else
       echo "  $left reappeared -- killing again"
       kill_spenders > /dev/null
     done
+    SNAP=$(snapshot)
   fi
 fi
-left=$(count_workers)
+left=$(pick N1)
 echo "  spenders remaining: ${left:-0}"
 [ "${left:-0}" -gt 0 ] && echo "  !! run: bash \"$SP/killfleet.sh\" --all"
 
 echo
 echo "TIER 2 -- CPU-only jobs"
-_cpu=$(ps_list "$CPUJOBS" "$NOTCPU")
+_cpu=$(pick T2)
 if [ -z "$_cpu" ]; then
   echo "  none running"
 elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
@@ -207,6 +282,7 @@ elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
       foreach (\$x in \$p) { try { Stop-Process -Id \$x.ProcessId -Force -ErrorAction Stop } catch {} }
       \$p.Count" 2>/dev/null | tr -d '\r\n '
   }
+  if [ "$POSIX" -eq 1 ]; then kill_cpu() { _pkill "$(ps_list "$CPUJOBS" "$NOTCPU")"; }; fi
   echo "  killed: $(kill_cpu)"
   for _i in 1 2; do
     sleep 2
@@ -214,6 +290,7 @@ elif [ "$HARD" -eq 1 ] && [ "$DRY" -eq 0 ]; then
     [ -z "$_again" ] && break
     echo "  $(echo "$_again" | wc -l) reappeared -- killing again: $(kill_cpu)"
   done
+  SNAP=$(snapshot)
   echo "  CHECK THE REPO: a finish_wave killed mid-flight empties src/."
   echo "    git -C $REPO status --short | head"
   echo "    git -C $REPO checkout -- src/      # if it shows mass deletions"
@@ -229,11 +306,11 @@ fi
 
 echo
 echo "TIER 3 -- monitors and watcher children"
-_w=$(count_watchers)
+_w=$(pick N3)
 if [ "${_w:-0}" -eq 0 ]; then
   echo "  none running"
 elif [ "$DRY" -eq 1 ]; then
-  list_watchers | awk -F'@@@' '{printf "  pid %-7s %3s min  %s\n", $1, $2, $3}'
+  pick T3 | awk -F'@@@' '{printf "  pid %-7s %3s min  %s\n", $1, $2, $3}'
   echo "  ${_w} watcher process(es) would be killed"
 else
   echo "  killed: $(kill_watchers)"
@@ -255,6 +332,10 @@ elif [ -n "$_cpu" ]; then
 fi
 
 echo
-_wleft=$(count_watchers)
+if [ "$DRY" -eq 0 ] && [ "${_w:-0}" -gt 0 ]; then
+  _wleft=$(count_watchers)
+else
+  _wleft=$(pick N3)
+fi
 echo "STOPPED. token spend: $([ "${left:-0}" -eq 0 ] && echo "halted" || echo "STILL RUNNING (${left})")\
 $([ "${_wleft:-0}" -eq 0 ] && echo "" || echo ", ${_wleft} watcher(s) STILL RUNNING")"

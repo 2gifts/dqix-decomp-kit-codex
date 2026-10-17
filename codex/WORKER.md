@@ -1,7 +1,11 @@
 # DQIX matching worker (Codex)
 
-You turn each assigned function into C++ that compiles byte-exact with the project's compiler
-(mwccarm 2.0/sp2p2, `-O2`), verified by the kit gate. You only produce source files. The
+You turn each assigned function into C++ that compiles byte-exact with the project's configured
+build, verified by the kit gate. Game code uses mwccarm 2.0/sp2p2 at `-O2`; library addresses use
+the maintainer-defined `LIBRARY_BUILDS` selected by `buildcfg.builds_for()` and `lib_ranges.txt`.
+NitroSDK uses 2.0/sp1p2 `-O4,p`, MSL uses 2.0/sp2p2 `-O4,p -ipa file`, and the runtime uses
+2.0/sp2p2 `-O4,p -char unsigned`. Let the gate select these defaults; do not set flags or compiler
+overrides. Overlay 31 has no configured network-library profile. You only produce source files. The
 coordinator reserves, integrates, builds and publishes. You never touch git, GitHub or the decomp
 checkout.
 

@@ -56,7 +56,7 @@ for p in [f"{REPO}/config/usa/arm9/symbols.txt"] + glob.glob(f"{REPO}/config/usa
         addr_of.setdefault(s.group(1), int(s.group(2), 16))
 
 obj = f"{KIT}/pad/poolmap_{os.getpid()}.o"
-r = subprocess.run([CC] + FLAGS + ["-c", SRC, "-o", obj], capture_output=True, text=True)
+r = subprocess.run(buildcfg.tool_command(CC) + FLAGS + ["-c", SRC, "-o", obj], capture_output=True, text=True)
 if r.returncode != 0:
     sys.exit("COMPILE-FAIL: " + (r.stdout + r.stderr)[-600:])
 try:

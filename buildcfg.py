@@ -17,15 +17,33 @@ _TOOLS = os.path.join(REPO, "tools")
 REGION = os.environ.get("DQIX_REGION", "usa")
 
 
+def _system():
+    return "Windows" if os.name == "nt" else os.uname().sysname
+
+
+def _machine():
+    if os.name == "nt":
+        return os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get("PROCESSOR_ARCHITECTURE", "")
+    return os.uname().machine
+
+
 def _load():
+    import platform
     cwd, argv = os.getcwd(), sys.argv[:]
+    probes = platform.system, platform.machine
     os.chdir(REPO)
     sys.argv = ["configure.py", REGION]
+    if os.environ.get("DQIX_WINE"):
+        sys.argv += ["-w", os.environ["DQIX_WINE"]]
+    if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
+        sys.argv += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
     sys.path.insert(0, _TOOLS)
+    platform.system, platform.machine = _system, _machine
     try:
         import configure
         return configure
     finally:
+        platform.system, platform.machine = probes
         os.chdir(cwd)
         sys.argv = argv
         if _TOOLS in sys.path:
@@ -53,40 +71,15 @@ def _mwcc_defines(configure):
 
 _cfg = _load()
 
-EXE = ".exe" if os.name == "nt" else ""
-
-
-def native(tool):
-    """An argv[0] that runs a Windows toolchain binary here. On Linux the build runs them through
-    wibo, so callers get a wrapper script that does the same."""
-    if os.name == "nt":
-        return tool
-    import hashlib
-    import shutil
-    wibo, d = None, os.path.dirname(tool)
-    while not wibo and os.path.dirname(d) != d:
-        wibo = os.path.join(d, "wibo") if os.path.isfile(os.path.join(d, "wibo")) else None
-        d = os.path.dirname(d)
-    wibo = wibo or shutil.which("wibo")
-    if not wibo:
-        sys.exit(f"wibo not found next to {tool} or on PATH; run ninja in the decomp checkout first")
-    wrap = os.path.join(_kp.SP, "bin", hashlib.sha1(tool.encode()).hexdigest()[:12] + "-" + os.path.basename(tool))
-    body = f'#!/bin/sh\nexec "{wibo}" "{tool}" "$@"\n'
-    if not os.path.exists(wrap) or open(wrap).read() != body:
-        os.makedirs(os.path.dirname(wrap), exist_ok=True)
-        with open(wrap, "w") as fh:
-            fh.write(body)
-        os.chmod(wrap, 0o755)
-    return wrap
-
-
 MWCC_VERSION = _cfg.MWCC_VERSION
 DECOMP_ME_COMPILER = _cfg.DECOMP_ME_COMPILER
-CC = native(f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwccarm.exe")
-AS = native(f"{REPO}/tools/mwccarm/{MWCC_VERSION}/mwasmarm.exe")
-AS_FLAGS = _cfg.AS_FLAGS.split()
+EXE = getattr(_cfg, "EXE", ".exe" if os.name == "nt" else "")
+COMPILER_ROOT = os.path.normpath(os.path.join(REPO, str(_cfg.mwcc_root)))
+CC = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwccarm.exe"
+AS = f"{COMPILER_ROOT}/{MWCC_VERSION}/mwasmarm.exe"
+AS_FLAGS = getattr(_cfg, "AS_FLAGS", "-proc arm5TE").split()
 FLAGS = (_cfg.CC_FLAGS + " " + _cfg.CC_INCLUDES + " " + _mwcc_defines(_cfg)).split()
-CODEGEN_PRAGMA = re.compile(r"(?m)^[ \t]*#[ \t]*pragma[ \t]+(?!(?:define_section|section|once)\b)(\w+)")
+from pragmas import CODEGEN_PRAGMA
 
 
 def config_dir(mod):
@@ -105,11 +98,142 @@ SDK_LCF_SYMBOLS = {"SDK_IRQ_STACKSIZE": 0x400, "SDK_SYS_STACKSIZE": 0}
 
 def lcf_symbols():
     overlays = [d for d in os.listdir(f"{REPO}/{config_dir('main')}/overlays") if re.fullmatch(r"ov\d+", d)]
-    return {**SDK_LCF_SYMBOLS, **{f"OVERLAY_{int(d[2:])}_ID": int(d[2:]) for d in overlays}}
+    out = {**SDK_LCF_SYMBOLS, **{f"OVERLAY_{int(d[2:])}_ID": int(d[2:]) for d in overlays}}
+    head = open(f"{REPO}/{config_dir('main')}/delinks.txt", encoding="utf-8").read().split("\n\n")[0]
+    for name, lo, hi in re.findall(r"(?m)^\s*\.(\w+)\s+start:0x([0-9a-fA-F]+)\s+end:0x([0-9a-fA-F]+)", head):
+        out[f"ARM9_{name.upper()}_START"] = int(lo, 16)
+        out[f"ARM9_{name.upper()}_END"] = int(hi, 16)
+    return out
 
 
 def cc_path(version):
-    return native(f"{REPO}/tools/mwccarm/{version}/mwccarm.exe") if version else CC
+    return f"{COMPILER_ROOT}/{version}/mwccarm.exe" if version else CC
+
+
+LIBRARIES = {name: (f"src/{root}", ver, list(flags))
+             for name, (root, ver, flags) in getattr(_cfg, "LIBRARY_BUILDS", {}).items()}
+_LIB_RANGES = os.path.join(_kp.KIT, "lib_ranges.txt")
+
+
+def lib_ranges(mod):
+    out = []
+    try:
+        for line in open(_LIB_RANGES, encoding="utf-8"):
+            p = line.split()
+            if len(p) in (5, 6) and p[0] == REGION and p[1] == mod and p[4] in LIBRARIES:
+                out.append((int(p[2], 16), int(p[3], 16), p[4], p[5:] == ["either"]))
+    except OSError:
+        pass
+    return out
+
+
+def lib_zone(mod, addr):
+    a = int(addr, 16) if isinstance(addr, str) else addr
+    return next(((b, either) for lo, hi, b, either in lib_ranges(mod) if lo <= a < hi), (None, False))
+
+
+def lib_dir(mod, build):
+    root = LIBRARIES[build][0]
+    return f"{root}/Main" if mod == "main" else f"{root}/Overlay_{int(mod)}"
+
+
+def lib_dirs(mod):
+    return [lib_dir(mod, b) for b in dict.fromkeys(b for _lo, _hi, b, _e in lib_ranges(mod))]
+
+
+def path_build(path):
+    p = "/" + str(path).replace("\\", "/")
+    return next((b for b, (root, _v, _f) in LIBRARIES.items() if f"/{root}/" in p), "game")
+
+
+BUILDS = {"game": (None, []), **{b: (ver, flags) for b, (_root, ver, flags) in LIBRARIES.items()}}
+
+
+def build_cc(name):
+    return cc_path(BUILDS[name][0])
+
+
+def build_flags(name):
+    return FLAGS + BUILDS[name][1]
+
+
+def builds_for(mod, addr, path=None):
+    own = path_build(path) if path is not None else "game"
+    if own != "game":
+        return [own]
+    build, either = lib_zone(mod, addr)
+    return ([build, "game"] if either else [build]) if build else ["game"]
+
+
+_POSTCOMPILE = []
+
+
+def postcompile(obj):
+    if not _POSTCOMPILE:
+        path = os.path.join(_TOOLS, "mwcc.py")
+        if os.path.exists(path):
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("_decomp_mwcc", path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _POSTCOMPILE.append(module.strip)
+        else:
+            _POSTCOMPILE.append(lambda _obj: [])
+    return _POSTCOMPILE[0](obj)
+
+
+def sections(elf, name):
+    return [(i, s) for i, s in enumerate(elf.iter_sections()) if s.name == name and s["sh_size"]]
+
+
+def relocations(elf, index):
+    return [s for s in elf.iter_sections()
+            if s.header["sh_type"] in ("SHT_REL", "SHT_RELA") and s.header["sh_info"] == index]
+
+
+def tool_command(executable):
+    runner = _cfg.WINE
+    if runner and not os.path.isabs(runner) and ("/" in runner or "\\" in runner):
+        runner = os.path.normpath(os.path.join(REPO, runner))
+    return ([runner] if runner else []) + [executable]
+
+
+_FRIDA_DEFER = """(function () {
+const MSCDECL = Process.platform === 'windows' ? 'mscdecl' : 'sysv';
+const text = ptr('0x401000');
+const body = function () {
+/*BODY*/
+};
+const mapped = Process.findRangeByAddress(text);
+if (mapped !== null && mapped.protection.indexOf('x') !== -1) { body(); return; }
+const mprotect = Module.getGlobalExportByName ? Module.getGlobalExportByName('mprotect')
+                                              : Module.getExportByName(null, 'mprotect');
+const gate = Interceptor.attach(mprotect, {
+  onEnter(a) { this.lo = a[0]; this.hi = a[0].add(a[1]); this.prot = a[2].toInt32(); },
+  onLeave(rv) {
+    if (rv.toInt32() === 0 && (this.prot & 7) === 5 && text.compare(this.lo) >= 0 && text.compare(this.hi) < 0) {
+      gate.detach();
+      body();
+    }
+  }
+});
+})();
+"""
+
+
+def frida_script(js):
+    return _FRIDA_DEFER.replace("/*BODY*/", js.replace("'mscdecl'", "MSCDECL"), 1)
+
+
+def frida_spawn(device, argv, cwd):
+    for attempt in range(3):
+        pid = device.spawn(argv, cwd=cwd)
+        try:
+            return pid, device.attach(pid)
+        except Exception as e:
+            if attempt == 2 or "terminated" not in str(e):
+                raise
+            print(f"frida: {e} during attach; respawning", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -117,6 +241,12 @@ if __name__ == "__main__":
         print(CC)
     elif "--flags" in sys.argv:
         print(" ".join(FLAGS))
+    elif "--region" in sys.argv:
+        print(REGION)
+    elif "--compiler-root" in sys.argv:
+        print(COMPILER_ROOT.replace("\\", "/"))
+    elif "--config-dir" in sys.argv:
+        print(config_dir(sys.argv[sys.argv.index("--config-dir") + 1]))
     else:
         print("MWCC", MWCC_VERSION)
         print("CC  ", CC)

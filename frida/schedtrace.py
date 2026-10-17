@@ -98,17 +98,16 @@ Interceptor.attach(ptr('0x4feba0'), { onEnter(a) { this.pc = a[0]; }, onLeave(r)
 
 
 def run(src, out):
-    cc = buildcfg.cc_path(None).replace("/", "\\")
-    argv = [cc] + list(buildcfg.FLAGS) + ["-c", src, "-o", os.path.splitext(src)[0] + ".st.o"]
+    cc = os.path.normpath(buildcfg.cc_path(None))
+    argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", os.path.splitext(src)[0] + ".st.o"]
     events = []
     done = threading.Event()
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=REPO)
-    session = device.attach(pid)
+    pid, session = buildcfg.frida_spawn(device, argv, REPO)
     extra = ""
     if os.environ.get("FORCE"):
         extra = "\n(function() {\n" + forcenoalias.JS.replace("'%s'", "'" + os.environ["FORCE"] + "'") + "\n})();\n"
-    script = session.create_script(JS + extra)
+    script = session.create_script(buildcfg.frida_script(JS + extra))
     script.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     script.load()
     session.on("detached", lambda *a: done.set())

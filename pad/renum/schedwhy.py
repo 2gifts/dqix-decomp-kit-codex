@@ -76,9 +76,8 @@ Interceptor.attach(ptr('0x4ff700'), {
 def run(src, want, obj):
     events, done = [], threading.Event()
     dev = frida.get_local_device()
-    pid = dev.spawn(sf.compile_argv(src, obj), cwd=sf.REPO)
-    ses = dev.attach(pid)
-    scr = ses.create_script(JS % json.dumps({"want": want}))
+    pid, ses = sf.buildcfg.frida_spawn(dev, sf.compile_argv(src, obj), sf.REPO)
+    scr = ses.create_script(sf.buildcfg.frida_script(JS % json.dumps({"want": want})))
     scr.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     scr.load()
     ses.on("detached", lambda *a: done.set())

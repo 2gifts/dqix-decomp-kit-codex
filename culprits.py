@@ -15,15 +15,17 @@ import subprocess
 import sys
 
 import kitpaths as _kp
+import buildcfg
 
 REPO = _kp.REPO
 SP = _kp.SP
-TAG = re.compile(r"// USA: func_(?:ov(\d+)_)?([0-9a-fA-F]{8})")
+TAG = re.compile(rf"// {buildcfg.REGION.upper()}: func_(?:ov(\d+)_)?([0-9a-fA-F]{{8}})")
 SOURCE_ERROR = re.compile(r"^(\S+?\.(?:cpp|c|s)):\d+:", re.M)
 OBJECT = re.compile(r"([\w$]+)\.o\b")
 CONFIG_LINE = re.compile(r"(config[\\/]\S+?\.txt):(\d+):")
 DRIFT = re.compile(r"expected to be at 0x([0-9a-f]+) but is at 0x([0-9a-f]+)")
 HEX8 = re.compile(r"(?:addr:0x|start:0x|_)0*([0-9a-fA-F]{7,8})\b")
+PROGRESS = re.compile(r"^\[\d+/\d+\] ")
 
 
 CRASH = re.compile(r"\[code=(-\d+|\d{4,})\]|out of memory|not enough memory|Access violation", re.I)
@@ -69,7 +71,7 @@ def name(log, cands=None):
         if hit and hit[0] not in blamed:
             blamed[hit[0]] = (hit[1], reason)
 
-    errors = "\n".join(l for l in log.splitlines() if "warning:" not in l)
+    errors = "\n".join(l for l in log.splitlines() if "warning:" not in l and not PROGRESS.match(l))
     for path in SOURCE_ERROR.findall(errors):
         blame(by_stem.get(os.path.splitext(os.path.basename(path.replace("\\", "/")))[0].lower()), "compile")
     linker = []

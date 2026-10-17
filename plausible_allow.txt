@@ -1,0 +1,6 @@
+02166220 EXTERN-C-MANGLED ZevyaDev PR #153: the mangled name says int where the ROM narrows to short; waits for a symbol rename
+0215c058 EXTERN-C-MANGLED ZevyaDev PR #153: mangled names contradict the ROM's argument widths; waits for a symbol rename
+021a4e88 EXTERN-C-MANGLED ZevyaDev PR #153: mangled names contradict the ROM's argument types; waits for a symbol rename
+021b0bc0 EXTERN-C-MANGLED ZevyaDev PR #153: mangled names contradict the ROM's argument widths; waits for a symbol rename
+02166070 EXTERN-C-MANGLED ZevyaDev PR #155: Object3D setters mangled unsigned short, the ROM passes unnarrowed; waits for a symbol rename
+0218dbec EXTERN-C-MANGLED ZevyaDev PR #155: Object3D setter mangled unsigned short, the ROM passes unnarrowed; waits for a symbol rename

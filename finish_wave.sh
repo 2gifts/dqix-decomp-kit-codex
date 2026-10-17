@@ -32,13 +32,24 @@ export DQIX_MAIN_REPO="${DQIX_MAIN_REPO:-$(python "$KIT/kitpaths.py" repo)}"
 REPO="$(python "$KIT/integ_tree.py" sync)" || { echo "FATAL: no integration tree"; exit 2; }
 export DQIX_REPO="$REPO"
 cd "$REPO" || { echo "FATAL: no repo"; exit 2; }
+sha1_ok() {
+  [ -f arm7_bios.bin ] || { echo "sha1 skipped: no arm7_bios.bin" >&2; return 0; }
+  ninja sha1 2>&1 | grep -q "OK"
+}
+REGION="$(python "$KIT/buildcfg.py" --region)" || exit 2
+REGION_TAG="${REGION^^}"
+CFG="$(python "$KIT/buildcfg.py" --config-dir "$OV")" || exit 2
+DL="$CFG/delinks.txt"
 if [ "$OV" = "main" ]; then
-  DL="config/usa/arm9/delinks.txt"; SRCDIR=$(python "$KIT/srcdir.py" main); TAGPRE="func_"; LBL="main"
+  SRCDIR=$(python "$KIT/srcdir.py" main); TAGPRE="func_"; LBL="main"
 else
   DEC=$((10#$OV))
-  DL="config/usa/arm9/overlays/ov${OV}/delinks.txt"; SRCDIR=$(python "$KIT/srcdir.py" "$OV")
+  SRCDIR=$(python "$KIT/srcdir.py" "$OV")
   TAGPRE="func_ov${OV}_"; LBL="ov${OV}"
 fi
+LIBDIRS=$(python "$KIT/srcdir.py" --lib "$OV")
+OWNDIRS=("$SRCDIR")
+for _d in $LIBDIRS; do OWNDIRS+=("$_d"); done
 Q="$SP/quarantine"; mkdir -p "$Q"
 
 # ===== SELF-HEALING PREFLIGHT — never abort/lose on stale/dupe/leftover files; quarantine them =====
@@ -56,7 +67,8 @@ git checkout HEAD -- include/ config/ src/ 2>/dev/null
 # 3. QUARANTINE (preserve, don't delete) untracked .cpp in OTHER module dirs — they pollute configure.
 #    ALL of src/, not src/Combat/ alone: the update-compiler base put ARM9 main's sources in
 #    src/World, src/Util, src/System and six more, and a half-written file there reds every module.
-git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' | grep -v "^$SRCDIR/" | while read -r f; do
+git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' \
+  | grep -vE "^($(IFS='|'; echo "${OWNDIRS[*]}"))/" | while read -r f; do
   mv "$f" "$Q/$(basename "$f")" 2>/dev/null; done
 # A candidate's address is the one on its `// USA:` tag, never just the first func_ symbol in the
 # file: every source declares its CALLEES with the same prefix, and those are usually already
@@ -64,18 +76,18 @@ git status --porcelain | awk '/\?\?.*\.cpp/{print $2}' | grep '^src/' | grep -v 
 # 2026-08-20 as "already committed" because a callee was (0223cf70). Filename is the fallback.
 addr_of() {
   local a
-  a=$(grep -oE "// USA: ${TAGPRE}[0-9a-fA-F]{8}" "$1" 2>/dev/null | head -1 \
+  a=$(grep -oE "// ${REGION_TAG}: ${TAGPRE}[0-9a-fA-F]{8}" "$1" 2>/dev/null | head -1 \
       | grep -oE '[0-9a-fA-F]{8}$' | tr 'A-F' 'a-f')
   [ -z "$a" ] && a=$(basename "$1" | grep -oE '[0-9a-fA-F]{8}\.cpp$' | cut -c1-8 | tr 'A-F' 'a-f')
   echo "$a"
 }
 
 # 4. QUARANTINE untracked .cpp in THIS module whose addr is ALREADY committed (dupes cause collisions).
-git grep -hoE "// USA: ${TAGPRE}[0-9a-fA-F]{8}" HEAD -- src/ 2>/dev/null | grep -oE '[0-9a-fA-F]{8}$' | tr 'A-F' 'a-f' | sort -u > "$Q/.done_$OV"
+git grep -hoE "// ${REGION_TAG}: ${TAGPRE}[0-9a-fA-F]{8}" HEAD -- src/ 2>/dev/null | grep -oE '[0-9a-fA-F]{8}$' | tr 'A-F' 'a-f' | sort -u > "$Q/.done_$OV"
 # BULK-TRACKED-BEGIN: one checked index snapshot, never per-file Git.
 mkdir -p "$SP/handwork" || { echo "FATAL: cannot create preflight scratch"; exit 6; }
 _tracked_tmp="$SP/handwork/fw_tracked_$$.nul"
-if ! git ls-files --cached -z -- "$SRCDIR/" > "$_tracked_tmp"; then
+if ! git ls-files --cached -z -- "${OWNDIRS[@]/%//}" > "$_tracked_tmp"; then
   rm -f "$_tracked_tmp"
   echo "FATAL: cannot read tracked paths; refusing duplicate quarantine"
   exit 6
@@ -99,7 +111,9 @@ for _tracked_path in "${_fw_tracked_paths[@]}"; do
 done
 rm -f "$_tracked_tmp"
 # BULK-TRACKED-END
-for f in "$SRCDIR"/*.cpp; do
+_own_cpps=()
+for _d in "${OWNDIRS[@]}"; do _own_cpps+=("$_d"/*.cpp); done
+for f in "${_own_cpps[@]}"; do
   [ -e "$f" ] || continue
   [ -n "${_fw_tracked["$f"]+present}" ] && continue   # tracked: leave it
   a=$(addr_of "$f")
@@ -157,24 +171,28 @@ fi
 # gate
 _compiler_args=()
 [ -n "${DQIX_PREINSTALLED_COMPILER:-}" ] && _compiler_args=(--compiler "$DQIX_PREINSTALLED_COMPILER")
-python tools/configure.py usa --no-extract "${_compiler_args[@]}" >/dev/null 2>&1
+[ -n "${DQIX_WINE:-}" ] && _compiler_args+=(-w "$DQIX_WINE")
+python tools/configure.py "$REGION" --no-extract "${_compiler_args[@]}" >/dev/null 2>&1
 if ! ninja check >/tmp/fw_check.log 2>&1; then
   echo "RED: ninja check FAILED — NOT pushing. tail:"; tail -3 /tmp/fw_check.log
   echo "held: $SP/hold_${LBL} (nothing lost)"; exit 4
 fi
 ninja rom >/dev/null 2>&1
-if ! ninja sha1 2>&1 | grep -q "OK"; then echo "RED: sha1 mismatch — NOT pushing"; exit 5; fi
+if ! sha1_ok; then echo "RED: sha1 mismatch — NOT pushing"; exit 5; fi
 if [ "$(git rev-parse --short HEAD)" != "$H0" ]; then
+  ninja objdiff.json >/dev/null 2>&1
   python "$KIT/countfix.py" --since="$H0"
-  if [ $? -eq 3 ]; then
-    if ninja check >/tmp/fw_countfix.log 2>&1 && ninja sha1 2>&1 | grep -q "OK"; then
-      git add config/ && git commit -q -m "Align config with landed functions"
+  _cf=$?
+  [ "$_cf" -ne 0 ] && [ "$_cf" -ne 3 ] && echo "WARN countfix failed (exit $_cf): landed function counts were not corrected"
+  if [ "$_cf" -eq 3 ]; then
+    if ninja check >/tmp/fw_countfix.log 2>&1 && sha1_ok; then
+      git add "config/$REGION/" && git commit -q -m "Align config with landed functions"
     else
       python "$KIT/countfix.py" --restore
       ninja check >/dev/null 2>&1
     fi
   fi
-  python "$KIT/regionsync.py"
+  [ "${DQIX_REGIONSYNC:-}" = defer ] || python "$KIT/regionsync.py"
 fi
 
 # push only if we actually gained and HEAD moved
@@ -196,7 +214,7 @@ else
   PUSH="no-new-commits"
 fi
 
-rm -f build/usa/report.json; ninja report >/dev/null 2>&1
-COV=$(python -c "import json;m=json.load(open('build/usa/report.json'))['measures'];print('%d/%d = %.2f%%'%(m['matched_functions'],m['total_functions'],m['matched_functions_percent']))")
+rm -f "build/$REGION/report.json"; ninja report >/dev/null 2>&1
+COV=$(python -c "import json,sys;m=json.load(open(sys.argv[1]))['measures'];print('%d/%d = %.2f%%'%(m['matched_functions'],m['total_functions'],m['matched_functions_percent']))" "build/$REGION/report.json")
 python "$KIT/integ_tree.py" report
-echo "OK ${LBL}: +${GAINED} delinked (${BEFORE}->${AFTER}), green, sha1 OK, ${PUSH}, cov ${COV}, held ${SP}/hold_${LBL}"
+echo "OK ${LBL}: +${GAINED} delinked (${BEFORE}->${AFTER}), green, $([ -f arm7_bios.bin ] && echo "sha1 OK" || echo "sha1 skipped (no BIOS)"), ${PUSH}, cov ${COV}, held ${SP}/hold_${LBL}"

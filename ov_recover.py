@@ -12,11 +12,15 @@ import kitpaths as _kp
 import re, subprocess, os, sys, glob, time, shutil, hashlib
 import srcdir
 import culprits
+import buildcfg
+import regionsync
 # The scratchpad is wherever THIS file lives; the old absolute %TEMP% path was deleted by Windows
 # cleanup on 2026-08-24 and took the whole pipeline with it.
 SP = _kp.SP
 KIT = _kp.KIT
 REPO = _kp.REPO
+REGION = buildcfg.REGION
+TAG = REGION.upper()
 os.chdir(REPO)
 MOD = sys.argv[1]              # "000".."035" (an overlay) or "main" (the arm9 module)
 MAIN = (MOD == "main")
@@ -25,7 +29,7 @@ if MAIN:
     SUF     = "main"                       # suffix for wlog/hold/stage filenames
     TAGPRE  = "func_"                      # `// USA: func_<addr>` — no `ov` infix
     HEXC    = "[0-9a-fA-F]"                # main's delinks.txt mixes UPPER and lowercase hex
-    CFG     = "config/usa/arm9"            # not .../overlays/ovNN
+    CFG     = buildcfg.config_dir(MOD)
     SRCDIR  = srcdir.for_module("main")
     INT     = f"{KIT}/integrate.py"         # one integrator for every module
     INTARGS = ["main"]
@@ -39,7 +43,7 @@ else:
     SUF     = f"ov{OV}"
     TAGPRE  = f"func_ov{OV}_"
     HEXC    = "[0-9a-f]"
-    CFG     = f"config/usa/arm9/overlays/ov{OV}"
+    CFG     = buildcfg.config_dir(MOD)
     SRCDIR  = srcdir.for_module(OV)
     INT     = f"{KIT}/integrate.py"         # one integrator for every module
     INTARGS = [OV]
@@ -49,10 +53,17 @@ else:
 # The `// USA:` tag matcher. The overlay pattern is byte-identical to the old hardcoded one; main only
 # adds \b so `func_<8hex>` can never swallow a 9th hex digit. The two can never cross-match: after
 # `// USA: func_` an overlay tag continues `ov...`, and `o` is not a hex digit.
-TAGRE = rf'// USA: {TAGPRE}({HEXC}{{8}})' + (r'\b' if MAIN else '')
+TAGRE = rf'// {TAG}: {TAGPRE}({HEXC}{{8}})' + (r'\b' if MAIN else '')
 def tag_addr(txt):
     m = re.search(TAGRE, txt)
     return m.group(1).lower() if m else None       # .lower() is a no-op on the overlay class
+
+
+SRCDIRS = [SRCDIR] + buildcfg.lib_dirs(MOD)
+
+
+def src_cpps():
+    return [f for d in SRCDIRS for f in glob.glob(f"{d}/*.cpp")]
 
 
 _BOUND = None
@@ -73,16 +84,16 @@ def bound_addrs():
 
 
 def retag(txt, fp):
-    m = re.search(r"^// USA: (\S+)[^\n]*\n([^\n]*)", txt, re.M)
+    m = re.search(rf"^// {TAG}: (\S+)[^\n]*\n([^\n]*)", txt, re.M)
     if not m:
         return txt
     a = bound_addrs().get(m.group(1))
     if not a:
-        print(f"NO-TAG {os.path.basename(fp)}: '// USA: {m.group(1)}' names no function of this module")
+        print(f"NO-TAG {os.path.basename(fp)}: '// {TAG}: {m.group(1)}' names no function of this module")
         return txt
     keep = "" if 'extern "C"' in m.group(2) else " // KEEP-NAME"
     print(f"RETAG {os.path.basename(fp)}: {m.group(1)} -> {TAGPRE}{a}")
-    return txt[:m.start()] + f"// USA: {TAGPRE}{a}{keep}" + txt[m.start() + 8 + len(m.group(1)):]
+    return txt[:m.start()] + f"// {TAG}: {TAGPRE}{a}{keep}" + txt[m.end(1):]
 # VERIFICATION MODE (default OFF — production behaviour is completely unchanged when unset).
 # NOCOMMIT=1 runs the entire pipeline for real — gather, classify, integrate, full `ninja check` gate —
 # but makes no git commit, and therefore also skips the final clean() so the gated tree survives for
@@ -117,6 +128,12 @@ if f"gated/{SUF}" not in STAGING: STAGING = list(STAGING) + [f"gated/{SUF}"]
 _TRACKED = None
 _INDEX_MUTATORS = frozenset(("add", "reset", "checkout", "commit", "rm", "mv",
                              "read-tree", "update-index"))
+PORT_REGIONS = ([r for r in regionsync.PORTS if os.path.isdir(f"extract/{r}")]
+                if REGION == regionsync.HOME and os.environ.get("DQIX_REGIONSYNC") != "defer" else [])
+OTHER_CONFIGS = [f"config/{r}" for r in (regionsync.HOME, *regionsync.PORTS)
+                 if r != REGION and os.path.isdir(f"config/{r}")]
+BLOCKED = set()
+PORTS_PENDING = [False]
 
 def sh(*a):
     global _TRACKED
@@ -175,6 +192,8 @@ def clean():
     # config to HEAD. That is the intended superset (`git checkout HEAD -- src/` was already
     # project-wide); it only ever discards UNCOMMITTED config edits, which a wave must not carry.
     sh("git", "checkout", "HEAD", "--", CFG + "/", "src/", "include/")
+    if PORTS_PENDING[0]:
+        drop_ports()
     # Tolerate a file vanishing between the glob and the remove. The `git checkout` above
     # can delete it, and so can a second wave running concurrently -- and an unguarded
     # os.remove raises FileNotFoundError, which aborts the ENTIRE recovery pass and makes
@@ -191,7 +210,7 @@ def clean():
     # re-gated by every repair sweep, which now also runs colorsweep on 2-24 byte residues, so a
     # preserved near-miss converts later for no model tokens at all.
     _hold = f"{SP}/hold_{SUF}"
-    for f in glob.glob(f"{SRCDIR}/*.cpp"):
+    for f in src_cpps():
         if tracked(f):
             continue
         try:
@@ -208,8 +227,16 @@ def clean():
         except OSError:
             pass
         _rm(f)
-    for o in glob.glob(f"{SRCDIR}/**/*.o", recursive=True): _rm(o)
-    for o in glob.glob(f"{SRCDIR}/*.o"): _rm(o)
+    for d in SRCDIRS:
+        for o in glob.glob(f"{d}/**/*.o", recursive=True): _rm(o)
+        for o in glob.glob(f"{d}/*.o"): _rm(o)
+
+
+def drop_ports():
+    PORTS_PENDING[0] = False
+    if PORT_REGIONS or BLOCKED:
+        sh("git", "checkout", "HEAD", "--", *OTHER_CONFIGS)
+
 
 def sweep_foreign():
     """Move other modules' untracked .cpp out of the tree, preserving them in quarantine.
@@ -228,7 +255,7 @@ def sweep_foreign():
     # src/World, src/Util, src/System and six more, and configure.py globs every one of them.
     for f in glob.glob("src/**/*.cpp", recursive=True):
         p = f.replace(chr(92), "/")
-        if p.startswith(SRCDIR + "/") or tracked(p):
+        if any(p.startswith(d + "/") for d in SRCDIRS) or tracked(p):
             continue
         try:
             shutil.move(p, f"{q}/{os.path.basename(p)}")
@@ -240,13 +267,15 @@ def sweep_foreign():
 
 
 def gate():
-    for p in ["build/usa/arm9.o"] + glob.glob("build/usa/build/*.bin"):
+    for p in [f"build/{REGION}/arm9.o"] + glob.glob(f"build/{REGION}/build/*.bin"):
         try: os.remove(p)
         except OSError: pass
     sweep_foreign()
-    configure_args = ["python", "tools/configure.py", "usa", "--no-extract"]
+    configure_args = ["python", "tools/configure.py", REGION, "--no-extract"]
     if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
         configure_args += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
+    if os.environ.get("DQIX_WINE"):
+        configure_args += ["-w", os.environ["DQIX_WINE"]]
     cf = sh(*configure_args)
     # MAIN-ONLY PREFLIGHT (~free: `ninja check` depends on `ninja delink` anyway, so this only pulls
     # that step forward). A new main delink entry re-splits one of dsd's gap modules, and a module
@@ -265,9 +294,27 @@ def gate():
             except OSError: pass
             print("  modsize preflight RED (link would abort) — skipping ninja check")
             return False
-    r = sh("ninja", "check")
-    out = r.stdout + r.stderr
-    ok = r.returncode == 0 and "abort" not in out and "FAILED" not in out
+    regions = PORT_REGIONS if GATES[0] <= 1 else sorted(BLOCKED)
+    results, blocking = {}, []
+    if regions:
+        results, blocking = regionsync.gate(regions)
+        BLOCKED.update(blocking)
+        rc, out = int(not results[regionsync.HOME][0]), results[regionsync.HOME][1]
+    else:
+        r = sh("ninja", "check")
+        rc, out = r.returncode, r.stdout + r.stderr
+    ok = rc == 0 and "abort" not in out and "FAILED" not in out and not blocking
+    if regions:
+        PORTS_PENDING[0] = True
+        if not ok:
+            drop_ports()
+        for region in regions:
+            if not results.get(region, (True, ""))[0]:
+                print(f"  {region}: red{' -- this candidate set breaks it' if region in blocking else ''}")
+                try:
+                    open(f"{SP}/wlog/gate_{SUF}_{region}.txt", "w", encoding='utf-8', errors='ignore').write(
+                        results[region][1])
+                except OSError: pass
     if not ok:   # keep the real reason; a silent red used to be indistinguishable from a bad func
         # lcfcheck turns a red gate into a one-line diagnosis when the cause is link LAYOUT: it proves
         # from the generated lcf + the built objects that every `<obj>.o(<sec>)` line resolves to
@@ -277,7 +324,7 @@ def gate():
         try:
             open(f"{SP}/wlog/gate_{SUF}.txt", "w", encoding='utf-8', errors='ignore').write(
                 f"--- configure ---\n{cf.stdout}\n{cf.stderr}\n--- lcfcheck ---\n{lc.stdout}\n"
-                f"--- ninja check (rc={r.returncode}) ---\n{out}")
+                f"--- ninja check (rc={rc}) ---\n{out}")
         except OSError: pass
     return ok
 
@@ -292,7 +339,7 @@ def sanitize(text, addr):
     # Must accept THUMB as well as ARM. With ARM-only this returned None for every thumb function, so
     # place() skipped writing the file entirely and 28 of 31 gate-verified thumb matches silently
     # vanished before the integrator ever saw them.
-    m = re.search(rf'// USA: {TAGPRE}{addr}[^\n]*\n.*?\b(?:ARM|THUMB)\b[^\n;{{]*?\b([A-Za-z_]\w*)\s*\(',
+    m = re.search(rf'// {TAG}: {TAGPRE}{addr}[^\n]*\n.*?\b(?:ARM|THUMB)\b[^\n;{{]*?\b([A-Za-z_]\w*)\s*\(',
                   text, re.S) or re.search(r'\b(?:ARM|THUMB)\b[^\n(]*?\b([A-Za-z_]\w*)\s*\(', text)
     if not m: return None, text
     name = m.group(1)
@@ -390,7 +437,7 @@ def commit(n):
     # deferred 42 TRUSTED functions this way, and re-running the identical gate later committed 41/42.
     # An 8-hour, ~50-function loss from an unchecked return code. Retry the lock, then re-check.
     for _try in range(4):
-        r1 = sh("git", "add", "-A")
+        r1 = sh("git", "add", "-A", "--", ".", *(f":(exclude){p}" for p in OTHER_CONFIGS))
         unstage_foreign()
         r2 = sh("git", *AUTH, "commit", "-q", "-m", MSG.format(n=n))
         if sh("git", "rev-parse", "HEAD").stdout.strip() != before: return 'ok'
@@ -448,7 +495,7 @@ def gather(files):
         cands.setdefault(a, txt)
 for d in STAGING:
     if d == "src":  # steady-state: fresh untracked worker output in src
-        gather(f for f in glob.glob(f"{SRCDIR}/*.cpp") if not tracked(f))
+        gather(f for f in src_cpps() if not tracked(f))
     else:
         gather(glob.glob(f"{SP}/{d}/*.cpp"))
 
@@ -459,7 +506,7 @@ for d in STAGING:
 HOLD = f"{SP}/hold_{SUF}"
 os.makedirs(HOLD, exist_ok=True)
 _held = 0
-for _fp in glob.glob(f"{SRCDIR}/*.cpp"):
+for _fp in src_cpps():
     if tracked(_fp): continue
     open(f"{HOLD}/{os.path.basename(_fp)}", 'w', encoding='utf-8', newline='\n').write(
         open(_fp, encoding='utf-8', errors='ignore').read()); _held += 1
@@ -474,13 +521,10 @@ for _l in sh("git", "ls-files", "src/").stdout.split():
     if _l.endswith(('.c', '.cpp')) and os.path.dirname(_l) != SRCDIR:
         _FOREIGN_STEMS.add(os.path.basename(_l).rsplit('.', 1)[0])
 
-ASMPAT = re.compile(r'(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b')
+from pragmas import HAND_ASM as ASMPAT, asm_allow
 # The ONLY functions allowed to land as hand-written assembly, by address. See asm_allow.txt for
 # why each one is there. Everything else still falls under the no-hand-asm policy below.
-ASM_ALLOW = set()
-for _l in open(f"{KIT}/asm_allow.txt", encoding="utf-8").read().splitlines():
-    _l = _l.split('#', 1)[0].strip()
-    if _l: ASM_ALLOW.add(_l.split()[0].lower())
+ASM_ALLOW = asm_allow()
 
 
 def place(addrs):
@@ -514,17 +558,19 @@ def place(addrs):
                 # address, which is what place() falls back to on any collision anyway.
                 name = f"{TAGPRE}{a}"
                 print(f"  PLACE-FALLBACK {a}: no ARM/THUMB keyword, naming file {name}.cpp")
-        bn = f"{SRCDIR}/{name}.cpp"
+        d = buildcfg.lib_dir(MOD, _build[a]) if _build.get(a, "game") != "game" else SRCDIR
+        os.makedirs(d, exist_ok=True)
+        bn = f"{d}/{name}.cpp"
         if tracked(bn) or bn in used or os.path.exists(bn) or name in _FOREIGN_STEMS:
-            bn = f"{SRCDIR}/{name}_{a}.cpp"
+            bn = f"{d}/{name}_{a}.cpp"
         if bn.rsplit('/', 1)[-1][:-4] in _FOREIGN_STEMS or bn in used:   # still not unique -> force it
-            bn = f"{SRCDIR}/{TAGPRE}{a}.cpp"
-        if f"// USA: {TAGPRE}{a}" not in txt:
+            bn = f"{d}/{TAGPRE}{a}.cpp"
+        if f"// {TAG}: {TAGPRE}{a}" not in txt:
             _defpat = ('(?m)^(?:extern "C"\\s+)?'
                        '(?:__declspec\\([^)]*\\)\\s*)?'
                        '(?:ARM|THUMB)[^' + chr(10) + ';{]*' + chr(92) + '(')
             _m = re.search(_defpat, txt)
-            _tag = f"// USA: {TAGPRE}{a}" + chr(10)
+            _tag = f"// {TAG}: {TAGPRE}{a}" + chr(10)
             txt = (txt[:_m.start()] + _tag + txt[_m.start():]) if _m else (_tag + txt)
         open(bn, 'w', encoding='utf-8').write(txt)
         carry_cc_override(a, bn)
@@ -573,17 +619,17 @@ def try_set(addrs):
     global _DIRTY_BASE, _TRACKED
     _DIRTY_BASE = dirty_tracked()
     place(addrs)
-    for o in glob.glob(f"{SRCDIR}/*.o"): os.remove(o)
+    for o in [o for d in SRCDIRS for o in glob.glob(f"{d}/*.o")]: os.remove(o)
     # KEEP THE INTEGRATOR'S OUTPUT. It names exactly why each candidate was rejected
     # (NON-TEXT, NO-DEF, DUP-ADDR, OVERGEN, REPAIR...), and swallowing it is why waves
     # reported a bare "wired-0 -> defer" for faults that took a hand investigation to
     # find. One file per module, truncated per pass so it always reflects this wave.
-    _u = [f for f in sorted(glob.glob(f"{SRCDIR}/*.cpp")) if not tracked(f)]
+    _u = [f for f in sorted(src_cpps()) if not tracked(f)]
     print(f"  DBG-PLACED untracked={len(_u)} {[os.path.basename(x) for x in _u[:3]]}")
     if _u:
         _tx = open(_u[0], encoding="utf-8", errors="ignore").read()
-        print(f"  DBG-TAG {os.path.basename(_u[0])} hasUSA={chr(47)+chr(47)+chr(32)}USA: "
-              f"{TAGPRE} in _tx -> {(chr(47)+chr(47)+chr(32)+chr(85)+chr(83)+chr(65)+chr(58)+chr(32)+TAGPRE) in _tx}")
+        print(f"  DBG-TAG {os.path.basename(_u[0])} has{TAG}=// {TAG}: "
+              f"{TAGPRE} in _tx -> {('// ' + TAG + ': ' + TAGPRE) in _tx}")
     _r = sh("python", INT, *INTARGS)
     _TRACKED = None   # delegated integrator is a mutation boundary
     try:
@@ -613,7 +659,7 @@ def try_set(addrs):
         except OSError:
             continue
         if not any(a.lower() in _wired
-                   for a in re.findall(rf"// USA: {TAGPRE}([0-9a-fA-F]{{8}})\b", _txt)):
+                   for a in re.findall(rf"// {TAG}: {TAGPRE}([0-9a-fA-F]{{8}})\b", _txt)):
             sh("git", "checkout", "--", _rel)
             print(f"  REVERT-REJECTED {_rel}")
     return gate()
@@ -623,7 +669,7 @@ def prune_unwired():
     # remove untracked .cpp that integrate_ov did NOT wire (addr not in delinks) so git add -A can
     # never commit a DEAD file. Every candidate is snapshotted in HOLD, so removal loses nothing.
     now = committed_addrs()
-    for fp in glob.glob(f"{SRCDIR}/*.cpp"):
+    for fp in src_cpps():
         if tracked(fp): continue
         a = tag_addr(open(fp, encoding='utf-8', errors='ignore').read())
         if (a is None) or (a not in now): os.remove(fp)
@@ -699,6 +745,7 @@ def recurse(addrs):
         prune_unwired()                      # drop dead untracked .cpp before commit; keep only delinked
         st = commit(f"batch of {len(addrs)}")
         if st == 'ok':
+            PORTS_PENDING[0] = False
             _now = committed_addrs(); _real = [a for a in addrs if a in _now]
             committed[0] += len(_real); print(f"  committed {len(_real)}/{len(addrs)} delinked ({sorted(_real)[:3]}...)")
         elif st == 'nothing':                 # green but zero delinked = all guard-rejected this pass
@@ -709,6 +756,7 @@ def recurse(addrs):
             if _real:
                 st2 = commit(f"batch of {len(addrs)}")
                 if st2 == 'ok':
+                    PORTS_PENDING[0] = False
                     _now = committed_addrs(); _real = [a for a in addrs if a in _now]
                     committed[0] += len(_real)
                     print(f"  committed {len(_real)}/{len(addrs)} delinked after commit-retry ({sorted(_real)[:3]}...)")
@@ -778,15 +826,18 @@ print(f"[{SUF}] {len(cands)} candidates")
 sys.path.insert(0, KIT)
 from classify import classify
 _cls = {}
+_build = {}
 for _a in sorted(variants):
-    _best, _bv = None, None
+    _best, _bv, _bb = None, None, None
     for _i, _txt in enumerate(variants[_a]):      # try each held attempt; first TRUSTED wins
         _nm = (vnames.get(_a) or [None] * (_i + 1))[_i] if _i < len(vnames.get(_a, [])) else None
-        _v = classify(MOD, {_a: _txt}, names={_a: _nm} if _nm else None).get(_a, 'COMPILE')
+        _builds = {}
+        _v = classify(MOD, {_a: _txt}, names={_a: _nm} if _nm else None, builds=_builds).get(_a, 'COMPILE')
         if _bv is None or _v == 'TRUSTED':
-            _best, _bv = _txt, _v
+            _best, _bv, _bb = _txt, _v, _builds.get(_a)
         if _v == 'TRUSTED': break
     _cls[_a] = _bv
+    _build[_a] = _bb
     cands[_a] = _best
 # DRIFT PARKING: funcs already proven to break the link layout (not the bytes). Re-placing them every
 # wave costs an extra red gate each time and nothing else, so park them for a few waves. Not permanent —
@@ -841,6 +892,17 @@ if ASMPARK:
     RISKY = [a for a in RISKY if a not in ASMPARK]
     open(f"{SP}/wlog/asmpark_{SUF}.txt", "w").write('\n'.join(ASMPARK))
     print(f"[{SUF}] hand-asm off the allowlist, parked to {_parkdir} (back to workers): {len(ASMPARK)}")
+import plausible as _plausible
+IMPLAUSIBLE = [a for a in TRUSTED + RISKY if _plausible.blocking(cands.get(a, ''))]
+if IMPLAUSIBLE:
+    for _fp in glob.glob(f"{HOLD}/*.cpp"):
+        _a = tag_addr(open(_fp, encoding='utf-8', errors='ignore').read())
+        if _a in IMPLAUSIBLE and _plausible.hold(_fp, MOD, _a):
+            os.remove(_fp)
+    for _a in IMPLAUSIBLE: cands.pop(_a, None)
+    TRUSTED = [a for a in TRUSTED if a not in IMPLAUSIBLE]
+    RISKY = [a for a in RISKY if a not in IMPLAUSIBLE]
+    print(f"[{SUF}] implausible, held in hold_plausible/ for cleanwork: {len(IMPLAUSIBLE)}")
 
 # TRUSTED+RISKY are already-matched source sitting on disk: they will land on a gate, no worker needed.
 # genwave_direct reads this file and stops serving these addrs — that is the duplicate-work fix.

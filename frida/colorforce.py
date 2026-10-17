@@ -114,14 +114,13 @@ Interceptor.replace(ptr('0x513a50'), new NativeCallback(colorgraph, 'int', ['poi
 
 
 def run(src, cfg, obj):
-    cc = buildcfg.cc_path(None).replace("/", "\\")
-    argv = [cc] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
+    cc = os.path.normpath(buildcfg.cc_path(None))
+    argv = buildcfg.tool_command(cc) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
     events = []
     done = threading.Event()
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=REPO)
-    session = device.attach(pid)
-    script = session.create_script(JS % json.dumps(cfg))
+    pid, session = buildcfg.frida_spawn(device, argv, REPO)
+    script = session.create_script(buildcfg.frida_script(JS % json.dumps(cfg)))
     script.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     script.load()
     session.on("detached", lambda *a: done.set())
@@ -148,7 +147,7 @@ def score(obj, R, size):
 
 
 def main():
-    src, mod, addr, size = sys.argv[1], sys.argv[2], int(sys.argv[3], 16), int(sys.argv[4], 0)
+    src, mod, addr, size = sys.argv[1], _kp.module_label(sys.argv[2]), int(sys.argv[3], 16), int(sys.argv[4], 0)
     pool_from = int(sys.argv[5], 16) if len(sys.argv) > 5 else size
     out = os.path.splitext(src)[0] + ".cf"
     os.makedirs(out, exist_ok=True)
@@ -156,7 +155,7 @@ def main():
 
     native = out + "/native.o"
     import subprocess
-    subprocess.run([buildcfg.cc_path(None)] + list(buildcfg.FLAGS) + ["-c", src, "-o", native], cwd=REPO, check=True)
+    subprocess.run(buildcfg.tool_command(buildcfg.cc_path(None)) + list(buildcfg.FLAGS) + ["-c", src, "-o", native], cwd=REPO, check=True)
     ev = run(src, {"kind": "none", "call": -1}, out + "/replay.o")
     if text_of(native) != text_of(out + "/replay.o"):
         print("REPLAY MISMATCH: the JS colouring does not reproduce mwcc")

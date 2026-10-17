@@ -20,6 +20,7 @@ source exists, which is what a worker is for.
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import concurrent.futures
 import glob
 import hashlib
 import os
@@ -35,6 +36,7 @@ BEST = f"{SP}/clsbest"
 DEPTH = os.environ.get("PRESWEEP_DEPTH", "3")
 BUDGET = os.environ.get("PRESWEEP_BUDGET", "250")
 TIMEOUT = int(os.environ.get("PRESWEEP_TIMEOUT", "1800"))
+GATE_JOBS = int(os.environ.get("PRESWEEP_GATE_JOBS", "6"))
 
 
 def rank(verdict):
@@ -107,7 +109,7 @@ def main():
     # sitting at the same 3 bytes with DIFFERENT levers already applied, and they are different
     # basins. Taking scored[0] explored one of them. repairsweep has always walked every distinct
     # file per address (it dedupes on (addr, content hash)); this is the same rule.
-    seen, scored = set(), []
+    seen, uniq = set(), []
     for p in cand[:12]:
         try:
             h = hashlib.md5(open(p, "rb").read()).hexdigest()
@@ -116,7 +118,9 @@ def main():
         if h in seen:
             continue
         seen.add(h)
-        scored.append((rank(gate(mod, addr, p)), p))
+        uniq.append(p)
+    with concurrent.futures.ThreadPoolExecutor(max(1, min(GATE_JOBS, len(uniq)))) as pool:
+        scored = [(rank(v), p) for v, p in zip(pool.map(lambda p: gate(mod, addr, p), uniq), uniq)]
     if not scored:
         return 0
     scored.sort()

@@ -44,7 +44,7 @@ off = int(ADDR, 16) - base
 tgt = list(md.disasm(blob[off:off + slot], int(ADDR, 16)))
 
 obj = f"{SP}/sdiff_{os.getpid()}.o"
-r = subprocess.run([CC] + FLAGS + ["-c", SRC, "-o", obj], capture_output=True, text=True, cwd=REPO)
+r = subprocess.run(buildcfg.tool_command(CC) + FLAGS + ["-c", SRC, "-o", obj], capture_output=True, text=True, cwd=REPO)
 if r.returncode:
     print("COMPILE-FAIL", (r.stdout + r.stderr)[-300:]); sys.exit(1)
 fh = open(obj, "rb")

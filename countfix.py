@@ -1,6 +1,7 @@
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import buildcfg
 import json
 import os
 import re
@@ -11,9 +12,8 @@ import sys
 REPO = _kp.REPO
 SP = _kp.SP
 KIT = _kp.KIT
-TMP = f"{SP}/wlog/countfix_diff.json"
 BACKUP = f"{SP}/wlog/countfix_backup"
-CFG = f"{REPO}/config/usa/arm9"
+CFG = f"{REPO}/{buildcfg.config_dir('main')}"
 
 
 def config_files(kind):
@@ -32,13 +32,11 @@ def function_locations():
 
 
 def diff_unit(unit):
-    if os.path.exists(TMP):
-        os.remove(TMP)
-    subprocess.run([f"{REPO}/objdiff-cli" + (".exe" if os.name == "nt" else ""), "diff", "-p", REPO, "-u", unit, "-o", TMP, "--format", "json"],
-                   capture_output=True, cwd=REPO)
-    if not os.path.exists(TMP):
+    out = subprocess.run([f"{REPO}/objdiff-cli{buildcfg.EXE}", "diff", "-p", REPO, "-u", unit, "-o", "-",
+                          "--format", "json"], capture_output=True, cwd=REPO).stdout
+    if not out.strip():
         return []
-    d = json.load(open(TMP))
+    d = json.loads(out)
     right = {s["name"]: s for s in d["right"]["symbols"] if "instructions" in s and s.get("name")}
     pairs = []
     for s in d["left"]["symbols"]:
@@ -48,10 +46,13 @@ def diff_unit(unit):
 
 
 def plan(units):
+    from concurrent.futures import ThreadPoolExecutor
     where = function_locations()
     relocs, sizes = [], []
-    for unit in units:
-        for left, right in diff_unit(unit):
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        diffs = list(pool.map(diff_unit, units))
+    for pairs in diffs:
+        for left, right in pairs:
             name = left["name"]
             if len(where.get(name, [])) != 1:
                 continue
@@ -136,7 +137,7 @@ def landed_units(since=None):
 
 
 def report_units():
-    report = json.load(open(f"{REPO}/build/usa/report.json"))
+    report = json.load(open(f"{REPO}/build/{buildcfg.REGION}/report.json"))
     return [u["name"] for u in report["units"] if u["metadata"].get("complete")
             and any(0 < f.get("fuzzy_match_percent", 0) < 100 for f in u.get("functions", []))]
 

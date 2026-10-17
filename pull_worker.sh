@@ -34,19 +34,7 @@ fi
 # 0 of 7 for $16.63. The batch driver had always split these into separate worker types; the pull
 # loop lost that distinction when it was written.
 size_of() {   # $1 = addr -> function size in bytes (0 if unknown)
-  python - "$MARG" "$1" <<'PY'
-import re, sys
-REPO = "$REPO"
-mod, addr = sys.argv[1], sys.argv[2].lower()
-cfg = f"{REPO}/config/usa/arm9" if mod == "main" else f"{REPO}/config/usa/arm9/overlays/ov{mod}"
-try:
-    sym = open(f"{cfg}/symbols.txt", encoding="utf-8", errors="ignore").read()
-    m = re.search(r"kind:function\((?:arm|thumb),size=0x([0-9a-fA-F]+)\)\s+addr:0x0*%s\b"
-                  % addr.lstrip("0"), sym)
-    print(int(m.group(1), 16) if m else 0)
-except OSError:
-    print(0)
-PY
+  python "$KIT/claim.py" "$MARG" --size "$1" 2>/dev/null || echo 0
 }
 
 # THE CAP MUST SCALE WITH THE WORK. A flat $3 is generous for a 4-byte stub and too little for a
@@ -86,7 +74,7 @@ cap_for() {   # $1 = size in bytes
 
 cd "$REPO" || exit 2
 LOG="$SP/wlog/pull_${MOD}_s${SLOT}.log"
-spent=0; matched=0; tried=0
+spent=0; matched=0; tried=0; _post_pid=""
 
 # WORKERS WRITE TO STAGING, NOT TO src/. finish_wave's preflight quarantines untracked .cpp that
 # belong to a module OTHER than the one it is integrating -- correct on its own, since foreign files
@@ -152,7 +140,9 @@ while :; do
   # keeps the procedure plus the recipes whose instruction shapes appear in THIS function's listing,
   # and indexes the rest up top with a fetch command. Costs no model tokens. Falls back to the static
   # doc if selection fails, because a truncated doc still beats no doc.
-  _sel=$(python "$KIT/recipe_select.py" "$MARG" "$ADDR" 2>/dev/null | tr -d '\r' | tr '\\' '/')
+  _lean=""
+  [ "$((RANDOM % 100))" -lt "$(_knob "$SP/PULL_LEAN" '0-9' 0)" ] && _lean="--lean"
+  _sel=$(python "$KIT/recipe_select.py" "$MARG" "$ADDR" $_lean 2>/dev/null | tr -d '\r' | tr '\\' '/')
   if [ -n "$_sel" ] && [ -f "$_sel" ]; then
     DOC="doc_cache/${_sel##*/}"
   else
@@ -219,7 +209,7 @@ while :; do
       fi
     fi
   fi
-  echo "$(date '+%H:%M') s$SLOT claim $ADDR ${FSIZE}B -> $DOC [$MODEL] cap \$$cap" >> "$LOG"
+  echo "$(date '+%H:%M') s$SLOT claim $ADDR ${FSIZE}B -> $DOC [$MODEL${_lean:+ lean}] cap \$$cap" >> "$LOG"
 
   OUT="$SP/wlog/pull_${MOD}_s${SLOT}_${ADDR}.json"
   SESS="s${SLOT}_$(date +%s)"
@@ -313,20 +303,49 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$SRCDIR" 2>/dev/null | head -1)
   [ -z "$f" ] && f=$(grep -rl "USA: ${TAG}${ADDR}" "$STAGE" 2>/dev/null | head -1)
   if [ -n "$f" ] && python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
-    matched=$((matched+1)); v=MATCH
+    _held=""; matched=$((matched+1)); v=MATCH
+    _imp=$(python "$KIT/plausible.py" "$f" 2>/dev/null | sed 's/^.*: //' | grep -oE '^[A-Z][A-Z-]*[A-Z]' | sort -u | tr '\n' ' ')
+    _sid=$(python -c "import json;print(json.load(open(r'$OUT')).get('session_id',''))" 2>/dev/null)
+    if [ -n "$_imp" ] && [ -n "$_sid" ]; then
+      echo "$(date '+%H:%M') s$SLOT $ADDR MATCH carries invented constructs ($_imp) -- worker cleanup" >> "$LOG"
+      WGATE_SESSION="$SESS" timeout -k 30 "${HANG_GUARD:-7200}" claude -p "Your file $f MATCHES, but it uses constructs the original developers could not have written: $_imp. Remove every one of them -- no volatile outside hardware-register defines, no parameter the callers never pass, no self-assignment, no zero-negation padding, no dead address-taking local -- and find a natural form that still MATCHES. Gate with python $KIT/wgate.py $MARG $ADDR $f after every edit. If no natural form matches, put the matching file back exactly as it was." \
+        --resume "$_sid" --model "$MODEL" --permission-mode dontAsk --safe-mode \
+        --disallowedTools "WebFetch" "WebSearch" "NotebookEdit" "Task" "Agent" "TodoWrite" "Artifact" "Monitor" "Skill" \
+        --max-budget-usd "${CLEAN_CAP:-4}" --output-format json \
+        --allowedTools "Bash(python:*)" "Write" "Read" "Edit" "Grep" "Glob" \
+        --add-dir "$SP" \
+        > "$OUT.clean" 2>/dev/null < /dev/null
+      _cc=$(python -c "import json;print('%.4f' % json.load(open(r'$OUT.clean'))['total_cost_usd'])" 2>/dev/null || echo "${CLEAN_CAP:-4}")
+      spent=$(python -c "print(round($spent + $_cc, 4))")
+      _gsuf=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")
+      if ! python "$KIT/wgate.py" "$MARG" "$ADDR" "$f" 2>&1 | tail -1 | grep -q "^MATCH"; then
+        cp "$SP/gated/$_gsuf/$ADDR.cpp" "$f" 2>/dev/null
+      fi
+      _left=$(python "$KIT/plausible.py" --hold "$MARG" "$ADDR" "$f" 2>/dev/null)
+      if [ -n "$_left" ]; then
+        printf '%s\t%s\t%s\t%s\n' "$(date +%F)" "$MARG" "$ADDR" "$_left" >> "$SP/wlog/suspect.tsv"
+        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: still $_left -- HELD in hold_plausible/, queued for cleanwork" >> "$LOG"
+        _held=1
+        matched=$((matched-1)); v=held
+      else
+        echo "$(date '+%H:%M') s$SLOT $ADDR cleanup \$$_cc: natural form MATCHES" >> "$LOG"
+      fi
+    fi
     # A MATCH THE INTEGRATOR CANNOT SEE IS NOT A MATCH. Workers write into $SRCDIR (inside the
     # repo), but pull_all picks the module to integrate by counting files in staging/<module>/ --
     # so a match left only in src/ never triggers integration, and the next wave for a DIFFERENT
     # module quarantines it as a foreign untracked file. ov017:021d4e38 (4796B, $7.72) sat in
     # src/Combat/Overlay_17 with staging empty until it was copied in by hand.
-    mkdir -p "$STAGE"
+    [ -n "$_held" ] || mkdir -p "$STAGE"
     # VERIFY THE COPY, AND FALL BACK TO THE PROOF. A wave for ANOTHER module quarantines this
     # module's untracked .cpp while it runs, so $f routinely vanishes between the gate above and
     # this copy -- and `cp ... 2>/dev/null` said nothing, leaving the match invisible to the
     # integration trigger. ov000:0215858c ($19.23) and ov024:021ea85c both had to be staged by hand.
     # wgate archives every MATCH under gated/<mod>/<addr>.cpp, so that copy is proof and is safe to
     # stage from.
-    if ! cp "$f" "$STAGE/$(basename "$f")" 2>/dev/null || [ ! -s "$STAGE/$(basename "$f")" ]; then
+    if [ -n "$_held" ]; then
+      :
+    elif ! cp "$f" "$STAGE/$(basename "$f")" 2>/dev/null || [ ! -s "$STAGE/$(basename "$f")" ]; then
       _gsuf=$([ "$MOD" = "main" ] && echo main || echo "ov$MOD")
       if [ -s "$SP/gated/$_gsuf/$ADDR.cpp" ]; then
         cp "$SP/gated/$_gsuf/$ADDR.cpp" "$STAGE/$ADDR.cpp"
@@ -357,27 +376,6 @@ except Exception: print('$cap')          # unparseable: charge the cap, never no
     # unconditionally destroyed them: ov024:021f9874 sat at OVERGEN 4 until a later session ended at
     # SHAPE 87 and copied over the same basename, so the ledger still advertised "4 bytes" while the
     # only file behind it was 87 bytes off -- and the near-miss queue sent opus at it on that basis.
-    # SWEEP THE SESSION'S OWN OUTPUT, NOW. This artifact is the closest anyone has been to this
-    # address and colorsweep has never seen it -- the rules only ever reached it through the hourly
-    # repairsweep, which walks a 475-candidate pool in order, so a session ending ONE rule short of
-    # a match sat unswept for hours. It costs CPU, the address is still claimed, and a MATCH here is
-    # a function closed for the price of a compile.
-    if [ -f "$f" ] && [ "$v" != "MATCH" ]; then
-      _post=$(timeout "${POSTSWEEP_TIMEOUT:-900}" python "$KIT/presweep.py" "$MARG" "$ADDR" "$f" --force 2>/dev/null | tr -d '\r')
-      case "$_post" in
-        MATCH*)
-          _pf=${_post#MATCH }
-          mkdir -p "$STAGE"
-          sed 's|^// SCRATCH-USA: func_|// USA: func_|' "$_pf" > "$STAGE/$ADDR.cpp" 2>/dev/null
-          echo "$(date '+%H:%M') s$SLOT postsweep MATCHED $ADDR from this session's own artifact" >> "$LOG"
-          v="MATCH"
-          ;;
-        IMPROVED*)
-          echo "$(date '+%H:%M') s$SLOT postsweep $ADDR ${_post#IMPROVED }" >> "$LOG"
-          ;;
-      esac
-    fi
-
     # Nothing is compared or discarded: a differing artifact lands under a unique name, so the row
     # blocker.py writes always points at the file that actually produced it.
     _keep="-"
@@ -447,7 +445,24 @@ EOF
   fi
   _swept=0
   echo "$(date '+%H:%M') s$SLOT $v $ADDR \$$cost (slot \$$spent/\$$BUDGET)" >> "$LOG"
+  if [ "$v" = miss ] && [ -f "$_keep" ]; then
+    [ -n "$_post_pid" ] && wait "$_post_pid" 2>/dev/null
+    (
+      _post=$(timeout "${POSTSWEEP_TIMEOUT:-900}" python "$KIT/presweep.py" "$MARG" "$ADDR" "$_keep" --force 2>/dev/null | tr -d '\r')
+      case "$_post" in
+        MATCH*)
+          sed 's|^// SCRATCH-USA: func_|// USA: func_|' "${_post#MATCH }" > "$STAGE/$ADDR.cpp" 2>/dev/null
+          echo "$(date '+%H:%M') s$SLOT postsweep MATCHED $ADDR from this session's own artifact" >> "$LOG"
+          ;;
+        IMPROVED*)
+          echo "$(date '+%H:%M') s$SLOT postsweep $ADDR ${_post#IMPROVED }" >> "$LOG"
+          ;;
+      esac
+    ) &
+    _post_pid=$!
+  fi
   (cd "$REPO" && python "$KIT/pad/repool.py" --apply --rev a70058a0 >/dev/null 2>&1)
 done
 
+[ -n "$_post_pid" ] && wait "$_post_pid" 2>/dev/null
 echo "$(date '+%H:%M') s$SLOT done: $matched/$tried matched, \$$spent spent" >> "$LOG"

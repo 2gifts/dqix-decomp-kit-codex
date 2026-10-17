@@ -8,6 +8,8 @@
 # has already reported per file, so nothing is missed and nothing is repeated.
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && { pwd -W 2>/dev/null || pwd; })"
 SP="$(python "$KIT/kitpaths.py" state)"
+ONCE=0
+[ "$1" = "--once" ] && { ONCE=1; shift; }
 EVERY="${1:-60}"
 STATE="$SP/wlog/.verdict_offsets"
 LOG="$SP/wlog/verdictwatch.log"
@@ -20,25 +22,30 @@ trap 'rm -f "$SP/verdictwatch.pid"' EXIT
 mkdir -p "$SP/wlog"
 touch "$STATE"
 
+declare -A OFF
 while :; do
-  for f in "$SP"/wlog/pull_*_s*.log; do
+  OFF=()
+  while read -r b off; do
+    [ -n "$b" ] && OFF[$b]=$off
+  done < "$STATE"
+  changed=0
+  sizes=$(stat -c '%s %n' "$SP"/wlog/pull_*_s*.log 2>/dev/null)
+  while read -r now f; do
     [ -f "$f" ] || continue
-    b=$(basename "$f")
-    off=$(grep -m1 "^$b " "$STATE" 2>/dev/null | awk '{print $2}')
-    case "$off" in ''|*[!0-9]*) off=$(wc -c < "$f") ;; esac
-    now=$(wc -c < "$f")
+    b=${f##*/}
+    off=${OFF[$b]}
+    case "$off" in ''|*[!0-9]*) OFF[$b]=$now; changed=1; continue ;; esac
     if [ "$now" -gt "$off" ]; then
       tail -c "+$((off + 1))" "$f" \
         | grep -E '^[0-9]{2}:[0-9]{2} s[0-9]+ (MATCH|miss|presweep|postsweep)' \
         | sed "s|^|${b%.log} |"
-      grep -v "^$b " "$STATE" > "$STATE.tmp" 2>/dev/null
-      echo "$b $now" >> "$STATE.tmp"
-      mv -f "$STATE.tmp" "$STATE"
-    elif [ "$now" -lt "$off" ]; then
-      grep -v "^$b " "$STATE" > "$STATE.tmp" 2>/dev/null
-      echo "$b $now" >> "$STATE.tmp"
-      mv -f "$STATE.tmp" "$STATE"
     fi
-  done
+    [ "$now" -ne "$off" ] && { OFF[$b]=$now; changed=1; }
+  done <<< "$sizes"
+  if [ "$changed" -eq 1 ]; then
+    for b in "${!OFF[@]}"; do printf '%s %s\n' "$b" "${OFF[$b]}"; done > "$STATE.tmp"
+    mv -f "$STATE.tmp" "$STATE"
+  fi
+  [ "$ONCE" -eq 1 ] && exit 0
   sleep "$EVERY"
 done

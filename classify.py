@@ -77,14 +77,14 @@ def _ctx(MOD):
     if MOD in _CTX: return _CTX[MOD]
     MAIN = (MOD == 'main')
     if MAIN:
-        CFG = f"{REPO}/config/usa/arm9"
-        pristine = open(f"{REPO}/extract/usa/arm9/arm9.bin", "rb").read()
+        CFG = f"{REPO}/{buildcfg.config_dir(MOD)}"
+        pristine = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
         HEXC, PRE, ANCH = "[0-9a-fA-F]", "func_", "(?m)^"   # main's configs mix hex case; the ^ anchor
         # stops `func_<8hex>` from matching inside a `func_ovNNN_<8hex>` symbol (it cannot anyway — `o`
         # is not hex — but the anchor makes that structural rather than accidental).
     else:
-        CFG = f"{REPO}/config/usa/arm9/overlays/ov{MOD}"
-        pristine = open(f"{REPO}/extract/usa/arm9_overlays/ov{MOD}.bin", "rb").read()
+        CFG = f"{REPO}/{buildcfg.config_dir(MOD)}"
+        pristine = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
         HEXC, PRE, ANCH = "[0-9a-f]", f"func_ov{MOD}_", ""
     _dl = open(f"{CFG}/delinks.txt").read()
     # Section map (header block) — ALL code sections, not just .text. `.init` holds
@@ -110,7 +110,7 @@ def _ctx(MOD):
     else:
         base = min(int(m, 16) for m in re.findall(r'start:0x([0-9a-f]+)', _dl))
     symaddr = buildcfg.lcf_symbols()
-    for p in glob.glob(f"{REPO}/config/usa/arm9/**/symbols.txt", recursive=True):
+    for p in glob.glob(f"{REPO}/{buildcfg.config_dir('main')}/**/symbols.txt", recursive=True):
         for l in open(p):
             m = re.match(r'(\S+)\s+kind:\w+[^\n]*?addr:0x([0-9a-fA-F]+)', l)
             if m:
@@ -158,7 +158,7 @@ def _verdicts():
     return _CACHE['verdicts']
 
 
-def classify(MOD, cands, workdir=None, names=None):
+def classify(MOD, cands, workdir=None, names=None, builds=None):
     """cands: {addr: source_text}. Returns {addr: 'TRUSTED'|'RISKY'|<BAD verdict>}.
     MOD: overlay number ("000".."035") or "main".
 
@@ -174,7 +174,11 @@ def classify(MOD, cands, workdir=None, names=None):
     keys = {}
     src = f"{work}/c.cpp"
     obj = f"{work}/c.o"
-    for addr, txt in cands.items():
+    for addr, txt, _b in [(a, t, b) for a, t in cands.items() for b in buildcfg.builds_for(MOD, a)]:
+        if out.get(addr) in ('TRUSTED', 'RISKY'):
+            continue
+        if builds is not None:
+            builds[addr] = _b
         _si = sizes.get(addr)
         if not _si:
             out[addr] = 'NOSLOT'; continue
@@ -187,21 +191,24 @@ def classify(MOD, cands, workdir=None, names=None):
             # Not in any CODE section (rodata/data/bss) -> not an emittable function. Parked, never struck.
             out[addr] = 'SECTION'; continue
         _want = _want or '.text'
-        _cc = cc_for((names or {}).get(addr) or src)
+        _cc = cc_for((names or {}).get(addr) or src) if _b == "game" else buildcfg.build_cc(_b)
+        _bflags = buildcfg.build_flags(_b) + flags_for((names or {}).get(addr) or src)
         if _headers():
-            _flags = " ".join(FLAGS + flags_for((names or {}).get(addr) or src))
+            _flags = " ".join(_bflags)
             keys[addr] = "\t".join((MOD, addr, str(slot), _want, _cc, _headers(),
                                     hashlib.sha1((_flags + "\0" + txt).encode()).hexdigest()))
             if keys[addr] in _verdicts():
                 out[addr] = _verdicts()[keys[addr]]; continue
         open(src, 'w', encoding='utf-8').write(txt)
-        r = subprocess.run([_cc] + FLAGS + flags_for((names or {}).get(addr) or src) + ["-c", src, "-o", obj], capture_output=True, text=True,
+        r = subprocess.run(buildcfg.tool_command(_cc) + _bflags + ["-c", src, "-o", obj], capture_output=True, text=True,
                            cwd=REPO)
         if r.returncode != 0:
             out[addr] = 'COMPILE'; continue
+        buildcfg.postcompile(obj)
         try:
             elf = ELFFile(open(obj, "rb"))
-            texts = [s for s in elf.iter_sections() if s.name == _want]
+            _texts = buildcfg.sections(elf, _want)
+            texts = [s for _, s in _texts]
             # thumb is padded to 4 bytes by the LINKER, not mwcc, so the object may be slot-2.
             _ok = (slot, slot - 2) if _isa == 'thumb' else (slot,)
             if len(texts) != 1 or texts[0]['sh_size'] not in _ok:
@@ -211,15 +218,14 @@ def classify(MOD, cands, workdir=None, names=None):
             symtab = elf.get_section_by_name('.symtab')
             relocs = []
             masked = set()
-            for sec in elf.iter_sections():
-                if sec.name in ('.rel' + _want, '.rela' + _want) and hasattr(sec, 'iter_relocations'):
-                    for rr in sec.iter_relocations():
-                        # a thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes from
-                        # r_offset; rounding down to a word leaves 2 bytes unmasked -> false BYTEDIFF.
-                        o = rr['r_offset']
-                        masked.update(range(o, o + 4) if rr['r_info_type'] in _THM_BR
-                                      else range(o & ~3, (o & ~3) + 4))
-                        relocs.append(rr)
+            for sec in buildcfg.relocations(elf, _texts[0][0]):
+                for rr in sec.iter_relocations():
+                    # a thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes from
+                    # r_offset; rounding down to a word leaves 2 bytes unmasked -> false BYTEDIFF.
+                    o = rr['r_offset']
+                    masked.update(range(o, o + 4) if rr['r_info_type'] in _THM_BR
+                                  else range(o & ~3, (o & ~3) + 4))
+                    relocs.append(rr)
             if [i for i in range(min(len(mine), len(orig)))
                     if i not in masked and mine[i] != orig[i]]:
                 out[addr] = 'BYTEDIFF'; continue

@@ -148,7 +148,9 @@ shape class.
     python -m pip install frida pyyaml
 
 These tools spawn the build's `mwccarm.exe` (2.0/sp2p2) under Frida and hook its backend while it
-compiles one source, so they need a system that runs the compiler natively.
+compiles one source, so they need a system that runs the compiler natively. On Linux, run them
+through `python frida/proton.py <command>`: it runs the compiler under Steam's Proton wine, building
+its own prefix on first use (`wibo` is statically linked and Frida cannot inject into it).
 
 | tool | hooks |
 |---|---|
@@ -163,7 +165,8 @@ compiles one source, so they need a system that runs the compiler natively.
 `colorforce.py` and `schedforce.py` first check that the hooked replay reproduces the native compile.
 The hook addresses belong to that exact compiler binary; another mwccarm build needs new addresses.
 `colorforce.py` and `renum.py` read the ROM through `forcereal.rom` and accept overlays only
-(`ovNNN`); `schedforce.py` also accepts `main`.
+(`ovNNN`); `schedforce.py` also accepts `main`. [COMPILER.md](COMPILER.md) maps the backend and
+covers decompiling it with Ghidra.
 
 ## Keeping up to date
 
@@ -180,7 +183,7 @@ Kit, at the start of every session (`AGENTS.md` makes agents do this themselves)
     python selfcheck.py
 
 `kit_update.py` fetches the published kit and fast-forwards to it, then re-runs `kit_init.py` (with
-`--slow` when the gate or its tests changed). It pulls nothing while `pull_all.pid`, `wave.lock` or
+`--slow` when the gate or its fixtures changed, or the crack tests are not proven for the new code). It pulls nothing while `pull_all.pid`, `wave.lock` or
 `claims/INTEGRATING` exists, or while tracked files have local changes or local commits diverge;
 it says which and exits non-zero. A fork of the kit still updates from `ZevyaDev/dqix-decomp-kit`;
 `DQIX_KIT_URL` and `DQIX_KIT_BRANCH` point it elsewhere.

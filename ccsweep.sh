@@ -9,8 +9,11 @@ REPO="$(python "$KIT/kitpaths.py" repo)"
 OV="$1"; ADDR="$2"; SRC="$3"; EXTRA="$4"
 cd "$REPO" || exit 2
 
-for d in tools/mwccarm/*/*/mwccarm.exe; do
-  ver=$(echo "$d" | sed 's|tools/mwccarm/||; s|/mwccarm.exe||')
+COMPILER_ROOT="$(python "$KIT/buildcfg.py" --compiler-root)" || exit 2
+for d in "$COMPILER_ROOT"/*/*/mwccarm.exe; do
+  [ -f "$d" ] || continue
+  ver=${d#"$COMPILER_ROOT"/}
+  ver=${ver%/mwccarm.exe}
   out=$(MWCC="$ver" WDIFF_FLAGS="$EXTRA" python "$KIT/wdiff.py" "$OV" "$ADDR" "$SRC" </dev/null 2>&1 | head -1)
   printf '%-14s %s\n' "$ver" "$out"
 done

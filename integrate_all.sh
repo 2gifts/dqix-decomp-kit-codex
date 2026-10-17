@@ -14,19 +14,30 @@ REPO="$(python "$(cd "$(dirname "${BASH_SOURCE[0]}")" && { pwd -W 2>/dev/null ||
 LOG="$SP/wlog/integrate_all.log"
 
 echo "=== integrate_all $(date '+%m-%d %H:%M') ===" >> "$LOG"
+BRANCH="${DQIX_BRANCH:-decomp-matching}"
+H0=$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)
 
 # Biggest backlog first: each wave costs the same rebuild whether it lands 1 function or 37.
-for d in $(ls -d "$SP"/staging/*/ 2>/dev/null \
-           | while read -r x; do echo "$(ls "$x"*.cpp 2>/dev/null | wc -l) $x"; done \
-           | sort -rn | awk '$1>0{print $2}'); do
+set -- $(ls -d "$SP"/staging/*/ 2>/dev/null \
+         | while read -r x; do echo "$(ls "$x"*.cpp 2>/dev/null | wc -l) $x"; done \
+         | sort -rn | awk '$1>0{print $2}')
+last_moved=0
+while [ $# -gt 0 ]; do
+  d="$1"; shift
   tag=$(basename "$d")                 # main | ovNNN
   mod=${tag#ov}                        # finish_wave takes main | NNN
   n=$(ls "$d"*.cpp 2>/dev/null | wc -l)
+  defer=defer; [ $# -eq 0 ] && defer=""
   echo "$(date '+%H:%M') --- $tag: $n staged ---" >> "$LOG"
-  bash "$KIT/finish_wave.sh" "$mod" >> "$SP/wlog/int_${tag}.log" 2>&1
+  _before=$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)
+  DQIX_REGIONSYNC=$defer bash "$KIT/finish_wave.sh" "$mod" >> "$SP/wlog/int_${tag}.log" 2>&1
+  last_moved=0; [ "$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)" != "$_before" ] && last_moved=1
   tail -1 "$SP/wlog/int_${tag}.log" >> "$LOG"
 done
 
+if [ "$(git -C "$REPO" rev-parse "$BRANCH" 2>/dev/null)" != "$H0" ] && [ "$last_moved" = 0 ]; then
+  bash "$KIT/regionsync.sh" >> "$LOG" 2>&1
+fi
 echo "$(date '+%H:%M') === done ===" >> "$LOG"
 python "$KIT/cov.py" >> "$LOG" 2>&1
 tail -3 "$LOG"

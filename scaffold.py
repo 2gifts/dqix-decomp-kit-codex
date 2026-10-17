@@ -9,7 +9,7 @@ produces UNDEF-SYM / RELOC-WRONG, the two gate errors that force a full retry.
 None of that needs a model. This emits:
   * an `extern "C"` declaration for every call target, under its CORRECT current name
   * an `extern` declaration for every pool data reference
-  * the USA tag, the right ARM/THUMB macro, and a stub with the right symbol name
+  * the region tag, the right ARM/THUMB macro, and a stub with the right symbol name
   * the target disassembly inline, with call sites annotated by callee name
 
 Arg counts and types are NOT derivable and are left as TODO — that is the worker's job.
@@ -42,6 +42,9 @@ for p in glob.glob(f"{REPO}/{buildcfg.config_dir('main')}/**/symbols.txt", recur
     ends = [int(e, 16) for e in re.findall(r'start:0x[0-9a-fA-F]+\s+end:0x([0-9a-fA-F]+)\s+kind:', open(dl).read())] \
         if os.path.exists(dl) else []
     BOUNDS[tag] = sorted(set(table) | set(ends))
+
+REGION_TAG = buildcfg.REGION.upper()
+
 
 def object_size(tag, addr):
     bounds = BOUNDS.get(tag, [])
@@ -206,7 +209,7 @@ def scaffold(mod, addr):
         L.append("//   2. Keep this exact name and the `// KEEP-NAME` marker below. Renaming it to")
         L.append("//      func_<addr> deletes a symbol the build requires and reds the WHOLE wave.")
         L.append("// KEEP-NAME")
-    L.append(f"// USA: {pfx}{addr}")
+    L.append(f"// {REGION_TAG}: {pfx}{addr}")
     L.append(f'extern "C" {mac} int {symname if not symname.startswith("func_") else "TODO_Name_" + addr}(/* TODO args */) {{')
     L.append("    /* TODO */")
     L.append("}")

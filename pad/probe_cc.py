@@ -24,7 +24,7 @@ FLAGS = list(buildcfg.FLAGS)
 src = sys.argv[1]
 obj = os.path.splitext(src)[0] + ".o"
 FLAGS = FLAGS + os.environ.get("PROBE_FLAGS", "").split()
-r = subprocess.run([os.environ.get("PROBE_CC", CC)] + FLAGS + ["-c", src, "-o", obj],
+r = subprocess.run(buildcfg.tool_command(os.environ.get("PROBE_CC", CC)) + FLAGS + ["-c", src, "-o", obj],
                    capture_output=True, text=True, cwd=REPO)
 if r.returncode:
     print(r.stdout[-3000:] + r.stderr[-3000:])

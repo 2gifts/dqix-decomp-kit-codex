@@ -7,6 +7,7 @@ _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
 import os
 import sys
+import threading
 import time
 
 SP = _kp.SP
@@ -39,10 +40,13 @@ def read(mod, addr):
         return []
 
 
+_APPEND = threading.Lock()
+
+
 def record(mod, addr, sess, cls, metric, src):
     d = f"{SP}/wlog/gates"
     os.makedirs(d, exist_ok=True)
-    with open(path(mod, addr), "a", encoding="utf-8") as fh:
+    with _APPEND, open(path(mod, addr), "a", encoding="utf-8") as fh:
         fh.write("\t".join([str(int(time.time())), sess, cls, str(metric),
                             os.path.basename(str(src))]) + "\n")
 
