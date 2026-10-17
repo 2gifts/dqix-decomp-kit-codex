@@ -1,44 +1,4 @@
-02005ea0 MSL, pinned until the decomp maintainers answer the compiler-flag question
-020042a8 MSL, pinned until the decomp maintainers answer the compiler-flag question
-0200df80 CW runtime ExceptionHandler, exact only at runtime flags -O4,p + exception_terminate, pinned until the decomp maintainers answer the compiler-flag question
-020d3160 NitroSDK OS_VSNPrintf, exact with SRA source at mwcc 2.0/sp1p2 -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020b5758 Nintendo library code (RenderCommand_9), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020bc2f0 Nintendo library code (SoundPlayer), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020bc9d0 Nintendo library code (SoundStream), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020bd190 Nintendo library code (SoundArchive), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020bd7c4 Nintendo library code (SoundArchive), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020bded0 Nintendo library code (SoundArchiveLoader), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020be828 Nintendo library code (SoundArchivePlayer), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020be924 Nintendo library code (SoundArchivePlayer), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c12b4 Nintendo library code (Matrix33), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c15a4 Nintendo library code (Matrix33), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c19d4 Nintendo library code (Matrix43), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c1d60 Nintendo library code (Matrix43), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c223c Nintendo library code (Matrix44), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c28a0 Nintendo library code (Matrix44), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020c338c Nintendo library code (Atan), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020cd494 Nintendo library code (OverlayFSManagement), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020cd610 Nintendo library code (TouchPanel), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020cd908 Nintendo library code (TouchPanel), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020cd99c Nintendo library code (TouchPanel), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020cddec Nintendo library code (TouchPanel), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020ce89c Nintendo library code (PowerManagement), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d0fc4 Nintendo library code (CardReadManager), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d1234 Nintendo library code (CardPullOut), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d135c Nintendo library code (Cartridge), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d19f4 Nintendo library code (CartridgeTask), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d1d1c Nintendo library code (Checksum), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d2d00 Nintendo library code (SoundDriverBank), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d40bc Nintendo library code (WirelessSystem), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d424c Nintendo library code (WirelessSystem), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d42e0 Nintendo library code (WirelessSystem), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d4770 Nintendo library code (WirelessSync), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d49c4 Nintendo library code (WirelessSync), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d4c7c Nintendo library code (WirelessSync), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d5684 Nintendo library code (WirelessMP), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d5d34 Nintendo library code (WirelessDataSharing), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d5fd0 Nintendo library code (WirelessDataSharing), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d6318 Nintendo library code (WirelessDataSharing), exact only at -O4,p, pinned until the decomp maintainers answer the compiler-flag question
-020d16b0 NitroSDK ctrdg_proc.c, exact only with optimize_for_size off (the library's ,p build), pinned until the decomp maintainers answer the compiler-flag question
-020c745c NitroSDK stack-size reader (SDK_SYS_STACKSIZE/SDK_IRQ_STACKSIZE), exact at -O2,p and -O4,p (4-op arm branched, conditional add sp/pop), pinned until the decomp maintainers answer the compiler-flag question
-020c0cd0 DGT HMAC library code, exact only at -O4,p (copied framed epilogue on the guard exit, rotated loops), pinned until the decomp maintainers answer the compiler-flag question
+02005ea0 MSL, needs the MSL build (-O4,p on sp1p5 or later), which configure.py does not define yet
+020042a8 MSL, needs the MSL build (-O4,p on sp1p5 or later), which configure.py does not define yet
+0200df80 CW runtime ExceptionHandler, exact only at runtime flags -O4,p + exception_terminate, which configure.py does not define yet
+02003418 MSL __pformatter, byte-exact only at -O4,p / -O3,p, needs the MSL build, which configure.py does not define yet

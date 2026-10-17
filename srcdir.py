@@ -35,4 +35,7 @@ def for_module(mod):
 
 
 if __name__ == "__main__":
-    print(for_module(sys.argv[1]))
+    if sys.argv[1] == "--lib":
+        print(buildcfg.lib_dir(sys.argv[2], sys.argv[3]) if len(sys.argv) > 3 else " ".join(buildcfg.lib_dirs(sys.argv[2])))
+    else:
+        print(for_module(sys.argv[1]))

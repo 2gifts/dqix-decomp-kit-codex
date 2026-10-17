@@ -42,6 +42,15 @@ def link_dir(src, dst):
         os.symlink(src, dst)
 
 
+def exclude(pattern):
+    path = os.path.join(INTEG, git("rev-parse", "--git-path", "info/exclude", cwd=INTEG))
+    text = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+    if pattern not in text.splitlines():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(("\n" if text and not text.endswith("\n") else "") + pattern + "\n")
+
+
 def create():
     git("worktree", "prune")
     git("worktree", "add", "--detach", INTEG, BRANCH)
@@ -49,13 +58,34 @@ def create():
     for name in os.listdir(f"{REPO}/extract"):
         if os.path.isdir(f"{REPO}/extract/{name}") and not any(t.startswith(f"extract/{name}/") for t in tracked):
             link_dir(f"{REPO}/extract/{name}", f"{INTEG}/extract/{name}")
+            exclude(f"/extract/{name}")
     for name in ("arm7_bios.bin",):
         if os.path.isfile(f"{REPO}/{name}") and not os.path.exists(f"{INTEG}/{name}"):
             shutil.copy2(f"{REPO}/{name}", f"{INTEG}/{name}")
 
 
+def bootstrap():
+    env = dict(os.environ, DQIX_REPO=INTEG, DQIX_REGION=REGION)
+    cc = subprocess.run([sys.executable, f"{_kp.KIT}/buildcfg.py", "--cc"], cwd=INTEG, env=env,
+                        capture_output=True, text=True, check=True).stdout.strip()
+    if os.path.isfile(f"{INTEG}/build.ninja") and os.path.isfile(cc):
+        return
+    cmd = [sys.executable, "tools/configure.py", REGION, "--no-extract"]
+    if os.environ.get("DQIX_PREINSTALLED_COMPILER"):
+        cmd += ["--compiler", os.environ["DQIX_PREINSTALLED_COMPILER"]]
+    if os.environ.get("DQIX_WINE"):
+        cmd += ["-w", os.environ["DQIX_WINE"]]
+    subprocess.run(cmd, cwd=INTEG, env=env, stdout=sys.stderr, check=True)
+    if not os.path.isfile(cc):
+        subprocess.run(["ninja", os.path.relpath(cc, INTEG).replace("\\", "/")], cwd=INTEG, env=env,
+                       stdout=sys.stderr, check=True)
+    if not (os.path.isfile(f"{INTEG}/build.ninja") and os.path.isfile(cc)):
+        sys.exit(f"integration tree {INTEG} has no build.ninja or no compiler at {cc}")
+
+
 def sync():
     if OFF:
+        bootstrap()
         return INTEG
     if not os.path.exists(f"{INTEG}/.git"):
         create()
@@ -66,6 +96,7 @@ def sync():
         if remote != tip and ancestor(tip, remote):
             tip = remote
     git("checkout", "-q", "-f", "--detach", head if ancestor(tip, head) else tip, cwd=INTEG)
+    bootstrap()
     return INTEG
 
 
@@ -117,7 +148,10 @@ if __name__ == "__main__":
     if cmd == "path":
         print(INTEG)
     elif cmd == "sync":
-        print(sync())
+        try:
+            print(sync())
+        except subprocess.CalledProcessError as e:
+            sys.exit(f"integration tree setup failed (exit {e.returncode}): {e.cmd}")
     elif cmd == "publish":
         sys.exit(publish())
     elif cmd == "report":

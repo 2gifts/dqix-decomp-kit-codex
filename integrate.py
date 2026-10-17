@@ -21,6 +21,7 @@ Anything that fails is moved out of src/ to a stage dir so it cannot poison the 
 import os as _kpos, sys as _kpsys
 _kpsys.path.insert(0, _kpos.path.dirname(_kpos.path.abspath(__file__)))
 import kitpaths as _kp
+import plausible as _plausible
 import bisect
 import glob
 import importlib.util as _ilu
@@ -41,6 +42,7 @@ KIT = _kp.KIT
 REPO = os.environ.get("DQIX_REPO", _kp.REPO)
 CC = buildcfg.CC
 FLAGS = list(buildcfg.FLAGS)
+REGION_TAG = buildcfg.REGION.upper()
 
 _spec = _ilu.spec_from_file_location("autorepair", f"{KIT}/autorepair.py")
 _autorepair = _ilu.module_from_spec(_spec)
@@ -56,8 +58,8 @@ os.chdir(REPO)
 
 # ---- the ONLY module-dependent values -------------------------------------------------------
 if MAIN:
-    CFG = "config/usa/arm9"
-    PRISTINE = open(f"{REPO}/extract/usa/arm9/arm9.bin", "rb").read()
+    CFG = buildcfg.config_dir(MOD)
+    PRISTINE = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
     PREFIX = "func_"
     # ALL of src/, not the module's own directory. The `// USA: <PREFIX><addr>` tag decides which
     # module a file belongs to, and main functions live outside src/Combat/Main -- src/System/
@@ -68,8 +70,8 @@ if MAIN:
     WLOG = f"{SP}/wlog/integ_main.txt"
     LBL = "main"
 else:
-    CFG = f"config/usa/arm9/overlays/ov{MOD}"
-    PRISTINE = open(f"{REPO}/extract/usa/arm9_overlays/ov{MOD}.bin", "rb").read()
+    CFG = buildcfg.config_dir(MOD)
+    PRISTINE = open(f"{REPO}/{buildcfg.pristine(MOD)}", "rb").read()
     PREFIX = f"func_ov{MOD}_"
     SRCDIR = SRCDIR or "src"        # see the note above: the tag, not the directory, selects module
     STAGE = f"{SP}/ov{MOD}_stage"
@@ -88,8 +90,14 @@ except IOError:
 
 
 def cc_for(path):
+    if buildcfg.path_build(path) != "game":
+        return buildcfg.build_cc(buildcfg.path_build(path))
     v = _CC_OVR.get(os.path.basename(str(path)))
-    return buildcfg.cc_path(v) if v else CC
+    return buildcfg.cc_path(v)
+
+
+def flags_for(path):
+    return buildcfg.build_flags(buildcfg.path_build(path))
 
 
 def _read_keep_nl(p):
@@ -111,7 +119,7 @@ delinks, DEL_NL = _read_keep_nl(f"{CFG}/delinks.txt")
 # section and hard-errors when the total exceeds the section, which only bites once a delink splits
 # that module. Declaring them label(arm) makes dsd emit them size-0. Re-applied every run because
 # run_main.sh does `git checkout HEAD -- config/` immediately before calling us.
-if MAIN:
+if MAIN and buildcfg.REGION == "usa":
     _fixed = []
     for _lbl in (".L_0200c274", ".L_0200d484"):
         if f"{_lbl} kind:data(byte[256])" in symtxt:
@@ -160,7 +168,7 @@ def section_for(addr):
 # and every symbol's address, so a relocation can be checked against what the ROM really calls.
 SYMADDR = buildcfg.lcf_symbols()
 SYMSET = set(SYMADDR)
-for _p in glob.glob("config/usa/arm9/**/symbols.txt", recursive=True):
+for _p in glob.glob(f"{buildcfg.config_dir('main')}/**/symbols.txt", recursive=True):
     try:
         for _l in open(_p, encoding="utf-8", errors="ignore"):
             if " kind:" in _l:
@@ -199,9 +207,9 @@ for f in sorted(glob.glob(f"{SRCDIR}/**/*.cpp", recursive=True)
     fn = f.replace("\\", "/")
     txt = open(f, encoding="utf-8", errors="ignore").read()
     if tracked(fn) and all(a.lower() in DELINKED for a in
-                           re.findall(rf"// USA: {PREFIX}([0-9a-fA-F]{{8}})\b", txt)):
+                           re.findall(rf"// {REGION_TAG}: {PREFIX}([0-9a-fA-F]{{8}})\b", txt)):
         continue
-    tags = {a.lower() for a in re.findall(rf"// USA: {PREFIX}([0-9a-fA-F]{{8}})\b", txt)}
+    tags = {a.lower() for a in re.findall(rf"// {REGION_TAG}: {PREFIX}([0-9a-fA-F]{{8}})\b", txt)}
     for addr in tags:
         # Keyed on the ADDRESS. Keying on the func_ name hid every function whose ROM symbol is
         # curated or mangled: they were placed, gated, then reported as "0 pending files".
@@ -318,11 +326,8 @@ newdelinks = delinks
 RELOCS, RELOCS_TOUCHED = None, {}
 os.makedirs(f"{SP}/wlog", exist_ok=True)
 
-ASMPAT = re.compile(r'(?m)^\s*asm\b|\basm\s+(?:void|int|unsigned|char|long|short)\b')
-ASM_ALLOW = set()
-for _l in open(f"{KIT}/asm_allow.txt", encoding="utf-8").read().splitlines():
-    _l = _l.split('#', 1)[0].strip()
-    if _l: ASM_ALLOW.add(_l.split()[0].lower())
+from pragmas import HAND_ASM as ASMPAT, asm_allow
+ASM_ALLOW = asm_allow()
 
 ORIGINAL = {}
 for f, addr in pending:
@@ -349,6 +354,12 @@ for f, addr in pending:
     # to batch. The allowlist is the single control point for both integrators.
     if addr not in ASM_ALLOW and ASMPAT.search(open(f, encoding="utf-8", errors="ignore").read()):
         print(f"ASM-SKIP {f} @0x{addr}: hand-asm and not on the asm allowlist — SKIP")
+        fails.append((f, addr))
+        continue
+
+    held = _plausible.hold(f, MOD, addr)
+    if held:
+        print(f"IMPLAUSIBLE {f} @0x{addr}: {','.join(held)} — held for cleanwork, SKIP")
         fails.append((f, addr))
         continue
 
@@ -382,7 +393,7 @@ for f, addr in pending:
     # on the ARM|THUMB line made every allowlisted asm function NO-DEF, so it never got renamed to
     # its ROM symbol and the wave reported wired-0. At most one newline, so this still cannot walk
     # into the next function.
-    m = re.search(rf"(// USA: {raw}[^\n]*\n)(.*?)(\b(?:ARM|THUMB)\b[ \t]*\n?[ \t]*(?:asm[ \t]+)?[^\n;{{]*?\b)(\w+)(\s*\()", ftxt, re.S)
+    m = re.search(rf"(// {REGION_TAG}: {raw}[^\n]*\n)(.*?)(\b(?:ARM|THUMB)\b[ \t]*\n?[ \t]*(?:asm[ \t]+)?[^\n;{{]*?\b)(\w+)(\s*\()", ftxt, re.S)
     if not m and not keepname:
         print(f"NO-DEF {f} @0x{addr}: cannot locate def to rename — SKIP")
         fails.append((f, addr))
@@ -397,7 +408,7 @@ for f, addr in pending:
         newhdr = m.group(1) + m.group(2) + ("" if has_ec else 'extern "C" ') + m.group(3) + want + m.group(5)
         ftxt = ftxt[:m.start()] + newhdr + ftxt[m.end():]
         if sem != want:
-            ftxt = ftxt.replace(f"// USA: {raw}", f"// USA: {raw}  (semantic: {sem})", 1)
+            ftxt = ftxt.replace(f"// {REGION_TAG}: {raw}", f"// {REGION_TAG}: {raw}  (semantic: {sem})", 1)
             # A RECURSIVE CALL IS A REFERENCE TO THE NAME WE JUST RETIRED. Renaming only the
             # definition left `UpdateAndRenderDebugList_02029988(...)` inside func_02029988 on
             # main:02029988, so the file never compiled again and every sweep re-reported it.
@@ -417,19 +428,21 @@ for f, addr in pending:
             open(f, "w", encoding="utf-8", newline="\n").write(ftxt)
 
     obj = f"{SP}/_int_{LBL}_{os.getpid()}.o"
-    r = subprocess.run([cc_for(f)] + FLAGS + ["-c", cf, "-o", obj], capture_output=True, text=True)
+    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + flags_for(f) + ["-c", cf, "-o", obj], capture_output=True, text=True)
     if r.returncode != 0:
         verdicts.append(("COMPILE", addr))
         print("COMPILE FAIL", f, (r.stdout + r.stderr)[-300:])
         fails.append((f, addr))
         continue
 
+    buildcfg.postcompile(obj)
     elf = ELFFile(open(obj, "rb"))
     secname = "." + sec
     # A .init function emits no .text at all, and its relocations live in .rel.init -- looking only
     # at .text reported total=0x0 and rejected byte-exact files.
-    texts = [s for s in elf.iter_sections() if s.name == secname]
-    text_index = next((i for i, s in enumerate(elf.iter_sections()) if s.name == secname), None)
+    _texts = buildcfg.sections(elf, secname)
+    texts = [s for _, s in _texts]
+    text_index = _texts[0][0] if _texts else None
     total = sum(s["sh_size"] for s in texts)
     slot = size_of(addr)
     if slot is None:
@@ -446,14 +459,13 @@ for f, addr in pending:
 
     # Mask relocated bytes: bl targets and pool words are linker-resolved and meaningless here.
     reloc_off = set()
-    for s in elf.iter_sections():
-        if s.name in (".rel" + secname, ".rela" + secname) and hasattr(s, "iter_relocations"):
-            for rr in s.iter_relocations():
-                o = rr["r_offset"]
-                # A thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes; `&~3` would
-                # leave 2 of them unmasked and report a false BYTEDIFF.
-                reloc_off.update(range(o, o + 4) if rr["r_info_type"] in _THM_BR
-                                 else range(o & ~3, (o & ~3) + 4))
+    for s in buildcfg.relocations(elf, text_index):
+        for rr in s.iter_relocations():
+            o = rr["r_offset"]
+            # A thumb BL/BLX pair sits at a HALFWORD offset and spans 4 bytes; `&~3` would
+            # leave 2 of them unmasked and report a false BYTEDIFF.
+            reloc_off.update(range(o, o + 4) if rr["r_info_type"] in _THM_BR
+                             else range(o & ~3, (o & ~3) + 4))
 
     mine = texts[0].data()[:slot]
     orig = PRISTINE[a - BASE:a - BASE + slot]
@@ -558,6 +570,10 @@ for f, addrs in sorted(TU.items()):
     if not all(x in ASM_ALLOW for x in addrs) and ASMPAT.search(open(f, encoding="utf-8", errors="ignore").read()):
         tu_fail(f, addrs, "ASM-SKIP", "hand-asm and not on the asm allowlist")
         continue
+    held = _plausible.hold(f, MOD, addrs[0])
+    if held:
+        tu_fail(f, addrs, "IMPLAUSIBLE", ",".join(held) + " -- held for cleanwork")
+        continue
 
     head, blocks = delink_blocks(newdelinks)
     keep, dropped, blocked, at = [], [], None, None
@@ -580,14 +596,15 @@ for f, addrs in sorted(TU.items()):
     at = len(keep) if at is None else at
 
     obj = f"{SP}/_int_{LBL}_{os.getpid()}.o"
-    r = subprocess.run([cc_for(f)] + FLAGS + ["-c", f, "-o", obj], capture_output=True, text=True)
+    r = subprocess.run(buildcfg.tool_command(cc_for(f)) + flags_for(f) + ["-c", f, "-o", obj], capture_output=True, text=True)
     if r.returncode != 0:
         tu_fail(f, addrs, "COMPILE", (r.stdout + r.stderr)[-300:])
         continue
+    buildcfg.postcompile(obj)
     elf = ELFFile(open(obj, "rb"))
     symtab = elf.get_section_by_name(".symtab")
     sections = list(elf.iter_sections())
-    tidx = [i for i, s in enumerate(sections) if s.name == "." + sec]
+    tidx = [i for i, _ in buildcfg.sections(elf, "." + sec)]
     if [sections[i]["sh_size"] for i in tidx] != slots:
         tu_fail(f, addrs, "SIZE", f"{[hex(sections[i]['sh_size']) for i in tidx]} want {[hex(x) for x in slots]}")
         continue

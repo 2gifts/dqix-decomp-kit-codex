@@ -31,13 +31,14 @@ TAG = "" if NSHARD == 1 else f"_{SHARD}of{NSHARD}"
 WORK = f"{SP}/repair_work{TAG}"
 os.makedirs(WORK, exist_ok=True)
 
-sym = {}
+sym, fsizes = {}, {}
 for p in [f"{REPO}/config/usa/arm9/symbols.txt"] + \
          sorted(glob.glob(f"{REPO}/config/usa/arm9/overlays/*/symbols.txt")):
     mod = "main" if "overlays" not in p else re.search(r'ov(\d+)', p).group(1)
-    for m in re.finditer(r'^\S+ kind:function\(\w+,size=0x[0-9a-fA-F]+\) addr:0x([0-9a-fA-F]{8})',
+    for m in re.finditer(r'^\S+ kind:function\(\w+,size=0x([0-9a-fA-F]+)\) addr:0x([0-9a-fA-F]{8})',
                          open(p, encoding="utf-8", errors="ignore").read(), re.M):
-        sym.setdefault(m.group(1).lower(), mod)
+        sym.setdefault(m.group(2).lower(), mod)
+        fsizes.setdefault(m.group(2).lower(), int(m.group(1), 16))
 
 done = set()
 ranges = []
@@ -143,39 +144,18 @@ def gate(mod, addr, path, flags=""):
 FLAG_SETS = [s for s in os.environ.get("SWEEP_FLAG_SETS", "-O3|-O4|-opt speed|-inline on").split("|") if s]
 
 
-def try_flags(mod, addr, work):
-    """-> None always. Records a flag match as a LEAD; deliberately does NOT land it.
-
-    A flag match is a DIAGNOSIS, not a result. The original build almost certainly used ONE flag set,
-    so a function that matches only under -O4 is telling you our source carries something -O4 deletes
-    and the ROM's source never had -- the C is wrong in a specific, findable way. Landing it behind an
-    override gates green and looks finished while hiding that error, which is the same trap as a
-    committed pragma. Registering an override is a deliberate act for a human with a reason, never a
-    sweep's default.
-    """
+def flag_lead(mod, addr, work):
     for flags in FLAG_SETS:
         if gate(mod, addr, work, flags).splitlines()[-1:] == ["MATCH"]:
-            with open(f"{SP}/wlog/flag_leads.txt", "a", encoding="utf-8", newline="\n") as fh:
-                fh.write("%s\t%s\t%s\n" % (mod, addr, flags))
-            print(f"  FLAG-LEAD {mod} {addr} matches under {flags} -- our source carries something "
-                  f"{flags} removes. NOT landed; fix the source.", flush=True)
-            return None
-            _t = open(work, encoding="utf-8", errors="ignore").read()
-            _d = re.search(r'(?:extern\s+"C"\s+)?(?:ARM|THUMB)\b[^\n(;{]*?\b(\w+)\s*\(', _t)
-            name = (_d.group(1) if _d else f"func_{addr}") + ".cpp"
-            src = f"src/Combat/{'Main' if mod == 'main' else 'Overlay_' + str(int(mod))}/{name}"
-            tbl = f"{REPO}/tools/cc_flag_overrides.txt"
-            have = ""
-            try:
-                have = open(tbl, encoding="utf-8").read()
-            except IOError:
-                pass
-            if src not in have:
-                with open(tbl, "a", encoding="utf-8", newline="\n") as fh:
-                    fh.write("%s %s\n" % (src, flags))
-            print(f"  FLAG-MATCH {mod} {addr} under {flags} (override registered)", flush=True)
             return flags
-    return None
+    return ""
+
+
+def record_lead(mod, addr, flags):
+    with open(f"{SP}/wlog/flag_leads.txt", "a", encoding="utf-8", newline="\n") as fh:
+        fh.write("%s\t%s\t%s\n" % (mod, addr, flags))
+    print(f"  FLAG-LEAD {mod} {addr} matches under {flags} -- our source carries something "
+          f"{flags} removes. NOT landed; fix the source.", flush=True)
 
 
 def add_initcode(path):
@@ -207,6 +187,26 @@ COLORSWEEP_BUDGET_MAX = int(os.environ.get("COLORSWEEP_BUDGET_MAX", "400"))
 COLORSWEEP_BUDGET = int(os.environ.get("COLORSWEEP_BUDGET", "150"))
 COLORSWEEP_DEPTH = int(os.environ.get("COLORSWEEP_DEPTH", "3"))
 
+def _says(verdict, *heads):
+    return any(line.startswith(heads) for line in verdict.splitlines())
+
+
+def sweep_budget(verdict, fsize):
+    _sz = re.search(r"total=0x([0-9a-fA-F]+)\s+slot=0x([0-9a-fA-F]+)", verdict)
+    _near_size = bool(_sz) and (abs(int(_sz.group(1), 16) - int(_sz.group(2), 16))
+                                <= max(16, int(_sz.group(2), 16) // 32))
+    if not (_says(verdict, "BYTEDIFF", "DIFF") or _near_size):
+        return None
+    _slot = re.search(r"slot=0x([0-9a-fA-F]+)", verdict)
+    fsize = int(_slot.group(1), 16) if _slot else fsize
+    max_bytes = max(COLORSWEEP_MAX_BYTES, fsize // 16)
+    budget = min(COLORSWEEP_BUDGET + fsize // 8, COLORSWEEP_BUDGET_MAX)
+    nbytes = re.search(r"(\d+) bytes", verdict)
+    if _near_size or (nbytes and int(nbytes.group(1)) <= max_bytes):
+        return budget
+    return None
+
+
 def rank(verdict):
     """Order two verdicts on the same address. Right-length beats wrong-length, as colorsweep
     scores, so a size-exact BYTEDIFF 28 outranks an OVERGEN 4 that never reached the slot."""
@@ -221,6 +221,26 @@ def rank(verdict):
     return (3, 1 << 30)
 
 
+def asmparked(mods):
+    """Addresses ov_recover already parked as hand-asm off the allowlist, per module.
+
+    ov_recover writes wlog/asmpark_<sub>.txt when it moves those sources to asm_park_<sub>/. The
+    files stay in gated/ afterwards, so anything that promotes out of gated/ by MATCH verdict alone
+    resurrects them: a MATCH is not permission to land, because hand-asm is byte-exact by
+    construction and is then refused by place() on asm policy. main 0200c0e4, 0200c14c and 020ca650
+    went round this loop every wave -- rescued here, refused by the wave, re-parked by ov_recover,
+    rescued again -- costing a full rebuild each time for 0 commits.
+    """
+    out = {}
+    for sub in mods:
+        p = f"{SP}/wlog/asmpark_{sub}.txt"
+        try:
+            out[sub] = {a.strip().lower() for a in open(p, encoding='utf-8').read().split() if a.strip()}
+        except OSError:
+            out[sub] = set()
+    return out
+
+
 def rescue_gated():
     """Copy proven matches out of gated/ into staging/ so an integration can SEE them.
 
@@ -230,8 +250,12 @@ def rescue_gated():
     then and the `cp ... 2>/dev/null` fails silently. pull_all picks what to integrate by counting
     staging/, so the match becomes invisible: ov000:0215858c ($19.23) and ov024:021ea85c both had to
     be staged by hand. gated/ is proof, so it is safe to promote from.
+
+    An address ov_recover already parked as hand-asm is NOT promoted: see asmparked().
     """
     n = 0
+    subs = {m if m == "main" else "ov" + m for m in sym.values()}
+    parked = asmparked(subs)
     for f in glob.glob(f"{SP}/gated/*/*.cpp"):
         m = re.search(r"([0-9a-fA-F]{8})\.cpp$", os.path.basename(f))
         if not m:
@@ -240,6 +264,8 @@ def rescue_gated():
         if addr in done or addr not in sym:
             continue
         mod = sym[addr]
+        if addr in parked.get(mod if mod == "main" else "ov" + mod, ()):
+            continue
         if gate(mod, addr, f).splitlines()[-1:] != ["MATCH"]:
             continue
         stage = f"{SP}/staging/" + ("main" if mod == "main" else "ov" + mod)
@@ -252,23 +278,97 @@ def rescue_gated():
     return n
 
 
-hits, stuck, verdicts = [], {}, []
-vanished = 0
-for i, (mod, addr, f) in enumerate(jobs):
-    work = f"{WORK}/{mod}_{addr}.cpp"
+SWEEPCACHE = f"{SP}/sweepcache"
+
+
+def _fingerprint(scripts, envs):
+    h = hashlib.md5()
+    for p in [f"{KIT}/{s}" for s in scripts] + [f"{REPO}/tools/configure.py"]:
+        try:
+            h.update(open(p, "rb").read())
+        except OSError:
+            h.update(b"-")
+    for k in envs + ("MWCC", "DQIX_REGION"):
+        h.update(("%s=%s;" % (k, os.environ.get(k, ""))).encode())
+    return h.hexdigest()
+
+
+def cache_key(fingerprint, text, *parts):
+    h = hashlib.md5()
+    for part in (fingerprint,) + parts:
+        h.update(str(part).encode("utf-8", "replace") + b"\0")
+    h.update(text)
+    return h.hexdigest()
+
+
+def cached_lead(cache, key, probe):
+    path = f"{cache}/{key}.lead"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        pass
+    lead = probe()
+    os.makedirs(cache, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(lead)
+    os.replace(tmp, path)
+    return lead
+
+
+def sweep_picks(rows):
+    picks = {}
+    for k, (addr, verdict, budget) in enumerate(rows):
+        if budget is None:
+            continue
+        if addr not in picks or rank(verdict) < rank(rows[picks[addr]][1]):
+            picks[addr] = k
+    return picks
+
+
+def cached_sweep(cache, key, work, sweep):
+    path = f"{cache}/{key}.txt"
+    try:
+        with open(path, "rb") as fh:
+            swept = fh.read().replace(b"// SCRATCH-USA: func_", b"// USA: func_")
+    except OSError:
+        if not sweep():
+            return None
+        with open(work, "rb") as fh:
+            swept = fh.read()
+        os.makedirs(cache, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(swept.replace(b"// USA: func_", b"// SCRATCH-USA: func_"))
+        os.replace(tmp, path)
+        return False
+    with open(work, "wb") as fh:
+        fh.write(swept)
+    return True
+
+
+def colorsweep(mod, addr, work, budget):
+    r = subprocess.run([sys.executable, f"{KIT}/colorsweep.py", mod, addr, work,
+                        "--depth", str(COLORSWEEP_DEPTH),
+                        "--budget", str(budget), "--apply"],
+                       capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
+    return "RESULT " in (r.stdout or "") or "SWEEP-SKIP" in (r.stdout or "")
+
+
+def repair(mod, addr, f, work):
     # a concurrent wave can move a parked file between the glob and this read
     try:
         src = open(f, encoding="utf-8").read()
     except OSError:
-        vanished += 1
-        continue
+        return None
     # A clsbest artifact keeps its `// USA:` tag defused so ov_recover.gather() cannot mistake an
     # unmatched variant for a wave candidate; the sweep is the only thing meant to read it.
     src = src.replace("// SCRATCH-USA: func_", "// USA: func_")
     open(work, "w", encoding="utf-8", newline="\n").write(src)
     verdict = gate(mod, addr, work)
     verdict0 = verdict
-    if verdict.startswith("UNDEF-SYM"):
+    if _says(verdict, "UNDEF-SYM"):
         subprocess.run([sys.executable, f"{KIT}/fixundef.py", mod, addr, work],
                        capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
         verdict = gate(mod, addr, work)
@@ -276,57 +376,62 @@ for i, (mod, addr, f) in enumerate(jobs):
         # correctly-named callee declared extern "C" when the ROM symbol is mangled -- no address to
         # key on, and autorepair is the only thing that fixes it. This sweep never called autorepair
         # at all, so every parked file with that fault was invisible to it.
-        if verdict.startswith("UNDEF-SYM"):
+        if _says(verdict, "UNDEF-SYM"):
             subprocess.run([sys.executable, f"{KIT}/autorepair.py", mod, addr, work],
                            capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
             verdict = gate(mod, addr, work)
     if "total=0x0" in verdict and ".init" in verdict and add_initcode(work):
         verdict = gate(mod, addr, work)
-        if verdict.startswith("UNDEF-SYM"):
+        if _says(verdict, "UNDEF-SYM"):
             subprocess.run([sys.executable, f"{KIT}/fixundef.py", mod, addr, work],
                            capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
             verdict = gate(mod, addr, work)
-    # SIZE/OVERGEN is the BIGGEST stuck bucket (40 of 60 in the last full sweep, vs 15 BYTEDIFF),
-    # and a function that is a few bytes too long is usually carrying one redundant register copy
-    # -- exactly what these rewrites remove. colorsweep scores wrong-length candidates behind
-    # right-length ones, so it can climb out of the oversized space instead of refusing to start.
-    # SCALE THE "near" THRESHOLD WITH THE FUNCTION, for the same reason max_bytes below scales: a
-    # flat 16 bytes admitted 35 of 129 parked SIZE candidates, and a 4KB function 40 bytes out is
-    # proportionally closer than a 256B function 16 bytes out.
-    _sz = re.search(r"total=0x([0-9a-fA-F]+)\s+slot=0x([0-9a-fA-F]+)", verdict)
-    _near_size = bool(_sz) and (abs(int(_sz.group(1), 16) - int(_sz.group(2), 16))
-                                <= max(16, int(_sz.group(2), 16) // 32))
-    if verdict.startswith("BYTEDIFF") or verdict.startswith("DIFF") or _near_size:
-        # COLOUR SWEEP. A parked file that is a handful of bytes off is usually not wrong, it
-        # just put a value in the wrong register. colorsweep rewrites it in meaning-preserving
-        # ways (operand order, compound-assign side, declaration order, post-increment
-        # placement) and keeps whatever compiles smaller -- strcpy and strcat both closed this
-        # way in under 10 compiles. Capped, because a big function generates many candidates
-        # and this runs over the whole parked pool.
-        # SCALE THE CUTOFF AND THE BUDGET WITH THE FUNCTION. A flat 24-byte cutoff means a
-        # 4000-byte function is only swept when it is already within 24 bytes -- practically a
-        # match -- while its ordinary register residue is hundreds. A big function also has more
-        # candidate sites, so a flat budget buys proportionally fewer of them. Both now scale off
-        # the slot size, which every verdict line carries.
-        _slot = re.search(r"slot=0x([0-9a-fA-F]+)", verdict)
-        fsize = int(_slot.group(1), 16) if _slot else 0
-        max_bytes = max(COLORSWEEP_MAX_BYTES, fsize // 16)
-        # CEILING. Unbounded, a 10KB function asks for 1355 compiles of a 10KB function -- hours,
-        # for one candidate, inside a pass that has 280 of them.
-        budget = min(COLORSWEEP_BUDGET + fsize // 8, COLORSWEEP_BUDGET_MAX)
-        nbytes = re.search(r"(\d+) bytes", verdict)
-        if _near_size or (nbytes and int(nbytes.group(1)) <= max_bytes):
-            subprocess.run([sys.executable, f"{KIT}/colorsweep.py", mod, addr, work,
-                            "--depth", str(COLORSWEEP_DEPTH),
-                            "--budget", str(budget), "--apply"],
-                           capture_output=True, text=True, cwd=REPO, stdin=subprocess.DEVNULL)
-            verdict = gate(mod, addr, work)
-            if verdict.startswith("MATCH"):
-                print(f"  colorsweep closed {mod} {addr}", flush=True)
+    with open(work, "rb") as fh:
+        return fh.read(), verdict0, verdict
+
+
+hits, stuck, verdicts = [], {}, []
+vanished = 0
+repaired = []
+for i, (mod, addr, f) in enumerate(jobs):
+    work = f"{WORK}/{mod}_{addr}.cpp"
+    got = repair(mod, addr, f, work)
+    if got is None:
+        vanished += 1
+        continue
+    repaired.append((i, mod, addr, f) + got)
+    if i % 100 == 99:
+        print(f"  ...gated {i+1}/{len(jobs)}", flush=True)
+
+budgets =[sweep_budget(v, fsizes.get(addr, 0)) for _i, _m, addr, _f, _t, _v0, v in repaired]
+picks = sweep_picks([(row[2], row[6], b) for row, b in zip(repaired, budgets)])
+sweep_fp = _fingerprint(("colorsweep.py", "wdiff.py", "residue.py", "buildcfg.py"),
+                        ("WDIFF_FLAGS", "WDIFF_CTX", "WDIFF_MAXRUNS", "CS_SCORER"))
+flags_fp = _fingerprint(("wgate.py", "residue.py", "buildcfg.py", "pragmas.py"), ())
+swept = cached = 0
+for k, (i, mod, addr, f, text, verdict0, verdict) in enumerate(repaired):
+    work = f"{WORK}/{mod}_{addr}.cpp"
+    with open(work, "wb") as fh:
+        fh.write(text)
+    if picks.get(addr) == k:
+        key = cache_key(sweep_fp, text, mod, addr, budgets[k], COLORSWEEP_DEPTH, verdict)
+        hit = cached_sweep(SWEEPCACHE, key, work,
+                           lambda: colorsweep(mod, addr, work, budgets[k]))
+        swept += hit is not None
+        cached += hit is True
+        with open(work, "rb") as fh:
+            if fh.read() != text:
+                verdict = gate(mod, addr, work)
+        if verdict.startswith("MATCH"):
+            print(f"  colorsweep closed {mod} {addr}", flush=True)
     # Last resort before parking it: the same source under a different flag set. Cheap (one compile
     # per set) and it converts residues that no source rewrite reaches.
-    if not verdict.startswith("MATCH") and try_flags(mod, addr, work):
-        verdict = gate(mod, addr, work)
+    if not verdict.startswith("MATCH"):
+        with open(work, "rb") as fh:
+            key = cache_key(flags_fp, fh.read(), mod, addr, "|".join(FLAG_SETS), verdict)
+        lead = cached_lead(SWEEPCACHE, key, lambda: flag_lead(mod, addr, work))
+        if lead:
+            record_lead(mod, addr, lead)
     verdicts.append((mod, addr, verdict.replace(chr(10), " ").strip()))
     if not verdict.startswith("MATCH"):
         keep = f"{BEST}/{addr}.cpp"
@@ -363,6 +468,8 @@ for i, (mod, addr, f) in enumerate(jobs):
     if i % 25 == 24:
         print(f"  ...{i+1}/{len(jobs)}, {len(hits)} hits", flush=True)
 
+print(f"colour-swept {swept} of {len(picks)} address(es), {cached} unchanged since a cached sweep",
+      flush=True)
 _resc = rescue_gated()
 if _resc:
     print(f"rescued {_resc} proven match(es) from gated/ into staging")

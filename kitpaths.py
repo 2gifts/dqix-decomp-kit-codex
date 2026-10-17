@@ -17,6 +17,34 @@ def _norm(p):
     return os.path.abspath(p).replace("\\", "/")
 
 
+def bash(base=None):
+    import shutil
+    env = dict(os.environ if base is None else base)
+    if os.name != "nt":
+        found = shutil.which("bash")
+        if not found:
+            raise FileNotFoundError("bash is not on PATH")
+        env["PATH"] = os.pathsep.join(p for p in (os.path.dirname(found), env.get("PATH")) if p)
+        return found, env
+    roots = [os.path.join(os.environ[k], "Git") for k in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+             if os.environ.get(k)]
+    if os.environ.get("LOCALAPPDATA"):
+        roots.append(os.path.join(os.environ["LOCALAPPDATA"], "Programs", "Git"))
+    for exe in (shutil.which("git"), shutil.which("bash")):
+        if exe:
+            d = os.path.dirname(os.path.abspath(exe))
+            while os.path.basename(d).lower() in ("cmd", "bin", "usr", "mingw32", "mingw64"):
+                d = os.path.dirname(d)
+            roots.append(d)
+    for root in roots:
+        sh = os.path.join(root, "usr", "bin", "bash.exe")
+        if os.path.isfile(sh):
+            env["PATH"] = os.pathsep.join([os.path.join(root, "usr", "bin"),
+                                           os.path.join(root, "mingw64", "bin"), env.get("PATH", "")])
+            return _norm(sh), env
+    raise FileNotFoundError("no Git Bash found: install Git for Windows")
+
+
 KIT = _norm(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -41,6 +69,17 @@ KIT_URL = os.environ.get("DQIX_KIT_URL", "https://github.com/2gifts/dqix-decomp-
 KIT_BRANCH = os.environ.get("DQIX_KIT_BRANCH", "main")
 DECOMP_URL = os.environ.get("DQIX_DECOMP_URL", "https://github.com/ZevyaDev/dqix-decomp.git")
 DECOMP_BRANCH = os.environ.get("DQIX_DECOMP_BRANCH", "decomp-matching")
+
+
+def module_label(mod):
+    m = str(mod).strip()
+    if m == "main":
+        return "main"
+    if m.isdigit():
+        return "ov%03d" % int(m)
+    if m[:2].lower() == "ov" and m[2:].isdigit():
+        return "ov%03d" % int(m[2:])
+    return m
 BUSY = ("pull_all.pid", "wave.lock", "claims/INTEGRATING")
 FRESH_EVERY = 600
 
@@ -54,24 +93,86 @@ def busy():
     return found
 
 
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read().strip()
+
+
+def _resolve(gitdir, common, ref):
+    for _ in range(8):
+        if not ref.startswith("ref: "):
+            return ref if len(ref) in (40, 64) and all(c in "0123456789abcdef" for c in ref) else None
+        name = ref[5:].strip()
+        for root in (gitdir, common):
+            if os.path.isfile(os.path.join(root, name)):
+                ref = _read(os.path.join(root, name))
+                break
+        else:
+            try:
+                with open(os.path.join(common, "packed-refs"), encoding="utf-8") as fh:
+                    found = [l.split()[0] for l in fh if l.rstrip().endswith(" " + name)]
+            except OSError:
+                found = []
+            return found[0] if found else None
+    return None
+
+
+def head(repo=None):
+    import subprocess
+    repo = repo or KIT
+    try:
+        gitdir = os.path.join(repo, ".git")
+        if os.path.isfile(gitdir):
+            gitdir = os.path.join(repo, _read(gitdir).split("gitdir:", 1)[1].strip())
+        common = os.path.join(gitdir, _read(os.path.join(gitdir, "commondir"))) \
+            if os.path.isfile(os.path.join(gitdir, "commondir")) else gitdir
+        if not os.path.isdir(os.path.join(common, "reftable")):
+            sha = _resolve(gitdir, common, _read(os.path.join(gitdir, "HEAD")))
+            if sha:
+                return sha
+    except (OSError, IndexError):
+        pass
+    return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True,
+                          timeout=30).stdout.strip()
+
+
 def behind():
     """Commits the published kit is ahead of this checkout, fetched at most every FRESH_EVERY seconds."""
     import subprocess
     import time
     stamp = os.path.join(SP, "wlog", ".kit_fresh")
+    run = lambda *a: subprocess.run(["git", "-C", KIT, *a], capture_output=True, text=True, timeout=30)
+    head_sha = head()
     try:
-        count = int(open(stamp, encoding="utf-8").read().strip() or 0)
-        age = time.time() - os.path.getmtime(stamp)
+        count, seen = (open(stamp, encoding="utf-8").read().split() + [""])[:2]
+        count, age = int(count), time.time() - os.path.getmtime(stamp)
     except (OSError, ValueError):
-        count, age = 0, FRESH_EVERY
-    if age >= FRESH_EVERY:
+        count, seen, age = 0, "", FRESH_EVERY
+    if age >= FRESH_EVERY or seen != head_sha:
         os.makedirs(os.path.dirname(stamp), exist_ok=True)
-        open(stamp, "w", encoding="utf-8").write(str(count))
-        run = lambda *a: subprocess.run(["git", "-C", KIT, *a], capture_output=True, text=True, timeout=30)
+        open(stamp, "w", encoding="utf-8").write(f"{count if seen == head_sha else 0} {head_sha}")
         if run("fetch", "-q", KIT_URL, KIT_BRANCH).returncode == 0:
             count = int(run("rev-list", "--count", "HEAD..FETCH_HEAD").stdout.strip() or 0)
-            open(stamp, "w", encoding="utf-8").write(str(count))
+            open(stamp, "w", encoding="utf-8").write(f"{count} {head_sha}")
+        elif seen != head_sha:
+            count = 0
     return count
+
+
+def result_path(name):
+    return os.path.join(SP, "wlog", name + ".txt")
+
+
+def record(name, lines):
+    path = result_path(name)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def stale_message(count):

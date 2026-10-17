@@ -78,6 +78,7 @@ explains every step.
 | `worker_src/core.md` `worker_src/deadends.md` | the matching guide and per-address dead ends |
 | `pad/` | diff, probe and search tools; `pad/renum/` compiler-numbering tools |
 | `frida/` | Frida forcing of the compiler's colouring and scheduling decisions |
+| `ghidra/` | Ghidra headless script that decompiles the compiler at given addresses |
 | `priors/` | the closest saved attempt per unmatched address, indexed in `priors/INDEX.tsv` |
 | `refs/VERIFIED.txt` | reference DS decompilations to clone into `refs/` |
 | `naming/` | the naming pass for matched functions; start at `naming/HANDOFF.md` |
@@ -98,6 +99,7 @@ explains every step.
 - [docs/FLEET.md](docs/FLEET.md) — the autonomous pipeline, knobs, stopping, cost
 - [docs/NATIVE_AGENTS.md](docs/NATIVE_AGENTS.md) — native-agent coordination and bounded crack/evolve procedures for hosts such as Codex
 - [docs/LESSONS.md](docs/LESSONS.md) — compiler facts and pipeline rules learned the hard way
+- [docs/COMPILER.md](docs/COMPILER.md) — reading mwccarm's backend when a residue survives every source form
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — sending matches and tool fixes back
 
 ## AI agents

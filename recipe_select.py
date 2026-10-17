@@ -163,11 +163,8 @@ def prior_attempts(mod, addr, best_path):
     if not cand:
         return []
     cache = nearmiss._cache()
-    scored = []
-    for p in cand:
-        g = nearmiss.verified_gap(mod, addr, p, cache)
-        if g is not None and g >= 0:
-            scored.append((g, p))
+    scored = [(g, p) for g, p in zip(nearmiss.verified_gaps(mod, addr, cand, cache), cand)
+              if g is not None and g >= 0]
     try:
         json.dump(cache, open(f"{SP}/wlog/nearmiss_verify.json", "w", encoding="utf-8"))
     except OSError:
@@ -211,6 +208,7 @@ def main():
         return 2
     mod, addr = sys.argv[1], sys.argv[2].lower()
     stats = "--stats" in sys.argv
+    lean = "--lean" in sys.argv
 
     lst = listing(mod, addr)
     if not lst.strip():
@@ -224,6 +222,9 @@ def main():
     for title, body in sections(full):
         if title == "__preamble__" or any(r in title for r in RESIDENT):
             kept.append((title, body, "resident"))
+            continue
+        if lean:
+            dropped.append((title, body, 0.0))
             continue
         svocab, stags = features(body)
         score = 0.0

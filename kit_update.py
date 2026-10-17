@@ -26,7 +26,7 @@ KIT = kitpaths.KIT
 URL = kitpaths.KIT_URL
 BRANCH = kitpaths.KIT_BRANCH
 INSTRUCTIONS = ("AGENTS.md", "CLAUDE.md", ".claude/skills/", ".claude/workflows/", "worker_src/")
-SLOW_TRIGGERS = ("colorsweep.py", "wdiff.py", "wgate.py", "regress.py", "regress_fixtures/")
+SLOW_TRIGGERS = ("colorsweep.py", "wdiff.py", "wgate.py", "regress_fixtures/")
 HOOK = "--hook" in sys.argv
 DISPATCHER = "--dispatcher" in sys.argv
 
@@ -37,6 +37,21 @@ def say(text):
 
 def git(*args):
     return subprocess.run(["git", "-C", KIT, *args], capture_output=True, text=True)
+
+
+def slow(changed):
+    if any(f.startswith(SLOW_TRIGGERS) for f in changed):
+        return True
+    if "regress.py" not in changed:
+        return False
+    r = subprocess.run([sys.executable, "-c", "import regress; print(regress.sweep_fingerprint())"], cwd=KIT,
+                       capture_output=True, text=True, env=dict(os.environ, DQIX_NO_FRESHNESS="1"))
+    try:
+        with open(os.path.join(SP, "wlog", "functional_stamp.txt"), encoding="utf-8") as fh:
+            proven = fh.read().strip()
+    except OSError:
+        proven = ""
+    return r.returncode != 0 or r.stdout.strip() != proven
 
 
 def update():
@@ -83,20 +98,21 @@ def update():
     for f in reread:
         say(f"RE-READ {f}")
     argv = [sys.executable, "kit_init.py"]
-    if any(f.startswith(SLOW_TRIGGERS) for f in changed):
+    if slow(changed):
         argv.append("--slow")
     ok = subprocess.run(argv, cwd=KIT, stdout=sys.stderr if HOOK else None).returncode == 0
     return (0 if ok else 1), reread, ok
 
 
-code, reread, ok = update()
-if not HOOK:
-    sys.exit(code)
-if reread or not ok:
-    reason = "The kit was updated while you worked."
-    if reread:
-        reason += " Re-read before continuing: " + ", ".join(reread) + "."
-    if not ok:
-        reason += " kit_init.py failed after the update: run python kit_init.py and fix its FAIL lines."
-    print(json.dumps({"decision": "block", "reason": reason}))
-sys.exit(0)
+if __name__ == "__main__":
+    code, reread, ok = update()
+    if not HOOK:
+        sys.exit(code)
+    if reread or not ok:
+        reason = "The kit was updated while you worked."
+        if reread:
+            reason += " Re-read before continuing: " + ", ".join(reread) + "."
+        if not ok:
+            reason += " kit_init.py failed after the update: run python kit_init.py and fix its FAIL lines."
+        print(json.dumps({"decision": "block", "reason": reason}))
+    sys.exit(0)

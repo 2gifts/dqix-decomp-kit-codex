@@ -31,13 +31,13 @@ Interceptor.attach(ptr('0x502400'), { onLeave(r) { send({ev: 'limit', v: r.toInt
 def run(src, flags):
     argv = sf.compile_argv(src, os.path.splitext(src)[0] + ".ifc.o")
     if flags:
-        argv = [argv[0]] + flags + [a for a in argv[1:] if not a.startswith("-O")]
+        prefix = len(sf.buildcfg.tool_command(sf.buildcfg.cc_path(None)))
+        argv = argv[:prefix] + flags + [a for a in argv[prefix:] if not a.startswith("-O")]
     ev = []
     done = threading.Event()
     dev = frida.get_local_device()
-    pid = dev.spawn(argv, cwd=sf.REPO)
-    ses = dev.attach(pid)
-    sc = ses.create_script(JS)
+    pid, ses = sf.buildcfg.frida_spawn(dev, argv, sf.REPO)
+    sc = ses.create_script(sf.buildcfg.frida_script(JS))
     sc.on("message", lambda m, d: ev.append(m["payload"]) if m["type"] == "send" else print(m))
     sc.load()
     ses.on("detached", lambda *a: done.set())

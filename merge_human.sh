@@ -136,11 +136,16 @@ if grep -q "not on disk" "$SP/wlog/merge_configure.log"; then
   exit 1
 fi
 
+tree_state() {
+  { git diff --binary; git diff --cached --binary; git ls-files --others --exclude-standard; } | git hash-object --stdin
+}
+checked=""
 for i in 1 2 3 4 5 6 7 8; do
   if ninja check > "$SP/wlog/merge_check.log" 2>&1; then
     echo "merge_human: ninja check PASSES after $((i - 1)) repair rounds"
     break
   fi
+  before=$(tree_state)
   python "$KIT/relink_undefined.py" "$SP/wlog/merge_check.log" > "$SP/wlog/relink_$i.log" 2>&1
   bash "$KIT/merge_fixups.sh" >/dev/null
   echo "  round $i: $(grep -c '^  [A-Za-z_]' "$SP/wlog/relink_$i.log") call sites repointed"
@@ -166,9 +171,14 @@ for i in 1 2 3 4 5 6 7 8; do
       done < "$SP/wlog/stale_symbols.txt"
     fi
   fi
+  if [ "$(tree_state)" = "$before" ]; then
+    echo "  round $i changed nothing; the next check would fail the same way"
+    checked=red
+    break
+  fi
 done
 
-if ninja check > "$SP/wlog/merge_check.log" 2>&1; then
+if [ "$checked" != red ] && ninja check > "$SP/wlog/merge_check.log" 2>&1; then
   git add -A
   git commit -q -m "Merge $ARG" && echo "merge_human: OK, committed $(git rev-parse --short HEAD)"
   repool_pools

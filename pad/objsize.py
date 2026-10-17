@@ -48,7 +48,7 @@ def main():
     cc = buildcfg.cc_path(mw)
     obj = f"{SP}/handwork/objsize_{os.getpid()}.o"
     os.makedirs(f"{SP}/handwork", exist_ok=True)
-    r = subprocess.run([cc] + FLAGS + ["-c", src, "-o", obj], capture_output=True, text=True, cwd=REPO)
+    r = subprocess.run(buildcfg.tool_command(cc) + FLAGS + ["-c", src, "-o", obj], capture_output=True, text=True, cwd=REPO)
     if r.returncode != 0:
         print((r.stdout or "") + (r.stderr or ""))
         return 1

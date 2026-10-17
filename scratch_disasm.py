@@ -13,7 +13,7 @@ FLAGS = list(buildcfg.FLAGS)
 os.chdir(REPO)
 SRC = sys.argv[1]
 OBJ = (_kp.SP + "/scratch_disasm.o")
-r = subprocess.run([CC]+FLAGS+["-c", SRC, "-o", OBJ], capture_output=True, text=True)
+r = subprocess.run(buildcfg.tool_command(CC)+FLAGS+["-c", SRC, "-o", OBJ], capture_output=True, text=True)
 if r.returncode != 0:
     print("COMPILE FAIL"); print(r.stdout[-2000:]); print(r.stderr[-2000:]); sys.exit(1)
 elf = ELFFile(open(OBJ, "rb"))

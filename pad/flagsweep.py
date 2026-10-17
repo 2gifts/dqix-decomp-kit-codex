@@ -72,7 +72,7 @@ cc = casediff.CC
 best = None
 for name, extra in VARIANTS:
     flags = BASE + extra
-    r = subprocess.run([cc] + flags + ["-c", src, "-o", obj], capture_output=True, text=True,
+    r = subprocess.run(casediff.buildcfg.tool_command(cc) + flags + ["-c", src, "-o", obj], capture_output=True, text=True,
                        cwd=casediff.REPO)
     if r.returncode:
         print("%-20s COMPILE FAIL" % name)

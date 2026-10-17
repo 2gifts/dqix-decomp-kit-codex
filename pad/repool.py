@@ -9,6 +9,10 @@ import subprocess
 import sys
 from collections import Counter
 
+import addrname
+import gitread
+import mechclean
+
 REPO = _kp.REPO
 SP = _kp.SP
 KIT = _kp.KIT
@@ -16,6 +20,7 @@ POOLS = ["attempts", "clsbest", "quarantine", "wip"] + sorted(
     os.path.basename(p) for p in glob.glob(SP + "/hold*"))
 SYM = re.compile(r"(\S+) kind:(\w+)\S* addr:0x([0-9a-fA-F]{8})")
 TAG = re.compile(r"\s*//\s*(?:SCRATCH-)?USA:")
+IDENT = re.compile(r"\b[A-Za-z_]\w*")
 KEYWORD = {"return", "if", "while", "for", "switch", "else", "do", "case", "sizeof", "goto"}
 BUILTIN = {"unsigned", "signed", "char", "short", "int", "long", "void", "float", "double", "bool"}
 DECL = re.compile(r"^\s*(?:extern\s+\"C\"\s+)?(?:static\s+|inline\s+)*"
@@ -29,13 +34,14 @@ def git(*args):
 
 def functions(rev):
     out = {}
-    for path in git("ls-tree", "-r", "--name-only", rev, "config/usa/arm9").split():
-        if path.endswith("symbols.txt"):
-            m = re.search(r"/ov(\d+)/", path)
-            for line in git("show", "%s:%s" % (rev, path)).splitlines():
-                s = SYM.match(line)
-                if s and s.group(2) == "function":
-                    out[(m.group(1) if m else "main", int(s.group(3), 16))] = s.group(1)
+    paths = [p for p in git("ls-tree", "-r", "--name-only", rev, "config/usa/arm9").split() if p.endswith("symbols.txt")]
+    texts = gitread.blobs(REPO, ["%s:%s" % (rev, p) for p in paths])
+    for path in paths:
+        m = re.search(r"/ov(\d+)/", path)
+        for line in texts.get("%s:%s" % (rev, path), "").splitlines():
+            s = SYM.match(line)
+            if s and s.group(2) == "function":
+                out[(m.group(1) if m else "main", int(s.group(3), 16))] = s.group(1)
     return out
 
 
@@ -46,10 +52,35 @@ def plain(sym):
     return None if sym.startswith("_Z") else sym
 
 
+def nested(sym):
+    if not sym.startswith("_ZN"):
+        return None
+    i, parts = 4 if sym[3:4] == "K" else 3, []
+    while i < len(sym) and sym[i].isdigit():
+        n = re.match(r"\d+", sym[i:]).group()
+        i += len(n)
+        parts.append(sym[i:i + int(n)])
+        i += int(n)
+    return parts if len(parts) >= 2 and sym[i:i + 1] == "E" else None
+
+
+def declares_member(text, cls, name):
+    m = re.search(r"\b(?:struct|class)\s+%s\b[^;{]*\{" % re.escape(cls), text)
+    if not m:
+        return False
+    depth, k = 0, m.end() - 1
+    while k < len(text):
+        depth += (text[k] == "{") - (text[k] == "}")
+        k += 1
+        if depth == 0:
+            break
+    return bool(re.search(r"\b%s\s*\(" % re.escape(name), text[m.end():k]))
+
+
 def headers(rev):
-    return {p: git("show", "%s:%s" % (rev, p))
-            for p in git("ls-tree", "-r", "--name-only", rev, "include").split()
-            if p.endswith((".h", ".hpp"))}
+    paths = [p for p in git("ls-tree", "-r", "--name-only", rev, "include").split() if p.endswith((".h", ".hpp"))]
+    texts = gitread.blobs(REPO, ["%s:%s" % (rev, p) for p in paths])
+    return {p: texts.get("%s:%s" % (rev, p), "") for p in paths}
 
 
 def type_names(texts):
@@ -93,15 +124,23 @@ def build(rev):
     old, new = functions(rev), functions("HEAD")
     ren = {old[k]: new[k] for k in old if k in new and old[k] != new[k]}
     spell = dict(ren)
-    byplain = {}
-    for o, n in ren.items():
-        p = plain(o)
-        if p and p != o:
-            byplain.setdefault(p, set()).add(n)
+    ident = addrname.ident
+    shared = Counter([ident(s) for s in old.values()] + [ident(new[k]) for k in new if k not in old])
     current = set(new.values())
-    for p, ns in byplain.items():
-        if len(ns) == 1 and p not in current:
-            spell.setdefault(p, next(iter(ns)))
+    retypes = {}
+    mechclean.demangle_all(list(ren) + list(ren.values()))
+    for o, n in ren.items():
+        p = ident(o)
+        if p == o or shared[p] != 1 or p in current:
+            continue
+        spell.setdefault(p, n)
+        if p == ident(n):
+            was, now = mechclean.demangle(o), mechclean.demangle(n)
+            differ = [a + b for a, b in zip(was[1], now[1]) if mechclean.norm_type(a) != mechclean.norm_type(b)] \
+                if was and now and len(was[1]) == len(now[1]) else ["*"]
+            if not any("*" in t or "&" in t for t in differ):
+                qual = now[0].rsplit("::", 1)[0] if "::" in now[0] else None
+                retypes[o] = (n, qual, p, was[1], now[1])
     oh, nh = headers(rev), headers("HEAD")
     changed = [p for p in oh if oh[p] != nh.get(p)]
     protos = prototypes(oh[p] for p in changed)
@@ -117,7 +156,7 @@ def build(rev):
         f = line.split("\t")
         if f[0].startswith("R") and len(f) == 3:
             moved[f[1][len("include/"):]] = f[2][len("include/"):]
-    return spell, protos, gone, moved, defs
+    return spell, protos, gone, moved, defs, retypes
 
 
 def _declares(line, sym):
@@ -147,14 +186,60 @@ def insert_after_includes(text, block):
     return "\n".join(lines)
 
 
-def rewrite(text, cxx, spell, protos, gone, moved, defs):
+def member_only(text, w):
+    return all(re.search(r"(?:->|\.|::)\s*$", text[:m.start()])
+               for m in re.finditer(r"\b%s\b" % re.escape(w), text))
+
+
+def in_c_block(text, pos):
+    for m in re.finditer(r'extern\s+"C"\s*\{', text):
+        depth, k = 0, m.end() - 1
+        while k < len(text):
+            depth += (text[k] == "{") - (text[k] == "}")
+            k += 1
+            if depth == 0:
+                break
+        if m.end() <= pos < k:
+            return True
+    return False
+
+
+def to_cxx(text, sym):
+    lines = text.split("\n")
+    at = 0
+    for k, ln in enumerate(lines):
+        if _declares(ln, sym):
+            if in_c_block(text, at):
+                return None
+            lines[k] = re.sub(r'\bextern\s+"C"\s+', "", ln, count=1)
+        at += len(ln) + 1
+    return "\n".join(lines)
+
+
+def rewrite(text, cxx, spell, protos, gone, moved, defs, retypes=None):
     orig = text
     for o, n in moved.items():
         text = re.sub(r'(#\s*include\s*[<"])%s([>"])' % re.escape(o), r"\g<1>%s\2" % n, text)
-    words = re.compile(r"\b(%s)\b" % "|".join(sorted(map(re.escape, spell), key=len, reverse=True)))
-    defined = {w for w in set(words.findall(text))
+    for name, info in (retypes or {}).items():
+        if name in text or info[2] in text:
+            text = addrname.retype(text, name, info)
+    found = set(IDENT.findall(text)) & spell.keys()
+    defined = {w for w in found
                if re.search(r"^[ \t]*[A-Za-z_][\w \t\*&:<>]*?[ \t\*&]%s\s*\([^;{}()]*\)\s*(?:const\s*)?\{"
                             % re.escape(w), text, re.M)}
+    linked = {}
+    for w in found:
+        if w.startswith("_Z") or not spell[w].startswith("_Z"):
+            parts = nested(spell[w])
+            if parts and w not in defined:
+                return None, "member %s called as a free function" % spell[w]
+            continue
+        parts = nested(spell[w])
+        if parts and not (declares_member(text, parts[-2], w) or member_only(text, w)):
+            return None, "member %s called as a free function" % spell[w]
+        if not cxx:
+            return None, "C source calls the C++ function %s" % spell[w]
+        linked[w] = addrname.ident(spell[w])
     used = {}
     lines = text.split("\n")
     for k, ln in enumerate(lines):
@@ -162,13 +247,21 @@ def rewrite(text, cxx, spell, protos, gone, moved, defs):
             continue
 
         def sub(m):
-            w = m.group(1)
-            if w in defined:
+            w = m.group(0)
+            if w not in spell or w in defined:
                 return w
+            if w in linked:
+                return linked[w]
             used.setdefault(spell[w], w)
             return spell[w]
-        lines[k] = words.sub(sub, ln)
+        lines[k] = IDENT.sub(sub, ln)
     text = "\n".join(lines)
+    for w, new in sorted(linked.items()):
+        if w in defined:
+            continue
+        text = to_cxx(text, new)
+        if text is None:
+            return None, "%s is declared inside an extern \"C\" block" % new
     add = []
     for newsym, oldw in sorted(used.items()):
         if any(_declares(ln, newsym) for ln in text.split("\n")):
@@ -185,7 +278,8 @@ def rewrite(text, cxx, spell, protos, gone, moved, defs):
     block = ["struct %s;" % t for t in bare if t not in defs] + full + add
     if block:
         text = insert_after_includes(text, block)
-    what = ", ".join("%s->%s" % (o, n) for n, o in sorted(used.items()))
+    what = ", ".join(["%s->%s" % (o, n) for n, o in sorted(used.items())] +
+                     ["%s->%s" % (o, n) for o, n in sorted(linked.items()) if o != n and o not in defined])
     what += "".join(" +def %s" % t for t in used_t if t in defs and defs[t] in full)
     return text, (what.strip() or ("includes" if text != orig else None))
 
@@ -222,13 +316,13 @@ def main():
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--exclude", default="")
     a = ap.parse_args()
-    spell, protos, gone, moved, defs = build(a.rev)
+    ctx = build(a.rev)
     exclude = [x for x in a.exclude.split(",") if x]
     files = ([(p, open(p, encoding="utf-8", errors="ignore").read()) for p in a.paths]
              if a.paths else list(pool_files(exclude)))
     stats = Counter()
     for path, text in files:
-        new, what = rewrite(text, path.endswith(".cpp"), spell, protos, gone, moved, defs)
+        new, what = rewrite(text, path.endswith(".cpp"), *ctx)
         if new is None:
             stats["unfixable"] += 1
             print("SKIP  %s  %s" % (os.path.relpath(path, SP), what))

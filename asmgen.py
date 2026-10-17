@@ -51,6 +51,15 @@ SHIFTS = ("lsl", "lsr", "asr", "ror")
 ALIASES = {"sb": "r9", "sl": "r10", "fp": "r11"}
 ALIAS_RE = re.compile(r"\b(%s)\b" % "|".join(ALIASES))
 
+COND_ALT = "|".join(sorted(CONDS))
+PSR_FIELDS = {"apsr_nzcvq": "cpsr_f", "apsr_g": "cpsr_s", "apsr_nzcvqg": "cpsr_fs"}
+PSR_RE = re.compile(r"\b(apsr_nzcvqg|apsr_nzcvq|apsr_g)\b")
+LDM_RE = re.compile(r"^(ldm|stm)(ia|ib|da|db|fd|fa|ed|ea)?(%s)?$" % COND_ALT)
+SHIFT_RE = re.compile(r"^(lsl|lsr|asr|ror|rrx)(?:(s)(%s)?|(%s)(s)?)?$" % (COND_ALT, COND_ALT))
+SCOND_RE = re.compile(r"^(and|eor|sub|rsb|add|adc|sbc|rsc|orr|mov|bic|mvn|mul|mla|umull|umlal|smull|smlal)"
+                      r"s(%s)$" % COND_ALT)
+MEMSZ_RE = re.compile(r"^(ldr|str)(sb|sh|b|h|d)(%s)$" % COND_ALT)
+
 
 def normalise(mn, op):
     """Rewrite capstone's disassembly into what mwccarm's inline assembler accepts.
@@ -60,31 +69,32 @@ def normalise(mn, op):
     `mov r3, ip, lsr #8`. Same for the flag-setting forms. Everything else passes through, so an
     unhandled mnemonic fails loudly at assembly time rather than silently producing wrong bytes.
     """
-    # The suffixes come off in the order ARM spells them: `lsrles` is lsr + le + s. Peeling only `s`
-    # left every PREDICATED shift (`lsrle r3, r3, #0x10`) to reach the assembler as a mnemonic it has
-    # never heard of, which is what stopped the MSL division helpers assembling.
     op = ALIAS_RE.sub(lambda m: ALIASES[m.group(1)], op)
+    op = PSR_RE.sub(lambda m: PSR_FIELDS[m.group(1)], op)
     # capstone names the ARM status register APSR; mwasmarm only knows CPSR.
     op = re.sub(r"\bapsr\b", "cpsr", op)
-    # capstone prints the default addressing mode as no suffix at all; mwasmarm has no bare `ldm`.
-    m = re.match(r"^(ldm|stm)(%s)?$" % "|".join(CONDS), mn)
+    m = LDM_RE.match(mn)
     if m:
-        return m.group(1) + (m.group(2) or "") + "ia", op
+        return m.group(1) + (m.group(3) or "") + (m.group(2) or "ia"), op
     # push/pop are UAL spellings of the stack forms of stm/ldm; mwasmarm only knows the ARM ones.
-    m = re.match(r"^(push|pop)(%s)?$" % "|".join(CONDS), mn)
+    m = re.match(r"^(push|pop)(%s)?$" % COND_ALT, mn)
     if m:
         cond = m.group(2) or ""
-        return ("stmdb" if m.group(1) == "push" else "ldmia") + cond, f"sp!, {op}"
-    rest, setflags = (mn[:-1], "s") if mn.endswith("s") and mn[:-1] not in SHIFTS else (mn, "")
-    cond = ""
-    for c in CONDS:
-        if rest.endswith(c) and rest[:-len(c)] in SHIFTS:
-            rest, cond = rest[:-len(c)], c
-            break
-    if rest in SHIFTS:
+        return ("stm%sdb" if m.group(1) == "push" else "ldm%sia") % cond, f"sp!, {op}"
+    m = SHIFT_RE.match(mn)
+    if m:
+        rest, setflags, cond = m.group(1), m.group(2) or m.group(5) or "", m.group(3) or m.group(4) or ""
         parts = [p.strip() for p in op.split(",")]
+        if rest == "rrx" and len(parts) == 2:
+            return f"mov{cond}{setflags}", f"{parts[0]}, {parts[1]}, rrx"
         if len(parts) == 3:
             return f"mov{cond}{setflags}", f"{parts[0]}, {parts[1]}, {rest} {parts[2]}"
+    m = SCOND_RE.match(mn)
+    if m:
+        return m.group(1) + m.group(2) + "s", op
+    m = MEMSZ_RE.match(mn)
+    if m:
+        return m.group(1) + m.group(3) + m.group(2), op
     return mn, op
 
 

@@ -91,13 +91,12 @@ send({worst: cstr(ptr('0x5ef31c')), worsthex: hex(ptr('0x5ef31c'), 16)});
 
 def run(src, cfg):
     obj = os.path.join(os.environ.get("TEMP", "."), "aliasdump_%d.o" % os.getpid())
-    argv = [buildcfg.cc_path(None).replace("/", "\\")] + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
+    argv = buildcfg.tool_command(os.path.normpath(buildcfg.cc_path(None))) + list(buildcfg.FLAGS) + ["-c", src, "-o", obj]
     events = []
     done = threading.Event()
     device = frida.get_local_device()
-    pid = device.spawn(argv, cwd=REPO)
-    session = device.attach(pid)
-    script = session.create_script(JS % json.dumps(cfg))
+    pid, session = buildcfg.frida_spawn(device, argv, REPO)
+    script = session.create_script(buildcfg.frida_script(JS % json.dumps(cfg)))
     script.on("message", lambda m, d: events.append(m["payload"]) if m["type"] == "send" else print(m))
     script.load()
     session.on("detached", lambda *a: done.set())

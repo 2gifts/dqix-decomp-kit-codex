@@ -28,13 +28,17 @@ def read(p):
 CHECKS = []
 
 
+REGRESS = []
+
+
 def _regress():
-    """regress.py, run in-process so it cannot be forgotten."""
-    import importlib.util as il
-    spec = il.spec_from_file_location("_regress", f"{KIT}/regress.py")
-    m = il.module_from_spec(spec)
-    spec.loader.exec_module(m)          # the checks run at import
-    return m
+    if not REGRESS:
+        import importlib.util as il
+        spec = il.spec_from_file_location("_regress", f"{KIT}/regress.py")
+        m = il.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        REGRESS.append(m)
+    return REGRESS[0]
 
 
 def check(name, why):
@@ -79,7 +83,7 @@ def _pr_hook():
 @check("every landing ports what it matched to the other regions",
        "matches landed in config/usa only, so EUR fell 577 files behind and JPN never moved")
 def _regionsync():
-    missing = [s for s in ("finish_wave.sh", "integrate_fast.sh") if "regionsync.py" not in read(f"{KIT}/{s}")]
+    missing = [s for s in ("finish_wave.sh", "integrate_fast.sh", "landpr.py") if "regionsync" not in read(f"{KIT}/{s}")]
     return f"{', '.join(missing)} never runs regionsync.py" if missing else None
 
 
@@ -181,6 +185,8 @@ def _sweep():
        "run is a suite that gets skipped")
 def _behaviour():
     m = _regress()
+    m.run_checks()
+    m.record()
     if m.FAILED:
         return "%d behaviour test(s) failing: %s" % (len(m.FAILED),
                                                      ", ".join(n for n, _w, _b in m.FAILED))
@@ -257,15 +263,17 @@ def _hand_work_recorded():
 def _repooled():
     if "repool.py" not in read(f"{KIT}/merge_human.sh"):
         return "merge_human.sh no longer runs pad/repool.py after a merge"
+    if "repool.py" not in read(f"{KIT}/landclean.py"):
+        return "landclean.py no longer runs pad/repool.py after a rename lands"
     import importlib.util as il
     spec = il.spec_from_file_location("_repool", f"{KIT}/pad/repool.py")
     R = il.module_from_spec(spec)
     spec.loader.exec_module(R)
     rev = read(f"{SP}/wlog/last_merge_base.txt").strip() or "a70058a0"
-    spell, protos, gone, moved, defs = R.build(rev)
+    ctx = R.build(rev)
     stale = []
     for path, text in R.pool_files([]):
-        new, _what = R.rewrite(text, path.endswith(".cpp"), spell, protos, gone, moved, defs)
+        new, _what = R.rewrite(text, path.endswith(".cpp"), *ctx)
         if new is not None and new != text:
             stale.append(path)
     if stale:
@@ -462,25 +470,13 @@ def _all_parse():
             ast.parse(read(f))
         except SyntaxError as e:
             bad.append(f"{os.path.basename(f)}:{e.lineno}")
-    # `bash` on this box resolves to WSL's bash for a native-Windows Python, and WSL cannot see a
-    # C:/ path -- every shell script then reports "does not parse". Use Git Bash explicitly, and if
-    # no usable bash exists, check only the Python files rather than emit 18 false failures.
-    shell = None
-    for cand in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe", "bash"):
-        try:
-            probe = subprocess.run([cand, "-n", f"{KIT}/selfcheck.py"], capture_output=True, text=True)
-            if "No such file or directory" not in (probe.stderr or ""):
-                shell = cand
-                break
-        except OSError:
-            continue
-    if shell:
-        for f in _g.glob(f"{KIT}/*.sh"):
-            if os.path.basename(f).startswith("_"):
-                continue
-            r = subprocess.run([shell, "-n", f], capture_output=True, text=True)
-            if r.returncode != 0:
-                bad.append(os.path.basename(f))
+    from concurrent.futures import ThreadPoolExecutor
+    shell, env = _kp.bash()
+    scripts = [f for f in _g.glob(f"{KIT}/*.sh") if not os.path.basename(f).startswith("_")]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(lambda f: subprocess.run([shell, "-n", f], capture_output=True, text=True,
+                                                       env=env).returncode, scripts))
+    bad += [os.path.basename(f) for f, rc in zip(scripts, codes) if rc != 0]
     return f"{len(bad)} script(s) do not parse: {bad[:5]}" if bad else None
 
 
@@ -1055,28 +1051,28 @@ def _lever_readers_agree():
        "nothing, and printed 'none running' while two watches stayed live for six hours -- a "
        "kill-all that reports success and leaves the watchers up is worse than no kill-all")
 def _fullstop_sees_watchers():
-    import subprocess, time
+    import subprocess
     log = f"{SP}/wlog/.selfcheck_decoy.log"
     open(log, "a").close()
     decoy = subprocess.Popen(
         ["tail", "-f", "-n", "0", "wlog/.selfcheck_decoy.log"], cwd=SP,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        time.sleep(1.5)
-        # a bare "bash" resolves to WSL's, which cannot see the Windows filesystem paths we pass
-        sh = "C:/Program Files/Git/bin/bash.exe"
-        if not os.path.exists(sh):
-            sh = "bash"
+        sh, env = _kp.bash()
         out = subprocess.run([sh, f"{KIT}/fullstop.sh", "--dry"],
-                             capture_output=True, text=True, timeout=180).stdout
+                             capture_output=True, text=True, timeout=180, env=env).stdout
         tier3 = out.split("TIER 3")[-1]
         if "none running" in tier3 or "watcher process(es)" not in tier3:
             return "fullstop --dry reports no watchers while a decoy tail on wlog/ is live"
     except subprocess.TimeoutExpired:
         return "fullstop --dry did not finish in 180s"
     finally:
-        subprocess.run(["taskkill", "/PID", str(decoy.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(decoy.pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            decoy.kill()
+            decoy.wait()
         try:
             os.remove(log)
         except OSError:
@@ -1166,6 +1162,44 @@ def _pragma_ratchet():
     return None
 
 
+@check("no landed source carries asm that asm_allow.txt does not name",
+       "asm transcriptions reached the tree through pre-policy fleet batches, landpr and merge_human, "
+       "which no gate checked: 10 files and 4 functions with no hand-written source had landed")
+def _landed_asm():
+    import bisect
+    import subprocess
+    import plausible
+    import pragmas
+    allow = pragmas.asm_allow()
+    tracked = subprocess.run(["git", "-C", REPO, "ls-files", "src"], capture_output=True, text=True).stdout.split()
+    ranges = {}
+    for path in glob.glob(f"{REPO}/config/usa/arm9/delinks.txt") + glob.glob(f"{REPO}/config/usa/arm9/overlays/*/delinks.txt"):
+        cfg = os.path.dirname(path)
+        funcs = sorted(int(a, 16) for a in re.findall(r"(?m)^\S+\s+kind:function\([^)]*\)\s+addr:0x([0-9a-fA-F]+)",
+                                                      read(f"{cfg}/symbols.txt") or ""))
+        for name, body in re.findall(r"(?m)^(\S[^\n]*):[ \t]*\n((?:[ \t]+[^\n]*\n?)*)", read(path) or ""):
+            for lo, hi in re.findall(r"\.text start:0x([0-9a-f]+) end:0x([0-9a-f]+)", body):
+                ranges.setdefault(name, []).extend(
+                    funcs[bisect.bisect_left(funcs, int(lo, 16)):bisect.bisect_left(funcs, int(hi, 16))])
+    bad = []
+    for f in tracked:
+        if f not in ranges:
+            continue
+        if f.endswith(".s"):
+            off = ["%08x" % a for a in ranges[f] if "%08x" % a not in allow]
+            if off:
+                bad.append("%s (%s)" % (f, ",".join(off)))
+            continue
+        text = read(f"{REPO}/{f}") or ""
+        if "asm" in text and plausible.ASM_SITE.search(text):
+            hits = [h[2] for h in plausible.blocking(text) if h[1] == "HAND-ASM"]
+            if hits:
+                bad.append("%s (%s)" % (f, ",".join(sorted(set(hits)))))
+    if bad:
+        return "%d landed source(s) with asm off the allowlist: %s" % (len(bad), "; ".join(bad[:6]))
+    return None
+
+
 @check("landed functions are counted by objdiff, not only matched in the ROM",
        "config that disagrees with a byte-exact source (absolute pool word, Thumb padding in a "
        "symbol size) leaves the function below 100% in the report")
@@ -1200,6 +1234,14 @@ def _evolve_capped():
     return None
 
 
+OUT = []
+
+
+def say(line):
+    print(line)
+    OUT.append(line)
+
+
 fails = 0
 for name, why, fn in CHECKS:
     try:
@@ -1208,9 +1250,10 @@ for name, why, fn in CHECKS:
         bad = f"check raised {e!r}"
     if bad:
         fails += 1
-        print(f"FAIL  {name}: {bad}")
-        print(f"      why it matters: {why}")
+        say(f"FAIL  {name}: {bad}")
+        say(f"      why it matters: {why}")
     else:
-        print(f"ok    {name}")
-print(f"{len(CHECKS) - fails}/{len(CHECKS)} invariants hold")
+        say(f"ok    {name}")
+say(f"{len(CHECKS) - fails}/{len(CHECKS)} invariants hold")
+_kp.record("selfcheck", OUT)
 sys.exit(1 if fails else 0)

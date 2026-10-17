@@ -12,6 +12,7 @@
 !/worker_src/
 !/pad/
 !/frida/
+!/ghidra/
 !/inv/
 !/merge_port/
 !/naming/
@@ -29,6 +30,7 @@
 !/asm_allow.txt
 !/skiplist_main.txt
 !/skiplist_ov.txt
+!/lib_ranges.txt
 
 /_*.py
 /_*.sh

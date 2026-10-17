@@ -351,7 +351,7 @@ def issue_body(cfg, rows):
         out.append(f"| {label(r['module'])} | `0x{r['addr']}` | `0x{a + int(r['size']):08x}` | {r['size']} | "
                    f"{label_for.get(r['status'], 'Active matching')} |")
     out += ["", "All rows were checked against current `decomp-matching`, open kit issues and open decomp PRs; "
-            "none are delinked or reserved elsewhere. Matches will use the default compiler and pass the kit "
+            "none are delinked or reserved elsewhere. Matches will use the configured game or library build and pass the kit "
             "gate, a full USA `ninja check rom`, and `prready.py decomp` before submission.", "",
             "This is our only active batch reservation. It will close when the game PR is opened, with a PR "
             "link; any remaining work will move to one successor batch."]
@@ -503,7 +503,11 @@ def spent():
 
 def gate_line(mod, addr, f):
     g = run([PY, os.path.join(KIT, "wgate.py"), mod, addr, f], cwd=KIT)
-    return (g.stdout.strip().splitlines() or [g.stderr.strip()[:200]])[0]
+    lines = g.stdout.strip().splitlines()
+    if g.returncode == 0 and "MATCH" in lines:
+        return "MATCH"
+    return next((line for line in lines if line.startswith("RESIDUE ") or "ALREADY-COMMITTED" in line),
+                (lines or [g.stderr.strip()[:200]])[0])
 
 
 def neighbours(mod, addr, n=2):
@@ -819,8 +823,7 @@ def collect(keys, report_files=None):
             r["status"], r["note"] = "ACTIVE", "worker left no source"
             print(f"{k[0]} {k[1]}: no source; back to the queue")
             continue
-        g = run([PY, os.path.join(KIT, "wgate.py"), k[0], k[1], f], cwd=KIT)
-        verdict = (g.stdout.strip().splitlines() or [g.stderr.strip()[:200]])[0]
+        verdict = gate_line(k[0], k[1], f)
         if "ALREADY-COMMITTED" in verdict:
             r["status"], r["note"] = "DROPPED", "already landed on decomp-matching"
         elif verdict == "MATCH":
@@ -879,18 +882,19 @@ def provision_integ(integ):
     into the worktree through the build's own download edges; a junction to the main checkout's
     compiler would let the tree's first ninja rewrite the main checkout's compiler."""
     import buildcfg
-    cc = os.path.join(integ, "tools", "mwccarm", *buildcfg.MWCC_VERSION.split("/"), "mwccarm.exe")
-    if os.path.exists(cc):
+    root = os.path.relpath(buildcfg.COMPILER_ROOT, buildcfg.REPO)
+    versions = sorted({buildcfg.MWCC_VERSION} | {version for _, version, _ in buildcfg.LIBRARIES.values()})
+    targets = [os.path.join(root, *version.split("/"), "mwccarm.exe").replace("\\", "/")
+               for version in versions]
+    if all(os.path.exists(os.path.join(integ, target)) for target in targets):
         return
-    if not os.path.exists(os.path.join(integ, "build.ninja")):
-        c = run([PY, "tools/configure.py", "usa"], cwd=integ)
-        if c.returncode != 0:
-            die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
-    target = "/".join(("tools", "mwccarm", buildcfg.MWCC_VERSION, "mwccarm.exe"))
+    c = run([PY, "tools/configure.py", "usa"], cwd=integ)
+    if c.returncode != 0:
+        die(f"configure.py failed in {integ}: {(c.stderr or c.stdout).strip()[-400:]}")
     print(f"fetching the compiler and tools into {integ}", flush=True)
     exe = ".exe" if os.name == "nt" else ""
-    n = run(["ninja", target, "dsd" + exe, "objdiff-cli" + exe] + ([] if os.name == "nt" else ["wibo"]), cwd=integ)
-    if n.returncode != 0 or not os.path.exists(cc):
+    n = run(["ninja", *targets, "dsd" + exe, "objdiff-cli" + exe] + ([] if os.name == "nt" else ["wibo"]), cwd=integ)
+    if n.returncode != 0 or not all(os.path.exists(os.path.join(integ, target)) for target in targets):
         die(f"could not fetch the compiler into {integ}: {(n.stdout + n.stderr).strip()[-400:]}")
 
 
@@ -943,8 +947,7 @@ def integrate(a, cfg, state):
     mods, staged, skipped = [], [], []
     for r in todo:
         f = wip(r["module"], r["addr"])
-        g = run([PY, os.path.join(KIT, "wgate.py"), r["module"], r["addr"], f], cwd=KIT)
-        v = (g.stdout.strip().splitlines() or ["?"])[0]
+        v = gate_line(r["module"], r["addr"], f)
         if v != "MATCH" or quality(f):
             skipped.append((r, v))
             continue
@@ -960,7 +963,8 @@ def integrate(a, cfg, state):
     failed = []
     for m in mods:
         print(f"== finish_wave {m}", flush=True)
-        p = run(["bash", os.path.join(KIT, "finish_wave.sh"), m], cwd=KIT, env=env)
+        shell, shell_env = kitpaths.bash(env)
+        p = run([shell, os.path.join(KIT, "finish_wave.sh").replace("\\", "/"), m], cwd=KIT, env=shell_env)
         out = (p.stdout + p.stderr).strip()
         print("\n".join("   " + t for t in out.splitlines()[-3:]), flush=True)
         if "FATAL" in out or "NtCreateDirectoryObject" in out:
@@ -1046,7 +1050,7 @@ def pr_body(cfg, integ, base, rows):
     out += [f"| {label(r['module'])} | `0x{r['addr']}` | {r['size']} | {r['desc']} |" for r in table]
     out += ["", "Validation: every function passed the kit gate (`wgate.py` MATCH: byte-exact with relocations "
             "masked, exact exported symbol, every call and data relocation resolving to the ROM's target) with the "
-            "default compiler and flags, no pragmas, asm or overrides. The batch was integrated through the kit's "
+            "configured game or library compiler and flags, no pragmas, asm or overrides. The batch was integrated through the kit's "
             "`finish_wave.sh` from a clean `decomp-matching` worktree (`ninja check` green per module), followed by "
             "`ninja report`; `countfix.py` reports every new unit counted. `prready.py decomp` reports READY "
             "against the current `decomp-matching`.", ""]
